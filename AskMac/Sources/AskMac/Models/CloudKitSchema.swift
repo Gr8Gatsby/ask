@@ -194,7 +194,7 @@ struct AgentRecord: Sendable {
 // MARK: - Job
 
 enum JobStatus: String, Sendable {
-    case queued, acknowledged, running, completed, failed, cancelled
+    case queued, acknowledged, running, waiting, completed, failed, cancelled
 }
 
 struct JobRecord: Sendable {

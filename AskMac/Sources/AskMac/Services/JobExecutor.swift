@@ -57,6 +57,9 @@ final class JobExecutor {
             return
         }
 
+        // Shared last-output timestamp for idle detection
+        let lastOutputTime = LastOutputTime()
+
         // Stream output concurrently from stdout and stderr
         await withTaskGroup(of: Void.self) { group in
             group.addTask {
@@ -64,7 +67,8 @@ final class JobExecutor {
                     stdoutPipe,
                     jobID: job.jobID,
                     isError: false,
-                    sequenceBase: 0
+                    sequenceBase: 0,
+                    lastOutputTime: lastOutputTime
                 )
             }
             group.addTask {
@@ -72,11 +76,15 @@ final class JobExecutor {
                     stderrPipe,
                     jobID: job.jobID,
                     isError: true,
-                    sequenceBase: 500_000
+                    sequenceBase: 500_000,
+                    lastOutputTime: lastOutputTime
                 )
             }
             group.addTask {
                 await self.watchTimeout(process: process, timeout: agent.timeout, jobID: job.jobID)
+            }
+            group.addTask {
+                await self.watchIdle(process: process, jobID: job.jobID, lastOutputTime: lastOutputTime)
             }
         }
 
@@ -99,7 +107,7 @@ final class JobExecutor {
 
     // MARK: - Private
 
-    private func streamPipe(_ pipe: Pipe, jobID: String, isError: Bool, sequenceBase: Int) async {
+    private func streamPipe(_ pipe: Pipe, jobID: String, isError: Bool, sequenceBase: Int, lastOutputTime: LastOutputTime) async {
         var sequence = sequenceBase
         let handle = pipe.fileHandleForReading
 
@@ -119,6 +127,8 @@ final class JobExecutor {
             guard !data.isEmpty else { continue }
             guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else { continue }
 
+            await lastOutputTime.update()
+
             let chunk = OutputChunkRecord(
                 jobID: jobID,
                 sequence: sequence,
@@ -128,6 +138,20 @@ final class JobExecutor {
             )
             try? await cloudKit.saveOutputChunk(chunk)
             sequence += 1
+        }
+    }
+
+    /// Watches for process idle (no output for 10s while still running) and marks job as waiting.
+    private func watchIdle(process: Process, jobID: String, lastOutputTime: LastOutputTime) async {
+        let idleThreshold: TimeInterval = 10
+        while process.isRunning {
+            try? await Task.sleep(for: .seconds(5))
+            guard process.isRunning else { return }
+            let idle = await lastOutputTime.secondsSinceUpdate()
+            if idle >= idleThreshold {
+                try? await cloudKit.updateJob(jobID: jobID, status: .waiting)
+                return
+            }
         }
     }
 
@@ -196,5 +220,19 @@ final class JobExecutor {
             completedAt: Date(),
             exitCode: -1
         )
+    }
+}
+
+// MARK: - Idle detection
+
+actor LastOutputTime {
+    private var lastUpdate: Date = Date()
+
+    func update() {
+        lastUpdate = Date()
+    }
+
+    func secondsSinceUpdate() -> TimeInterval {
+        Date().timeIntervalSince(lastUpdate)
     }
 }

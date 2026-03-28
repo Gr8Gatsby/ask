@@ -194,7 +194,7 @@ struct AskAgent: Identifiable {
 // MARK: - Job
 
 enum JobStatus: String {
-    case queued, acknowledged, running, completed, failed, cancelled
+    case queued, acknowledged, running, waiting, completed, failed, cancelled
 
     var isTerminal: Bool {
         switch self {
@@ -210,6 +210,7 @@ enum JobStatus: String {
         case .queued: "clock"
         case .acknowledged: "arrow.down.circle"
         case .running: "gearshape.fill"
+        case .waiting: "person.fill.questionmark"
         case .completed: "checkmark.circle.fill"
         case .failed: "xmark.circle.fill"
         case .cancelled: "minus.circle.fill"
