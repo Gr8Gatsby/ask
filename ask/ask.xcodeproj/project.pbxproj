@@ -27,6 +27,7 @@
 		0A99F1882F78428F003B10BE /* ask.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ask.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		0A99F1992F784290003B10BE /* askTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = askTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0A99F1A32F784290003B10BE /* askUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = askUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA000001000000000000AA01 /* AskMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AskMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -36,6 +37,13 @@
 				Info.plist,
 			);
 			target = 0A99F1872F78428F003B10BE /* ask */;
+		};
+		AA000003000000000000AA01 /* Exceptions for AskMac sources in "AskMac" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				AskMac.entitlements,
+			);
+			target = AA000007000000000000AA01 /* AskMac */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -57,6 +65,14 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = askUITests;
 			sourceTree = "<group>";
+		};
+		AA000002000000000000AA01 /* AskMac */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				AA000003000000000000AA01 /* Exceptions for AskMac sources in "AskMac" target */,
+			);
+			path = ../AskMac/Sources/AskMac;
+			sourceTree = SOURCE_ROOT;
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
@@ -82,6 +98,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AA000005000000000000AA01 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -91,6 +114,7 @@
 				0A99F18A2F78428F003B10BE /* ask */,
 				0A99F19C2F784290003B10BE /* askTests */,
 				0A99F1A62F784290003B10BE /* askUITests */,
+				AA000002000000000000AA01 /* AskMac */,
 				0A99F1892F78428F003B10BE /* Products */,
 			);
 			sourceTree = "<group>";
@@ -101,6 +125,7 @@
 				0A99F1882F78428F003B10BE /* ask.app */,
 				0A99F1992F784290003B10BE /* askTests.xctest */,
 				0A99F1A32F784290003B10BE /* askUITests.xctest */,
+				AA000001000000000000AA01 /* AskMac.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -176,6 +201,28 @@
 			productReference = 0A99F1A32F784290003B10BE /* askUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		AA000007000000000000AA01 /* AskMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA00000A000000000000AA01 /* Build configuration list for PBXNativeTarget "AskMac" */;
+			buildPhases = (
+				AA000004000000000000AA01 /* Sources */,
+				AA000005000000000000AA01 /* Frameworks */,
+				AA000006000000000000AA01 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				AA000002000000000000AA01 /* AskMac */,
+			);
+			name = AskMac;
+			packageProductDependencies = (
+			);
+			productName = AskMac;
+			productReference = AA000001000000000000AA01 /* AskMac.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -197,6 +244,9 @@
 						CreatedOnToolsVersion = 26.2;
 						TestTargetID = 0A99F1872F78428F003B10BE;
 					};
+					AA000007000000000000AA01 = {
+						CreatedOnToolsVersion = 26.2;
+					};
 				};
 			};
 			buildConfigurationList = 0A99F1832F78428F003B10BE /* Build configuration list for PBXProject "ask" */;
@@ -216,6 +266,7 @@
 				0A99F1872F78428F003B10BE /* ask */,
 				0A99F1982F784290003B10BE /* askTests */,
 				0A99F1A22F784290003B10BE /* askUITests */,
+				AA000007000000000000AA01 /* AskMac */,
 			);
 		};
 /* End PBXProject section */
@@ -242,6 +293,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AA000006000000000000AA01 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -260,6 +318,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		0A99F19F2F784290003B10BE /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA000004000000000000AA01 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -555,6 +620,63 @@
 			};
 			name = Release;
 		};
+		AA000008000000000000AA01 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ../AskMac/Sources/AskMac/AskMac.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = B5J28L8ARB;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = simple.askmac;
+				PRODUCT_NAME = AskMac;
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		AA000009000000000000AA01 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ../AskMac/Sources/AskMac/AskMac.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = B5J28L8ARB;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = simple.askmac;
+				PRODUCT_NAME = AskMac;
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -590,6 +712,15 @@
 			buildConfigurations = (
 				0A99F1B52F784290003B10BE /* Debug */,
 				0A99F1B62F784290003B10BE /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA00000A000000000000AA01 /* Build configuration list for PBXNativeTarget "AskMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA000008000000000000AA01 /* Debug */,
+				AA000009000000000000AA01 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

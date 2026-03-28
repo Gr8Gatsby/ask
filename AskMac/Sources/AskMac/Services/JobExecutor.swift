@@ -103,9 +103,21 @@ final class JobExecutor {
         var sequence = sequenceBase
         let handle = pipe.fileHandleForReading
 
-        for await data in handle.bytes.chunks(ofCount: 4096) {
+        let dataStream = AsyncStream<Data> { continuation in
+            handle.readabilityHandler = { fh in
+                let data = fh.availableData
+                if data.isEmpty {
+                    fh.readabilityHandler = nil
+                    continuation.finish()
+                } else {
+                    continuation.yield(data)
+                }
+            }
+        }
+
+        for await data in dataStream {
             guard !data.isEmpty else { continue }
-            guard let text = String(bytes: data, encoding: .utf8) ?? String(bytes: data, encoding: .isoLatin1) else { continue }
+            guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else { continue }
 
             let chunk = OutputChunkRecord(
                 jobID: jobID,
@@ -184,41 +196,5 @@ final class JobExecutor {
             completedAt: Date(),
             exitCode: -1
         )
-    }
-}
-
-// MARK: - FileHandle async bytes chunking
-
-extension AsyncSequence where Element == UInt8 {
-    func chunks(ofCount count: Int) -> AsyncChunksSequence<Self> {
-        AsyncChunksSequence(base: self, chunkSize: count)
-    }
-}
-
-struct AsyncChunksSequence<Base: AsyncSequence>: AsyncSequence where Base.Element == UInt8 {
-    typealias Element = [UInt8]
-
-    let base: Base
-    let chunkSize: Int
-
-    struct AsyncIterator: AsyncIteratorProtocol {
-        var base: Base.AsyncIterator
-        let chunkSize: Int
-
-        mutating func next() async -> [UInt8]? {
-            var chunk: [UInt8] = []
-            chunk.reserveCapacity(chunkSize)
-            while chunk.count < chunkSize {
-                guard let byte = try? await base.next() else {
-                    return chunk.isEmpty ? nil : chunk
-                }
-                chunk.append(byte)
-            }
-            return chunk.isEmpty ? nil : chunk
-        }
-    }
-
-    func makeAsyncIterator() -> AsyncIterator {
-        AsyncIterator(base: base.makeAsyncIterator(), chunkSize: chunkSize)
     }
 }
