@@ -55,6 +55,20 @@ enum CKSchema {
     }
 }
 
+// MARK: - Date formatting
+
+extension Date {
+    /// Coarse relative time: "just now", "2 min ago", "1 hr ago". Does not live-tick.
+    var briefRelative: String {
+        let seconds = Int(Date().timeIntervalSince(self))
+        if seconds < 60 { return "just now" }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes) min ago" }
+        let hours = minutes / 60
+        return "\(hours) hr ago"
+    }
+}
+
 // MARK: - Machine
 
 enum MachineStatus: String {

@@ -47,7 +47,7 @@ struct MachineDetailView: View {
                 .foregroundStyle(statusColor)
             }
             LabeledContent("Last seen") {
-                Text(currentMachine.lastHeartbeat, style: .relative)
+                Text(currentMachine.lastHeartbeat.briefRelative)
                     .foregroundStyle(.secondary)
             }
         }

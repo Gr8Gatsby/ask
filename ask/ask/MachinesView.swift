@@ -103,7 +103,7 @@ struct MachineRow: View {
                     Text("·")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
-                    Text(machine.lastHeartbeat, style: .relative)
+                    Text(machine.lastHeartbeat.briefRelative)
                         .font(.caption)
                 }
                 .foregroundStyle(statusColor(machine.connectionStatus))
