@@ -54,6 +54,17 @@ final class CloudKitService {
         cachedRecords.removeValue(forKey: recordName)
     }
 
+    // MARK: - Events
+
+    func saveEvent(title: String, body: String, source: String) async throws {
+        let record = CKRecord(recordType: CKSchema.RecordType.event)
+        record[CKSchema.Event.title] = title
+        record[CKSchema.Event.body] = body
+        record[CKSchema.Event.source] = source
+        record[CKSchema.Event.timestamp] = Date()
+        _ = try await save(record)
+    }
+
     // MARK: - Jobs
 
     /// Fetches all jobs assigned to this machine with status "queued", oldest first.

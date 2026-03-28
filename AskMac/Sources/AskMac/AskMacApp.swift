@@ -8,6 +8,7 @@ struct AskMacApp: App {
     @State private var heartbeat: HeartbeatService
     @State private var executor: JobExecutor
     @State private var watcher: JobWatcher
+    @State private var localEvents: LocalEventService
 
     init() {
         let s = settings
@@ -15,16 +16,19 @@ struct AskMacApp: App {
         let hb = HeartbeatService(cloudKit: ck, settings: s)
         let ex = JobExecutor(cloudKit: ck, settings: s)
         let jw = JobWatcher(cloudKit: ck, executor: ex, heartbeat: hb, settings: s)
+        let le = LocalEventService(cloudKit: ck)
 
         _heartbeat = State(initialValue: hb)
         _executor = State(initialValue: ex)
         _watcher = State(initialValue: jw)
+        _localEvents = State(initialValue: le)
 
         // Start services immediately on launch.
         Task {
             await ck.checkAccountStatus()
             hb.start()
             jw.start()
+            le.start()
         }
     }
 

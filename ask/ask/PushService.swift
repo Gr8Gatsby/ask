@@ -26,7 +26,7 @@ final class PushService: NSObject {
     }
 
     private func saveSubscriptionsIfNeeded() async {
-        let ids = ["ask-job-completed", "ask-job-waiting"]
+        let ids = ["ask-job-completed", "ask-job-waiting", "ask-claude-event"]
         let existing = (try? await database.subscriptions(for: ids.map { CKSubscription.ID($0) })) ?? [:]
         let missing = ids.filter { existing[$0] == nil }
         guard !missing.isEmpty else { return }
@@ -34,27 +34,31 @@ final class PushService: NSObject {
         var toSave: [CKSubscription] = []
 
         if missing.contains("ask-job-completed") {
-            toSave.append(makeSubscription(
+            toSave.append(makeJobSubscription(
                 id: "ask-job-completed",
                 statuses: ["completed", "failed"],
                 title: "Job finished",
-                body: "Your job has completed on $(machineID)."
+                body: "A job has completed on your Mac."
             ))
         }
 
         if missing.contains("ask-job-waiting") {
-            toSave.append(makeSubscription(
+            toSave.append(makeJobSubscription(
                 id: "ask-job-waiting",
                 statuses: ["waiting"],
                 title: "Waiting for input",
-                body: "$(prompt)"
+                body: "Claude is waiting for your input."
             ))
+        }
+
+        if missing.contains("ask-claude-event") {
+            toSave.append(makeEventSubscription())
         }
 
         try? await database.modifySubscriptions(saving: toSave, deleting: [])
     }
 
-    private func makeSubscription(id: String, statuses: [String], title: String, body: String) -> CKQuerySubscription {
+    private func makeJobSubscription(id: String, statuses: [String], title: String, body: String) -> CKQuerySubscription {
         let predicate = NSPredicate(format: "status IN %@", statuses)
         let sub = CKQuerySubscription(
             recordType: "Job",
@@ -63,8 +67,22 @@ final class PushService: NSObject {
             options: [.firesOnRecordUpdate]
         )
         let info = CKSubscription.NotificationInfo()
-        info.titleLocalizationKey = title
         info.alertBody = body
+        info.shouldSendContentAvailable = true
+        info.shouldBadge = false
+        sub.notificationInfo = info
+        return sub
+    }
+
+    private func makeEventSubscription() -> CKQuerySubscription {
+        let sub = CKQuerySubscription(
+            recordType: "AskEvent",
+            predicate: NSPredicate(value: true),
+            subscriptionID: "ask-claude-event",
+            options: [.firesOnRecordCreation]
+        )
+        let info = CKSubscription.NotificationInfo()
+        info.alertBody = "Claude Code activity on your Mac"
         info.shouldSendContentAvailable = true
         info.shouldBadge = false
         sub.notificationInfo = info
