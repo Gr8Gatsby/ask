@@ -87,7 +87,7 @@ struct MachineRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "desktopcomputer")
+            Image(systemName: machine.systemImage)
                 .font(.title2)
                 .foregroundStyle(.secondary)
                 .frame(width: 32)

@@ -75,6 +75,15 @@ struct AskMachine: Identifiable {
     let status: MachineStatus
     let activeJobID: String?
 
+    var systemImage: String {
+        let lower = name.lowercased()
+        if lower.contains("macbook") { return "laptopcomputer" }
+        if lower.contains("mac mini") { return "macmini" }
+        if lower.contains("mac studio") { return "macstudio" }
+        if lower.contains("mac pro") { return "macpro.gen3" }
+        return "desktopcomputer"
+    }
+
     var connectionStatus: ConnectionStatus {
         let age = Date().timeIntervalSince(lastHeartbeat)
         if age < 60 { return status == .busy ? .busy : .online }

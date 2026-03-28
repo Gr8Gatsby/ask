@@ -1,0 +1,92 @@
+DEFINE SCHEMA
+
+    RECORD TYPE Machine (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE QUERYABLE,
+        activeJobID     STRING,
+        lastHeartbeat   TIMESTAMP QUERYABLE SORTABLE,
+        machineID       STRING QUERYABLE SEARCHABLE SORTABLE,
+        name            STRING QUERYABLE SEARCHABLE SORTABLE,
+        platform        STRING QUERYABLE SEARCHABLE SORTABLE,
+        status          STRING QUERYABLE SEARCHABLE SORTABLE,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE Agent (
+        "___createTime"      TIMESTAMP,
+        "___createdBy"       REFERENCE,
+        "___etag"            STRING,
+        "___modTime"         TIMESTAMP,
+        "___modifiedBy"      REFERENCE,
+        "___recordID"        REFERENCE QUERYABLE,
+        agentID              STRING,
+        capabilityEnvKeys    LIST<STRING>,
+        capabilityNetwork    INT64,
+        capabilityReadPaths  LIST<STRING>,
+        capabilitySubprocess INT64,
+        capabilityWritePaths LIST<STRING>,
+        icon                 STRING,
+        machineID            STRING QUERYABLE,
+        name                 STRING QUERYABLE SORTABLE,
+        scriptName           STRING,
+        timeout              INT64,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE Job (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE QUERYABLE,
+        agentID         STRING QUERYABLE,
+        completedAt     TIMESTAMP,
+        createdAt       TIMESTAMP QUERYABLE SORTABLE,
+        exitCode        INT64,
+        jobID           STRING,
+        machineID       STRING QUERYABLE,
+        prompt          STRING,
+        startedAt       TIMESTAMP,
+        status          STRING QUERYABLE,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE OutputChunk (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE QUERYABLE,
+        isError         INT64,
+        jobID           STRING QUERYABLE,
+        sequence        INT64 QUERYABLE SORTABLE,
+        text            STRING,
+        timestamp       TIMESTAMP,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE Users (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE,
+        roles           LIST<INT64>,
+        GRANT WRITE TO "_creator",
+        GRANT READ TO "_world"
+    );
