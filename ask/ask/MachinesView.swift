@@ -1,4 +1,5 @@
 import SwiftUI
+import CloudKit
 
 struct MachinesView: View {
     @Environment(iOSCloudKitService.self) private var cloudKit
@@ -10,7 +11,9 @@ struct MachinesView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if isLoading && machines.isEmpty {
+                if cloudKit.accountStatus == .noAccount {
+                    noAccountState
+                } else if isLoading && machines.isEmpty {
                     ProgressView("Loading machines…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if machines.isEmpty {
@@ -59,17 +62,26 @@ struct MachinesView: View {
         }
     }
 
+    private var noAccountState: some View {
+        ContentUnavailableView {
+            Label("iCloud Required", systemImage: "icloud.slash")
+        } description: {
+            Text("Sign in to iCloud in Settings to use Ask. Both your Mac and iPhone must use the same Apple ID.")
+        }
+    }
+
     private var emptyState: some View {
         ContentUnavailableView {
             Label("No Machines", systemImage: "desktopcomputer.trianglebadge.exclamationmark")
         } description: {
-            Text("Install the Ask companion app on your Mac and complete setup to get started.")
+            Text("Open Ask on your Mac to get started. Both devices must be signed into the same iCloud account.")
         }
     }
 
     // MARK: - Data
 
     private func load() async {
+        guard cloudKit.accountStatus == .available else { return }
         isLoading = true
         defer { isLoading = false }
         do {

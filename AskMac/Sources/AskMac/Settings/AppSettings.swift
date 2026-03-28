@@ -85,7 +85,7 @@ final class AppSettings {
     }
 
     var isConfigured: Bool {
-        !machineName.isEmpty && vaultPath != nil && !agents.isEmpty
+        !machineName.isEmpty
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -100,7 +100,14 @@ final class AppSettings {
             self.machineID = newID
         }
 
-        self.machineName = defaults.string(forKey: Key.machineName) ?? Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+        let storedName = defaults.string(forKey: Key.machineName) ?? ""
+        if storedName.isEmpty {
+            let hostname = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+            self.machineName = hostname
+            defaults.set(hostname, forKey: Key.machineName)
+        } else {
+            self.machineName = storedName
+        }
 
         if let path = defaults.string(forKey: Key.vaultPath) {
             self.vaultPath = URL(fileURLWithPath: path)
