@@ -31,12 +31,11 @@ final class iOSCloudKitService {
             recordType: CKSchema.RecordType.machine,
             predicate: NSPredicate(value: true)
         )
-        query.sortDescriptors = [NSSortDescriptor(key: CKSchema.Machine.name, ascending: true)]
         let (results, _) = try await database.records(matching: query, resultsLimit: 50)
         return results.compactMap { _, result in
             guard let record = try? result.get() else { return nil }
             return AskMachine(record: record)
-        }
+        }.sorted { $0.name < $1.name }
     }
 
     // MARK: - Agents
@@ -44,12 +43,11 @@ final class iOSCloudKitService {
     func fetchAgents(machineID: String) async throws -> [AskAgent] {
         let predicate = NSPredicate(format: "%K == %@", CKSchema.Agent.machineID, machineID)
         let query = CKQuery(recordType: CKSchema.RecordType.agent, predicate: predicate)
-        query.sortDescriptors = [NSSortDescriptor(key: CKSchema.Agent.name, ascending: true)]
         let (results, _) = try await database.records(matching: query, resultsLimit: 50)
         return results.compactMap { _, result in
             guard let record = try? result.get() else { return nil }
             return AskAgent(record: record)
-        }
+        }.sorted { $0.name < $1.name }
     }
 
     // MARK: - Jobs
@@ -87,12 +85,11 @@ final class iOSCloudKitService {
     func fetchRecentJobs(machineID: String, limit: Int = 20) async throws -> [AskJob] {
         let predicate = NSPredicate(format: "%K == %@", CKSchema.Job.machineID, machineID)
         let query = CKQuery(recordType: CKSchema.RecordType.job, predicate: predicate)
-        query.sortDescriptors = [NSSortDescriptor(key: CKSchema.Job.createdAt, ascending: false)]
         let (results, _) = try await database.records(matching: query, resultsLimit: limit)
         return results.compactMap { _, result in
             guard let record = try? result.get() else { return nil }
             return AskJob(record: record)
-        }
+        }.sorted { $0.createdAt > $1.createdAt }
     }
 
     /// Cancels a job by updating its status in CloudKit.
@@ -110,12 +107,11 @@ final class iOSCloudKitService {
     func fetchOutputChunks(jobID: String) async throws -> [AskOutputChunk] {
         let predicate = NSPredicate(format: "%K == %@", CKSchema.OutputChunk.jobID, jobID)
         let query = CKQuery(recordType: CKSchema.RecordType.outputChunk, predicate: predicate)
-        query.sortDescriptors = [NSSortDescriptor(key: CKSchema.OutputChunk.sequence, ascending: true)]
         let (results, _) = try await database.records(matching: query, resultsLimit: 1000)
         return results.compactMap { _, result in
             guard let record = try? result.get() else { return nil }
             return AskOutputChunk(record: record)
-        }
+        }.sorted { $0.sequence < $1.sequence }
     }
 }
 
