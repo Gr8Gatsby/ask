@@ -38,6 +38,12 @@ final class iOSCloudKitService {
         }.sorted { $0.name < $1.name }
     }
 
+    func fetchMachine(machineID: String) async throws -> AskMachine? {
+        let recordID = CKRecord.ID(recordName: machineID)
+        let record = try await database.record(for: recordID)
+        return AskMachine(record: record)
+    }
+
     // MARK: - Agents
 
     func fetchAgents(machineID: String) async throws -> [AskAgent] {

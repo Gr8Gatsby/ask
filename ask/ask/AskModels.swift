@@ -86,8 +86,8 @@ struct AskMachine: Identifiable {
 
     var connectionStatus: ConnectionStatus {
         let age = Date().timeIntervalSince(lastHeartbeat)
-        if age < 60 { return status == .busy ? .busy : .online }
-        if age < 300 { return .sleeping }
+        if age < 90 { return status == .busy ? .busy : .online }
+        if age < 600 { return .sleeping }
         return .offline
     }
 

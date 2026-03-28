@@ -5,10 +5,16 @@ struct MachineDetailView: View {
 
     @Environment(iOSCloudKitService.self) private var cloudKit
 
+    @State private var currentMachine: AskMachine
     @State private var agents: [AskAgent] = []
     @State private var recentJobs: [AskJob] = []
     @State private var isLoading = false
     @State private var selectedAgent: AskAgent?
+
+    init(machine: AskMachine) {
+        self.machine = machine
+        self._currentMachine = State(initialValue: machine)
+    }
 
     var body: some View {
         List {
@@ -35,13 +41,13 @@ struct MachineDetailView: View {
         Section {
             LabeledContent("Status") {
                 HStack(spacing: 6) {
-                    Image(systemName: machine.connectionStatus.systemImage)
-                    Text(machine.connectionStatus.label)
+                    Image(systemName: currentMachine.connectionStatus.systemImage)
+                    Text(currentMachine.connectionStatus.label)
                 }
                 .foregroundStyle(statusColor)
             }
             LabeledContent("Last seen") {
-                Text(machine.lastHeartbeat, style: .relative)
+                Text(currentMachine.lastHeartbeat, style: .relative)
                     .foregroundStyle(.secondary)
             }
         }
@@ -95,7 +101,7 @@ struct MachineDetailView: View {
     // MARK: - Helpers
 
     private var statusColor: Color {
-        switch machine.connectionStatus {
+        switch currentMachine.connectionStatus {
         case .online: .green
         case .busy: .blue
         case .sleeping: .yellow
@@ -110,8 +116,10 @@ struct MachineDetailView: View {
     private func load() async {
         isLoading = true
         defer { isLoading = false }
+        async let machineFetch = cloudKit.fetchMachine(machineID: machine.id)
         async let agentsFetch = cloudKit.fetchAgents(machineID: machine.id)
         async let jobsFetch = cloudKit.fetchRecentJobs(machineID: machine.id)
+        currentMachine = (try? await machineFetch) ?? currentMachine
         agents = (try? await agentsFetch) ?? agents
         recentJobs = (try? await jobsFetch) ?? recentJobs
     }
