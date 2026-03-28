@@ -5,7 +5,7 @@ struct MenuBarView: View {
     @Environment(JobWatcher.self) private var watcher
     @Environment(HeartbeatService.self) private var heartbeat
 
-    @State private var showSettings = false
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -17,10 +17,6 @@ struct MenuBarView: View {
         }
         .padding(12)
         .frame(width: 260)
-        .sheet(isPresented: $showSettings) {
-            SettingsView()
-                .environment(settings)
-        }
     }
 
     private var header: some View {
@@ -68,7 +64,7 @@ struct MenuBarView: View {
 
     private var actions: some View {
         HStack {
-            Button("Settings") { showSettings = true }
+            Button("Settings") { openWindow(id: "settings") }
                 .buttonStyle(.plain)
                 .font(.subheadline)
             Spacer()

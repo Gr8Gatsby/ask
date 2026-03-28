@@ -61,7 +61,7 @@ struct MachinesView: View {
 
     private var emptyState: some View {
         ContentUnavailableView {
-            Label("No Machines", systemImage: "desktopcomputer.slash")
+            Label("No Machines", systemImage: "desktopcomputer.trianglebadge.exclamationmark")
         } description: {
             Text("Install the Ask companion app on your Mac and complete setup to get started.")
         }

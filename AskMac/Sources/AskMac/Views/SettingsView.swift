@@ -130,8 +130,9 @@ struct AddAgentView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(\.dismiss) private var dismiss
 
+    @State private var availableScripts: [String] = []
+    @State private var selectedScript: String? = nil
     @State private var name = ""
-    @State private var scriptName = ""
     @State private var capabilityNetwork = false
     @State private var capabilitySubprocess = false
     @State private var readPaths = ""
@@ -140,16 +141,30 @@ struct AddAgentView: View {
     @State private var timeout = 60
 
     private var isValid: Bool {
-        !name.isEmpty && !scriptName.isEmpty
+        selectedScript != nil && !name.isEmpty
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Identity") {
-                    TextField("Agent Name", text: $name)
-                    TextField("Script Filename", text: $scriptName)
-                        .font(.system(.body, design: .monospaced))
+                Section("Script") {
+                    if availableScripts.isEmpty {
+                        Text("No scripts found in vault directory.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Picker("Script", selection: $selectedScript) {
+                            Text("Select…").tag(Optional<String>.none)
+                            ForEach(availableScripts, id: \.self) { script in
+                                Text(script).tag(Optional(script))
+                            }
+                        }
+                        .onChange(of: selectedScript) { _, newValue in
+                            if let script = newValue, name.isEmpty {
+                                name = (script as NSString).deletingPathExtension
+                            }
+                        }
+                    }
+                    TextField("Display Name", text: $name)
                 }
 
                 Section("Capabilities") {
@@ -169,9 +184,10 @@ struct AddAgentView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {
+                        guard let script = selectedScript else { return }
                         let agent = AgentConfig(
                             name: name,
-                            scriptName: scriptName,
+                            scriptName: script,
                             capabilityNetwork: capabilityNetwork,
                             capabilitySubprocess: capabilitySubprocess,
                             capabilityReadPaths: readPaths.splitTrimmed,
@@ -186,7 +202,18 @@ struct AddAgentView: View {
                 }
             }
         }
-        .frame(minWidth: 400, minHeight: 460)
+        .frame(minWidth: 400, minHeight: 400)
+        .task { loadScripts() }
+    }
+
+    private func loadScripts() {
+        guard let vault = settings.vaultPath else { return }
+        let fm = FileManager.default
+        guard let contents = try? fm.contentsOfDirectory(atPath: vault.path) else { return }
+        let alreadyAdded = Set(settings.agents.map(\.scriptName))
+        availableScripts = contents
+            .filter { !$0.hasPrefix(".") && !alreadyAdded.contains($0) }
+            .sorted()
     }
 }
 

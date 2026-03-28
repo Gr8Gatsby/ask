@@ -38,13 +38,6 @@
 			);
 			target = 0A99F1872F78428F003B10BE /* ask */;
 		};
-		AA000003000000000000AA01 /* Exceptions for AskMac sources in "AskMac" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				AskMac.entitlements,
-			);
-			target = AA000007000000000000AA01 /* AskMac */;
-		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -66,11 +59,8 @@
 			path = askUITests;
 			sourceTree = "<group>";
 		};
-		AA000002000000000000AA01 /* AskMac */ = {
+		AA000002000000000000AA01 /* ../AskMac/Sources/AskMac */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				AA000003000000000000AA01 /* Exceptions for AskMac sources in "AskMac" target */,
-			);
 			path = ../AskMac/Sources/AskMac;
 			sourceTree = SOURCE_ROOT;
 		};
@@ -114,7 +104,7 @@
 				0A99F18A2F78428F003B10BE /* ask */,
 				0A99F19C2F784290003B10BE /* askTests */,
 				0A99F1A62F784290003B10BE /* askUITests */,
-				AA000002000000000000AA01 /* AskMac */,
+				AA000002000000000000AA01 /* ../AskMac/Sources/AskMac */,
 				0A99F1892F78428F003B10BE /* Products */,
 			);
 			sourceTree = "<group>";
@@ -214,7 +204,7 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				AA000002000000000000AA01 /* AskMac */,
+				AA000002000000000000AA01 /* ../AskMac/Sources/AskMac */,
 			);
 			name = AskMac;
 			packageProductDependencies = (
@@ -669,11 +659,11 @@
 				PRODUCT_NAME = AskMac;
 				SDKROOT = macosx;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				SWIFT_COMPILATION_MODE = wholemodule;
 			};
 			name = Release;
 		};

@@ -100,12 +100,15 @@ final class AppSettings {
             self.machineID = newID
         }
 
-        self.machineName = defaults.string(forKey: Key.machineName) ?? ""
+        self.machineName = defaults.string(forKey: Key.machineName) ?? Host.current().localizedName ?? ProcessInfo.processInfo.hostName
 
         if let path = defaults.string(forKey: Key.vaultPath) {
             self.vaultPath = URL(fileURLWithPath: path)
         } else {
-            self.vaultPath = nil
+            let defaultVault = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".ask/scripts")
+            self.vaultPath = defaultVault
+            defaults.set(defaultVault.path, forKey: Key.vaultPath)
         }
 
         self.agents = Self.loadAgents(from: defaults)

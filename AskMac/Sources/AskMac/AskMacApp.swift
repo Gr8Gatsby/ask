@@ -38,6 +38,13 @@ struct AskMacApp: App {
             MenuBarLabel(isBusy: watcher.isExecuting)
         }
         .menuBarExtraStyle(.window)
+
+        Window("Ask Settings", id: "settings") {
+            SettingsView()
+                .environment(settings)
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
     }
 }
 
