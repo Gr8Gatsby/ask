@@ -12,6 +12,14 @@ enum CKSchema {
         static let job = "Job"
         static let outputChunk = "OutputChunk"
         static let event = "AskEvent"
+        static let response = "AskResponse"
+    }
+
+    enum Response {
+        static let eventID = "eventID"
+        static let machineID = "machineID"
+        static let choice = "choice"
+        static let timestamp = "timestamp"
     }
 
     enum Machine {
@@ -50,9 +58,12 @@ enum CKSchema {
     }
 
     enum Event {
+        static let eventID = "eventID"
+        static let machineID = "machineID"
         static let title = "title"
         static let body = "body"
         static let source = "source"
+        static let options = "options"
         static let timestamp = "timestamp"
     }
 

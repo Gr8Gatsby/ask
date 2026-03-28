@@ -56,13 +56,42 @@ final class CloudKitService {
 
     // MARK: - Events
 
-    func saveEvent(title: String, body: String, source: String) async throws {
+    func saveEvent(eventID: String, machineID: String, title: String, body: String, source: String, options: [String] = []) async throws {
         let record = CKRecord(recordType: CKSchema.RecordType.event)
+        record[CKSchema.Event.eventID] = eventID
+        record[CKSchema.Event.machineID] = machineID
         record[CKSchema.Event.title] = title
         record[CKSchema.Event.body] = body
         record[CKSchema.Event.source] = source
+        record[CKSchema.Event.options] = options as CKRecordValueProtocol
         record[CKSchema.Event.timestamp] = Date()
         _ = try await save(record)
+    }
+
+    // MARK: - Responses
+
+    /// Fetches any AskResponse records addressed to this machine, then deletes them.
+    func drainResponses(machineID: String) async throws -> [(eventID: String, choice: String)] {
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.Response.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.response, predicate: predicate)
+        let (results, _) = try await database.records(matching: query, resultsLimit: 50)
+
+        var found: [(eventID: String, choice: String)] = []
+        var toDelete: [CKRecord.ID] = []
+
+        for (recordID, result) in results {
+            guard let record = try? result.get(),
+                  let eventID = record[CKSchema.Response.eventID] as? String,
+                  let choice = record[CKSchema.Response.choice] as? String
+            else { continue }
+            found.append((eventID: eventID, choice: choice))
+            toDelete.append(recordID)
+        }
+
+        if !toDelete.isEmpty {
+            try? await database.modifyRecords(saving: [], deleting: toDelete, savePolicy: .allKeys, atomically: false)
+        }
+        return found
     }
 
     // MARK: - Jobs

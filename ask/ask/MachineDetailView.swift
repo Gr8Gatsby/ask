@@ -8,6 +8,7 @@ struct MachineDetailView: View {
     @State private var currentMachine: AskMachine
     @State private var agents: [AskAgent] = []
     @State private var recentJobs: [AskJob] = []
+    @State private var pendingEvents: [AskEvent] = []
     @State private var isLoading = false
     @State private var selectedAgent: AskAgent?
 
@@ -18,6 +19,9 @@ struct MachineDetailView: View {
 
     var body: some View {
         List {
+            if !pendingEvents.isEmpty {
+                eventsSection
+            }
             statusSection
             agentsSection
             if !recentJobs.isEmpty {
@@ -36,6 +40,19 @@ struct MachineDetailView: View {
     }
 
     // MARK: - Sections
+
+    private var eventsSection: some View {
+        Section {
+            ForEach(pendingEvents) { event in
+                EventCard(event: event) { choice in
+                    await respond(to: event, choice: choice)
+                }
+            }
+        } header: {
+            Label("Waiting for Input", systemImage: "person.fill.questionmark")
+                .foregroundStyle(.orange)
+        }
+    }
 
     private var statusSection: some View {
         Section {
@@ -119,9 +136,21 @@ struct MachineDetailView: View {
         async let machineFetch = cloudKit.fetchMachine(machineID: machine.id)
         async let agentsFetch = cloudKit.fetchAgents(machineID: machine.id)
         async let jobsFetch = cloudKit.fetchRecentJobs(machineID: machine.id)
+        async let eventsFetch = cloudKit.fetchPendingEvents(machineID: machine.id)
         currentMachine = (try? await machineFetch) ?? currentMachine
         agents = (try? await agentsFetch) ?? agents
         recentJobs = (try? await jobsFetch) ?? recentJobs
+        pendingEvents = (try? await eventsFetch) ?? pendingEvents
+    }
+
+    private func respond(to event: AskEvent, choice: String) async {
+        do {
+            try await cloudKit.saveResponse(eventID: event.id, machineID: event.machineID, choice: choice)
+            try? await cloudKit.deleteEvent(event)
+            pendingEvents.removeAll { $0.id == event.id }
+        } catch {
+            print("[MachineDetailView] Failed to save response: \(error)")
+        }
     }
 }
 
@@ -218,6 +247,70 @@ struct JobRow: View {
         case .cancelled: .secondary
         case .running: .blue
         default: .secondary
+        }
+    }
+}
+
+// MARK: - Event card
+
+struct EventCard: View {
+    let event: AskEvent
+    let onRespond: (String) async -> Void
+
+    @State private var responding = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
+                Image(systemName: "questionmark.circle.fill")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(event.title)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                    if !event.body.isEmpty {
+                        Text(event.body)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                Text(event.timestamp.briefRelative)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            if !event.options.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(event.options, id: \.self) { option in
+                        Button {
+                            Task {
+                                responding = true
+                                await onRespond(option)
+                                responding = false
+                            }
+                        } label: {
+                            Text(option)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                                .background(Color.accentColor.opacity(0.12))
+                                .foregroundStyle(Color.accentColor)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
+                        .disabled(responding)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .overlay {
+            if responding {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
         }
     }
 }

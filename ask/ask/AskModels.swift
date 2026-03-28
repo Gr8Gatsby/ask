@@ -11,6 +11,25 @@ enum CKSchema {
         static let agent = "Agent"
         static let job = "Job"
         static let outputChunk = "OutputChunk"
+        static let event = "AskEvent"
+        static let response = "AskResponse"
+    }
+
+    enum Event {
+        static let eventID = "eventID"
+        static let machineID = "machineID"
+        static let title = "title"
+        static let body = "body"
+        static let source = "source"
+        static let options = "options"
+        static let timestamp = "timestamp"
+    }
+
+    enum Response {
+        static let eventID = "eventID"
+        static let machineID = "machineID"
+        static let choice = "choice"
+        static let timestamp = "timestamp"
     }
 
     enum Machine {
@@ -252,6 +271,39 @@ struct AskJob: Identifiable {
         } else {
             self.exitCode = nil
         }
+    }
+}
+
+// MARK: - Event
+
+struct AskEvent: Identifiable {
+    let id: String          // eventID
+    let ckRecordID: CKRecord.ID
+    let machineID: String
+    let title: String
+    let body: String
+    let source: String
+    let options: [String]   // empty = notification only
+    let timestamp: Date
+
+    var requiresResponse: Bool { !options.isEmpty }
+
+    init?(record: CKRecord) {
+        guard
+            let eventID = record[CKSchema.Event.eventID] as? String,
+            let machineID = record[CKSchema.Event.machineID] as? String,
+            let title = record[CKSchema.Event.title] as? String,
+            let timestamp = record[CKSchema.Event.timestamp] as? Date
+        else { return nil }
+
+        self.id = eventID
+        self.ckRecordID = record.recordID
+        self.machineID = machineID
+        self.title = title
+        self.body = record[CKSchema.Event.body] as? String ?? ""
+        self.source = record[CKSchema.Event.source] as? String ?? ""
+        self.options = record[CKSchema.Event.options] as? [String] ?? []
+        self.timestamp = timestamp
     }
 }
 

@@ -107,6 +107,34 @@ final class iOSCloudKitService {
         _ = try await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys)
     }
 
+    // MARK: - Events
+
+    /// Fetches pending AskEvent records for a machine, newest first.
+    func fetchPendingEvents(machineID: String) async throws -> [AskEvent] {
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.Event.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.event, predicate: predicate)
+        let (results, _) = try await database.records(matching: query, resultsLimit: 20)
+        return results.compactMap { _, result in
+            guard let record = try? result.get() else { return nil }
+            return AskEvent(record: record)
+        }.sorted { $0.timestamp > $1.timestamp }
+    }
+
+    /// Writes an AskResponse to CloudKit so the Mac can pick it up.
+    func saveResponse(eventID: String, machineID: String, choice: String) async throws {
+        let record = CKRecord(recordType: CKSchema.RecordType.response)
+        record[CKSchema.Response.eventID] = eventID
+        record[CKSchema.Response.machineID] = machineID
+        record[CKSchema.Response.choice] = choice
+        record[CKSchema.Response.timestamp] = Date()
+        _ = try await database.save(record)
+    }
+
+    /// Deletes an AskEvent record from CloudKit.
+    func deleteEvent(_ event: AskEvent) async throws {
+        try await database.deleteRecord(withID: event.ckRecordID)
+    }
+
     // MARK: - Output
 
     /// Fetches all output chunks for a job, sorted by sequence.

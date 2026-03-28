@@ -7,12 +7,14 @@ import Observation
 @Observable
 final class LocalEventService {
     private let cloudKit: CloudKitService
+    private let machineID: String
     private let incomingDir: URL
     private var source: DispatchSourceFileSystemObject?
     private var dirFD: Int32 = -1
 
-    init(cloudKit: CloudKitService) {
+    init(cloudKit: CloudKitService, machineID: String) {
         self.cloudKit = cloudKit
+        self.machineID = machineID
         self.incomingDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".ask/incoming")
         ensureDirectory()
@@ -62,11 +64,21 @@ final class LocalEventService {
                 continue
             }
 
+            let eventID = json["id"] as? String ?? UUID().uuidString
             let title = json["title"] as? String ?? "Claude Code"
-            let message = json["message"] as? String ?? json["content"] as? String ?? "Activity on your Mac"
+            let message = json["message"] as? String ?? json["content"] as? String ?? ""
+            let source = json["source"] as? String ?? "claude-code"
+            let options = json["options"] as? [String] ?? []
 
             do {
-                try await cloudKit.saveEvent(title: title, body: message, source: "claude-code")
+                try await cloudKit.saveEvent(
+                    eventID: eventID,
+                    machineID: machineID,
+                    title: title,
+                    body: message,
+                    source: source,
+                    options: options
+                )
                 try fm.removeItem(at: file)
             } catch {
                 print("[LocalEventService] Failed to forward event: \(error)")

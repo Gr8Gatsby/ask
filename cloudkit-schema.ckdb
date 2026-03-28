@@ -87,9 +87,28 @@ DEFINE SCHEMA
         "___modifiedBy" REFERENCE,
         "___recordID"   REFERENCE QUERYABLE,
         body            STRING,
+        eventID         STRING QUERYABLE,
+        machineID       STRING QUERYABLE,
+        options         LIST<STRING>,
         source          STRING,
         timestamp       TIMESTAMP QUERYABLE SORTABLE,
         title           STRING,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE AskResponse (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE QUERYABLE,
+        choice          STRING,
+        eventID         STRING QUERYABLE,
+        machineID       STRING QUERYABLE,
+        timestamp       TIMESTAMP,
         GRANT WRITE TO "_creator",
         GRANT CREATE TO "_icloud",
         GRANT READ TO "_world"
