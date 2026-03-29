@@ -16,6 +16,26 @@ enum CKSchema {
         static let message = "AskMessage"
         static let typing = "AskTyping"
         static let session = "AskSession"
+        static let rkBlock = "RKBlock"
+        static let rkResponse = "RKResponse"
+    }
+
+    enum RKBlock {
+        static let blockID = "blockID"
+        static let machineID = "machineID"
+        static let scriptID = "scriptID"
+        static let blockType = "blockType"
+        static let payload = "payload"
+        static let createdAt = "createdAt"
+        static let expiresAt = "expiresAt"
+    }
+
+    enum RKResponse {
+        static let blockID = "blockID"
+        static let machineID = "machineID"
+        static let scriptID = "scriptID"
+        static let value = "value"
+        static let timestamp = "timestamp"
     }
 
     enum Session {
@@ -292,6 +312,31 @@ struct JobRecord: Sendable {
         if let code = exitCode {
             record[CKSchema.Job.exitCode] = Int64(code)
         }
+        return record
+    }
+}
+
+// MARK: - RKBlock
+
+struct RKBlockRecord: Sendable {
+    let blockID: String
+    let machineID: String
+    let scriptID: String
+    let blockType: String
+    let payload: String     // JSON blob
+    let createdAt: Date
+    let expiresAt: Date?
+
+    func toCKRecord() -> CKRecord {
+        let record = CKRecord(recordType: CKSchema.RecordType.rkBlock,
+                              recordID: CKRecord.ID(recordName: blockID))
+        record[CKSchema.RKBlock.blockID] = blockID
+        record[CKSchema.RKBlock.machineID] = machineID
+        record[CKSchema.RKBlock.scriptID] = scriptID
+        record[CKSchema.RKBlock.blockType] = blockType
+        record[CKSchema.RKBlock.payload] = payload
+        record[CKSchema.RKBlock.createdAt] = createdAt
+        record[CKSchema.RKBlock.expiresAt] = expiresAt as CKRecordValueProtocol?
         return record
     }
 }

@@ -314,6 +314,54 @@ final class iOSCloudKitService {
         return events
     }
 
+    // MARK: - RKBlocks
+
+    /// Fetches all active RKBlock records for a machine, sorted by type priority then createdAt.
+    func fetchBlocks(machineID: String) async throws -> [RKBlock] {
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.RKBlock.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.rkBlock, predicate: predicate)
+        query.sortDescriptors = [NSSortDescriptor(key: CKSchema.RKBlock.createdAt, ascending: false)]
+        let (results, _) = try await database.records(matching: query, resultsLimit: 50)
+
+        let now = Date()
+        var toDelete: [CKRecord.ID] = []
+        var blocks: [RKBlock] = []
+
+        for (recordID, result) in results {
+            guard let record = try? result.get() else { continue }
+            guard let block = RKBlock(record: record) else {
+                toDelete.append(recordID)
+                continue
+            }
+            if let exp = block.expiresAt, exp < now {
+                toDelete.append(recordID)
+                continue
+            }
+            blocks.append(block)
+        }
+
+        if !toDelete.isEmpty {
+            _ = try? await database.modifyRecords(saving: [], deleting: toDelete, savePolicy: .allKeys, atomically: false)
+        }
+
+        return blocks.sorted {
+            // Confirmation and prompt blocks (require response) sort before informational ones
+            if $0.requiresResponse != $1.requiresResponse { return $0.requiresResponse }
+            return $0.createdAt > $1.createdAt
+        }
+    }
+
+    /// Posts an RKResponse so the Mac daemon can route it back to the script.
+    func postResponse(blockID: String, machineID: String, scriptID: String, value: String) async throws {
+        let record = CKRecord(recordType: CKSchema.RecordType.rkResponse)
+        record[CKSchema.RKResponse.blockID] = blockID
+        record[CKSchema.RKResponse.machineID] = machineID
+        record[CKSchema.RKResponse.scriptID] = scriptID
+        record[CKSchema.RKResponse.value] = value
+        record[CKSchema.RKResponse.timestamp] = Date()
+        _ = try await database.save(record)
+    }
+
     // MARK: - Output
 
     /// Fetches all output chunks for a job, sorted by sequence.

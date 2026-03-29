@@ -16,6 +16,26 @@ enum CKSchema {
         static let message = "AskMessage"
         static let typing = "AskTyping"
         static let session = "AskSession"
+        static let rkBlock = "RKBlock"
+        static let rkResponse = "RKResponse"
+    }
+
+    enum RKBlock {
+        static let blockID = "blockID"
+        static let machineID = "machineID"
+        static let scriptID = "scriptID"
+        static let blockType = "blockType"
+        static let payload = "payload"
+        static let createdAt = "createdAt"
+        static let expiresAt = "expiresAt"
+    }
+
+    enum RKResponse {
+        static let blockID = "blockID"
+        static let machineID = "machineID"
+        static let scriptID = "scriptID"
+        static let value = "value"
+        static let timestamp = "timestamp"
     }
 
     enum Session {

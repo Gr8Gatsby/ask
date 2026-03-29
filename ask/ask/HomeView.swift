@@ -7,6 +7,7 @@ struct HomeView: View {
     @State private var sessions: [AskSession] = []
     @State private var agents: [AskAgent] = []
     @State private var pendingEvents: [AskEvent] = []
+    @State private var blocks: [RKBlock] = []
 
     @State private var hasLoaded = false
     @State private var activeMachineID: String?
@@ -95,6 +96,26 @@ struct HomeView: View {
             if let machine = activeMachine {
                 Section {
                     MachineStatusRow(machine: machine)
+                }
+            }
+
+            // RemoteKit blocks — script-driven UI, always at top
+            if !blocks.isEmpty {
+                Section {
+                    ForEach(blocks) { block in
+                        BlockView(block: block) { value in
+                            await respondToBlock(block, value: value)
+                        }
+                    }
+                } header: {
+                    HStack(spacing: 6) {
+                        Image("claudecode")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 14, height: 14)
+                        Text("Needs Input")
+                            .foregroundStyle(.orange)
+                    }
                 }
             }
 
@@ -274,9 +295,11 @@ struct HomeView: View {
         async let sessionsFetch = cloudKit.fetchSessions(machineID: machineID)
         async let agentsFetch = cloudKit.fetchAgents(machineID: machineID)
         async let eventsFetch = cloudKit.fetchPendingEvents(machineID: machineID)
+        async let blocksFetch = cloudKit.fetchBlocks(machineID: machineID)
         sessions = (try? await sessionsFetch) ?? sessions
         agents = (try? await agentsFetch) ?? agents
         pendingEvents = (try? await eventsFetch) ?? pendingEvents
+        blocks = (try? await blocksFetch) ?? blocks
     }
 
     private func startPolling() {
@@ -314,6 +337,20 @@ struct HomeView: View {
     private func dismissEvent(_ event: AskEvent) async {
         try? await cloudKit.deleteEvent(event)
         withAnimation { pendingEvents.removeAll { $0.id == event.id } }
+    }
+
+    private func respondToBlock(_ block: RKBlock, value: String) async {
+        do {
+            try await cloudKit.postResponse(
+                blockID: block.id,
+                machineID: block.machineID,
+                scriptID: block.scriptID,
+                value: value
+            )
+            withAnimation { blocks.removeAll { $0.id == block.id } }
+        } catch {
+            print("[HomeView] Failed to post block response: \(error)")
+        }
     }
 }
 

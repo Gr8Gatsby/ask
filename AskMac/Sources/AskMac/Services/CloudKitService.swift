@@ -249,6 +249,47 @@ final class CloudKitService {
         cachedRecords[jobID] = saved
     }
 
+    // MARK: - RKBlocks
+
+    /// Saves (creates or replaces) an RKBlock record. The blockID is used as the record name.
+    func saveBlock(_ block: RKBlockRecord) async throws {
+        let record = block.toCKRecord()
+        let saved = try await save(record)
+        cachedRecords[block.blockID] = saved
+    }
+
+    /// Deletes an RKBlock record by blockID.
+    func clearBlock(blockID: String) async throws {
+        let recordID = CKRecord.ID(recordName: blockID)
+        try await database.deleteRecord(withID: recordID)
+        cachedRecords.removeValue(forKey: blockID)
+    }
+
+    /// Fetches and deletes all RKResponse records addressed to this machine.
+    func drainRKResponses(machineID: String) async throws -> [(blockID: String, scriptID: String, value: String)] {
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.RKResponse.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.rkResponse, predicate: predicate)
+        let (results, _) = try await database.records(matching: query, resultsLimit: 50)
+
+        var found: [(blockID: String, scriptID: String, value: String)] = []
+        var toDelete: [CKRecord.ID] = []
+
+        for (recordID, result) in results {
+            guard let record = try? result.get(),
+                  let blockID = record[CKSchema.RKResponse.blockID] as? String,
+                  let scriptID = record[CKSchema.RKResponse.scriptID] as? String,
+                  let value = record[CKSchema.RKResponse.value] as? String
+            else { continue }
+            found.append((blockID: blockID, scriptID: scriptID, value: value))
+            toDelete.append(recordID)
+        }
+
+        if !toDelete.isEmpty {
+            _ = try? await database.modifyRecords(saving: [], deleting: toDelete, savePolicy: .allKeys, atomically: false)
+        }
+        return found
+    }
+
     // MARK: - Output chunks
 
     /// Saves a single output chunk. Fire-and-forget friendly — caller can use Task { try? await }.
