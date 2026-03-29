@@ -12,6 +12,8 @@ struct AskMacApp: App {
     @State private var responseWatcher: ResponseWatcherService
     @State private var messageWatcher: MessageWatcherService
     @State private var actionHistory: ActionHistoryService
+    @State private var scriptManager: ScriptManager
+    @State private var responsePoller: ResponsePoller
 
     init() {
         let s = settings
@@ -23,6 +25,8 @@ struct AskMacApp: App {
         let le = LocalEventService(cloudKit: ck, machineID: s.machineID)
         let rw = ResponseWatcherService(cloudKit: ck, machineID: s.machineID)
         let mw = MessageWatcherService(cloudKit: ck, machineID: s.machineID)
+        let sm = ScriptManager(cloudKit: ck, machineID: s.machineID)
+        let rp = ResponsePoller(cloudKit: ck, machineID: s.machineID)
 
         _heartbeat = State(initialValue: hb)
         _executor = State(initialValue: ex)
@@ -31,6 +35,8 @@ struct AskMacApp: App {
         _responseWatcher = State(initialValue: rw)
         _messageWatcher = State(initialValue: mw)
         _actionHistory = State(initialValue: ah)
+        _scriptManager = State(initialValue: sm)
+        _responsePoller = State(initialValue: rp)
 
         // Start services immediately on launch.
         Task {
@@ -40,6 +46,8 @@ struct AskMacApp: App {
             le.start()
             rw.start()
             mw.start()
+            sm.start()
+            rp.start(scriptManager: sm)
         }
     }
 
