@@ -12,6 +12,7 @@ struct HomeView: View {
     @State private var activeMachineID: String?
     @State private var showSettings = false
     @State private var selectedAgent: AskAgent?
+    @State private var showNewSession = false
     @State private var pollTask: Task<Void, Never>?
 
     private var activeMachine: AskMachine? {
@@ -27,6 +28,14 @@ struct HomeView: View {
     // Sessions that are active / recently active
     private var activeSessions: [AskSession] {
         sessions.filter { !$0.status.isWaiting }
+    }
+
+    // The registered Claude Code action (if any)
+    private var claudeAction: AskAgent? {
+        agents.first {
+            $0.name.lowercased().contains("claude") ||
+            $0.scriptName.lowercased().contains("claude")
+        }
     }
 
     // Legacy events not tied to a session
@@ -59,6 +68,13 @@ struct HomeView: View {
                 NewJobView(machine: machine, agent: agent)
                     .environment(cloudKit)
             }
+        }
+        .sheet(isPresented: $showNewSession) {
+            NewClaudeSessionView(
+                machine: activeMachine,
+                claudeAction: claudeAction
+            )
+            .environment(cloudKit)
         }
         .task {
             await cloudKit.checkAccountStatus()
@@ -199,7 +215,15 @@ struct HomeView: View {
             }
         }
 
-        ToolbarItem(placement: .primaryAction) {
+        if activeMachine?.connectionStatus == .online || activeMachine?.connectionStatus == .busy {
+            ToolbarItem(placement: .primaryAction) {
+                Button { showNewSession = true } label: {
+                    Image(systemName: "square.and.pencil")
+                }
+            }
+        }
+
+        ToolbarItem(placement: .cancellationAction) {
             Button { showSettings = true } label: {
                 Image(systemName: "gearshape")
             }
