@@ -11,6 +11,9 @@ final class ResponseWatcherService {
     private let responsesDir: URL
     private var pollTask: Task<Void, Never>?
 
+    /// Last time the iPhone sent a response. Shown in menu bar.
+    private(set) var lastResponseAt: Date?
+
     init(cloudKit: CloudKitService, machineID: String) {
         self.cloudKit = cloudKit
         self.machineID = machineID
@@ -38,6 +41,7 @@ final class ResponseWatcherService {
     private func poll() async {
         guard let responses = try? await cloudKit.drainResponses(machineID: machineID) else { return }
         for response in responses {
+            lastResponseAt = Date()
             deliver(eventID: response.eventID, choice: response.choice)
         }
     }

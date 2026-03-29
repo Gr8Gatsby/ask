@@ -19,7 +19,7 @@ struct MachineDetailView: View {
 
     var body: some View {
         List {
-            if !pendingEvents.isEmpty {
+            if !actionableEvents.isEmpty {
                 eventsSection
             }
             statusSection
@@ -41,9 +41,13 @@ struct MachineDetailView: View {
 
     // MARK: - Sections
 
+    private var actionableEvents: [AskEvent] {
+        pendingEvents.filter(\.requiresResponse)
+    }
+
     private var eventsSection: some View {
         Section {
-            ForEach(pendingEvents) { event in
+            ForEach(actionableEvents) { event in
                 EventCard(event: event) { choice in
                     await respond(to: event, choice: choice)
                 }

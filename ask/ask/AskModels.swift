@@ -302,7 +302,7 @@ struct AskEvent: Identifiable {
         self.title = title
         self.body = record[CKSchema.Event.body] as? String ?? ""
         self.source = record[CKSchema.Event.source] as? String ?? ""
-        self.options = record[CKSchema.Event.options] as? [String] ?? []
+        self.options = (record[CKSchema.Event.options] as? [Any])?.compactMap { $0 as? String } ?? []
         self.timestamp = timestamp
     }
 }

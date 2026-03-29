@@ -4,6 +4,7 @@ struct MenuBarView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(JobWatcher.self) private var watcher
     @Environment(HeartbeatService.self) private var heartbeat
+    @Environment(ResponseWatcherService.self) private var responseWatcher
 
     @Environment(\.openWindow) private var openWindow
 
@@ -13,6 +14,8 @@ struct MenuBarView: View {
             Divider()
             statusSection
             Divider()
+            iPhoneSection
+            Divider()
             actions
         }
         .padding(12)
@@ -21,8 +24,7 @@ struct MenuBarView: View {
 
     private var header: some View {
         HStack {
-            Image(systemName: "bolt.fill")
-                .foregroundStyle(Color.accentColor)
+            Image(systemName: "bolt")
             Text(settings.machineName.isEmpty ? "Ask" : settings.machineName)
                 .font(.headline)
             Spacer()
@@ -60,6 +62,31 @@ struct MenuBarView: View {
                     .foregroundStyle(.tertiary)
             }
         }
+    }
+
+    private var iPhoneSection: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "iphone")
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("iPhone")
+                    .font(.subheadline)
+                Text(iPhoneSubtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer()
+        }
+    }
+
+    private var iPhoneSubtitle: String {
+        if let last = responseWatcher.lastResponseAt {
+            return "Responded \(last.formatted(.relative(presentation: .named)))"
+        }
+        if let last = watcher.lastJobReceivedAt {
+            return "Last job \(last.formatted(.relative(presentation: .named)))"
+        }
+        return "Paired via iCloud"
     }
 
     private var actions: some View {

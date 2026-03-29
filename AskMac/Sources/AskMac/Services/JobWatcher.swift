@@ -16,6 +16,7 @@ final class JobWatcher {
     private(set) var currentJob: JobRecord?
     private(set) var isExecuting = false
     private(set) var lastError: Error?
+    private(set) var lastJobReceivedAt: Date?
 
     static let pollInterval: TimeInterval = 10
 
@@ -63,6 +64,7 @@ final class JobWatcher {
                 )
                 return
             }
+            lastJobReceivedAt = Date()
             await dispatch(job: job, agent: agentConfig)
         } catch {
             lastError = error

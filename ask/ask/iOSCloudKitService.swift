@@ -110,14 +110,34 @@ final class iOSCloudKitService {
     // MARK: - Events
 
     /// Fetches pending AskEvent records for a machine, newest first.
+    /// Stale notification-only events (no options, older than 1 hour) are deleted silently.
     func fetchPendingEvents(machineID: String) async throws -> [AskEvent] {
         let predicate = NSPredicate(format: "%K == %@", CKSchema.Event.machineID, machineID)
         let query = CKQuery(recordType: CKSchema.RecordType.event, predicate: predicate)
-        let (results, _) = try await database.records(matching: query, resultsLimit: 20)
-        return results.compactMap { _, result in
-            guard let record = try? result.get() else { return nil }
-            return AskEvent(record: record)
-        }.sorted { $0.timestamp > $1.timestamp }
+        let (results, _) = try await database.records(matching: query, resultsLimit: 50)
+
+        var events: [AskEvent] = []
+        var toDelete: [CKRecord.ID] = []
+        let cutoff = Date().addingTimeInterval(-3600)
+
+        for (recordID, result) in results {
+            guard let record = try? result.get() else { continue }
+            guard let event = AskEvent(record: record) else {
+                toDelete.append(recordID)
+                continue
+            }
+            if !event.requiresResponse && event.timestamp < cutoff {
+                toDelete.append(recordID)
+            } else {
+                events.append(event)
+            }
+        }
+
+        if !toDelete.isEmpty {
+            try? await database.modifyRecords(saving: [], deleting: toDelete, savePolicy: .allKeys, atomically: false)
+        }
+
+        return events.sorted { $0.timestamp > $1.timestamp }
     }
 
     /// Writes an AskResponse to CloudKit so the Mac can pick it up.

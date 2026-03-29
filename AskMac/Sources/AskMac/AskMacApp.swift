@@ -42,6 +42,7 @@ struct AskMacApp: App {
                 .environment(settings)
                 .environment(watcher)
                 .environment(heartbeat)
+                .environment(responseWatcher)
         } label: {
             MenuBarLabel(isBusy: watcher.isExecuting)
         }

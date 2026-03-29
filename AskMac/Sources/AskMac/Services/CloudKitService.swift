@@ -63,9 +63,14 @@ final class CloudKitService {
         record[CKSchema.Event.title] = title
         record[CKSchema.Event.body] = body
         record[CKSchema.Event.source] = source
-        record[CKSchema.Event.options] = options as CKRecordValueProtocol
+        record[CKSchema.Event.options] = options as NSArray
         record[CKSchema.Event.timestamp] = Date()
-        _ = try await save(record)
+        let saved = try await save(record)
+        // Notification-only events (no options) are just for push — delete after saving
+        // so they don't accumulate in the iOS app's list.
+        if options.isEmpty {
+            try? await database.deleteRecord(withID: saved.recordID)
+        }
     }
 
     // MARK: - Responses

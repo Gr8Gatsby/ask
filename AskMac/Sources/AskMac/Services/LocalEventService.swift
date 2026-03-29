@@ -57,10 +57,17 @@ final class LocalEventService {
         guard let files = try? fm.contentsOfDirectory(at: incomingDir, includingPropertiesForKeys: nil) else { return }
 
         for file in files where file.pathExtension == "json" {
-            guard let data = try? Data(contentsOf: file),
+            // The DispatchSource can fire before the writer finishes — retry once if empty.
+            var data = (try? Data(contentsOf: file)) ?? Data()
+            if data.isEmpty {
+                try? await Task.sleep(for: .milliseconds(150))
+                data = (try? Data(contentsOf: file)) ?? Data()
+            }
+            guard !data.isEmpty,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else {
-                try? fm.removeItem(at: file)
+                log("JSON parse failed for \(file.lastPathComponent) (\(data.count) bytes)")
+                if !data.isEmpty { try? fm.removeItem(at: file) }
                 continue
             }
 
@@ -68,7 +75,9 @@ final class LocalEventService {
             let title = json["title"] as? String ?? "Claude Code"
             let message = json["message"] as? String ?? json["content"] as? String ?? ""
             let source = json["source"] as? String ?? "claude-code"
-            let options = json["options"] as? [String] ?? []
+            let options = (json["options"] as? [Any])?.compactMap { $0 as? String } ?? []
+
+            log("Processing: title=\(title) options=\(options) machineID=\(machineID)")
 
             do {
                 try await cloudKit.saveEvent(
@@ -79,8 +88,10 @@ final class LocalEventService {
                     source: source,
                     options: options
                 )
+                log("Saved OK: \(title) options=\(options)")
                 try fm.removeItem(at: file)
             } catch {
+                log("Save FAILED: \(error)")
                 print("[LocalEventService] Failed to forward event: \(error)")
             }
         }

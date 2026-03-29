@@ -5,13 +5,14 @@ struct MachinesView: View {
 
     @State private var machines: [AskMachine] = []
     @State private var isLoading = false
+    @State private var lastRefresh: Date?
     @State private var error: Error?
 
     var body: some View {
         NavigationStack {
             Group {
                 if isLoading && machines.isEmpty {
-                    ProgressView("Loading machines…")
+                    ProgressView("Connecting…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if machines.isEmpty {
                     emptyState
@@ -22,12 +23,15 @@ struct MachinesView: View {
             .navigationTitle("Ask")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        Task { await load() }
-                    } label: {
-                        Label("Refresh", systemImage: "arrow.clockwise")
+                    if isLoading {
+                        ProgressView().scaleEffect(0.8)
+                    } else {
+                        Button {
+                            Task { await load() }
+                        } label: {
+                            Label("Refresh", systemImage: "arrow.clockwise")
+                        }
                     }
-                    .disabled(isLoading)
                 }
             }
             .alert("Error", isPresented: .constant(error != nil)) {
@@ -45,9 +49,27 @@ struct MachinesView: View {
     // MARK: - Subviews
 
     private var list: some View {
-        List(machines) { machine in
-            NavigationLink(value: machine.id) {
-                MachineRow(machine: machine)
+        List {
+            Section {
+                ForEach(machines) { machine in
+                    NavigationLink(value: machine.id) {
+                        MachineRow(machine: machine)
+                    }
+                }
+            } footer: {
+                HStack(spacing: 4) {
+                    Image(systemName: "icloud.fill")
+                        .font(.caption2)
+                    if let refresh = lastRefresh {
+                        Text("Synced \(refresh.briefRelative)")
+                    } else {
+                        Text("Syncing via iCloud…")
+                    }
+                }
+                .foregroundStyle(.secondary)
+                .font(.caption)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 4)
             }
         }
         .listStyle(.insetGrouped)
@@ -55,6 +77,7 @@ struct MachinesView: View {
         .navigationDestination(for: String.self) { machineID in
             if let machine = machines.first(where: { $0.id == machineID }) {
                 MachineDetailView(machine: machine)
+                    .environment(cloudKit)
             }
         }
     }
@@ -74,6 +97,7 @@ struct MachinesView: View {
         defer { isLoading = false }
         do {
             machines = try await cloudKit.fetchMachines()
+            lastRefresh = Date()
         } catch {
             self.error = error
         }
