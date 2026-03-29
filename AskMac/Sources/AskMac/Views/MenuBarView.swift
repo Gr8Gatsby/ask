@@ -83,6 +83,8 @@ struct MenuBarView: View {
                                 .resizable()
                                 .scaledToFit()
                                 .frame(width: 14, height: 14)
+                                .grayscale(script.isEnabled ? 0 : 1)
+                                .opacity(script.isEnabled ? 1 : 0.4)
                         } else {
                             Image(systemName: script.icon ?? "terminal.fill")
                                 .font(.caption)
@@ -93,9 +95,6 @@ struct MenuBarView: View {
                             .font(.subheadline)
                             .foregroundStyle(script.isEnabled ? .primary : .secondary)
                         Spacer()
-                        if script.isEnabled {
-                            scriptStatusBadge(script.status)
-                        }
                         Toggle("", isOn: Binding(
                             get: { script.isEnabled },
                             set: { enabled in
@@ -113,22 +112,6 @@ struct MenuBarView: View {
                 }
             }
         }
-    }
-
-    private func scriptStatusBadge(_ status: ManagedScript.ScriptStatus) -> some View {
-        let (label, color): (String, Color) = switch status {
-        case .running:  ("Running", .green)
-        case .starting: ("Starting", .blue)
-        case .crashed:  ("Crashed", .red)
-        case .stopped:  ("Stopped", .secondary)
-        }
-        return Text(label)
-            .font(.caption2)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.12))
-            .foregroundStyle(color)
-            .clipShape(Capsule())
     }
 
     private var actions: some View {
