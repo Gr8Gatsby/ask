@@ -21,6 +21,7 @@ private struct EmojiText: UIViewRepresentable {
         let tv = UITextView()
         tv.isEditable = false
         tv.isScrollEnabled = false
+        tv.isUserInteractionEnabled = false  // let SwiftUI gesture recognizers through
         tv.backgroundColor = .clear
         tv.textContainerInset = .zero
         tv.textContainer.lineFragmentPadding = 0
@@ -71,21 +72,23 @@ struct BlockView: View {
     @State private var showDebug = false
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Spacer()
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { showDebug.toggle() }
+                } label: {
+                    Image(systemName: showDebug ? "xmark.circle" : "info.circle")
+                        .foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain)
+            }
+
             if showDebug {
                 debugView
             } else {
                 blockContent
             }
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { showDebug.toggle() }
-            } label: {
-                Image(systemName: showDebug ? "xmark.circle.fill" : "info.circle")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(4)
         }
     }
 
@@ -180,41 +183,48 @@ struct ConfirmationBlockView: View {
             }
         }
         .padding(.vertical, 4)
-        .overlay {
-            if responding {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-            }
-        }
     }
 
     private func optionButton(_ option: String) -> some View {
-        Button {
+        let isSelected = selectedOption == option
+        return Button {
+            guard !responding else { return }
+            selectedOption = option
             Task {
                 responding = true
                 await onRespond(option)
                 responding = false
             }
         } label: {
-            EmojiText(text: option,
-                      uiFont: .preferredFont(forTextStyle: .body).withWeight(.semibold),
-                      color: UIColor(Color.accentColor),
-                      alignment: .center)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .background(Color.accentColor.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+            ZStack {
+                if responding && isSelected {
+                    ProgressView().tint(Color.accentColor)
+                } else {
+                    EmojiText(text: option,
+                              uiFont: .preferredFont(forTextStyle: .body).withWeight(.semibold),
+                              color: UIColor(Color.accentColor),
+                              alignment: .center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 36)
+            .padding(.vertical, 8)
+            .background(isSelected ? Color.accentColor.opacity(0.2) : Color.accentColor.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
         }
+        .buttonStyle(.plain)
         .disabled(responding)
+        .opacity(responding && !isSelected ? 0.4 : 1)
+        .animation(.easeInOut(duration: 0.15), value: responding)
     }
 
     private var optionList: some View {
         VStack(spacing: 0) {
             ForEach(Array(payload.options.enumerated()), id: \.element) { idx, option in
+                let isSelected = selectedOption == option
                 Button {
+                    guard !responding else { return }
                     selectedOption = option
                     Task {
                         responding = true
@@ -225,10 +235,12 @@ struct ConfirmationBlockView: View {
                     HStack(spacing: 12) {
                         ZStack {
                             Circle()
-                                .stroke(selectedOption == option ? Color.accentColor : Color.secondary.opacity(0.4),
+                                .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.4),
                                         lineWidth: 1.5)
                                 .frame(width: 20, height: 20)
-                            if selectedOption == option {
+                            if responding && isSelected {
+                                ProgressView().scaleEffect(0.55).tint(Color.accentColor)
+                            } else if isSelected {
                                 Circle()
                                     .fill(Color.accentColor)
                                     .frame(width: 11, height: 11)
@@ -241,12 +253,12 @@ struct ConfirmationBlockView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 11)
-                    .background(selectedOption == option
-                        ? Color.accentColor.opacity(0.08)
-                        : Color(.secondarySystemGroupedBackground))
+                    .background(isSelected ? Color.accentColor.opacity(0.08) : Color(.secondarySystemGroupedBackground))
                 }
                 .buttonStyle(.plain)
                 .disabled(responding)
+                .opacity(responding && !isSelected ? 0.4 : 1)
+                .animation(.easeInOut(duration: 0.15), value: responding)
 
                 if idx < payload.options.count - 1 {
                     Divider().padding(.leading, 44)
@@ -383,6 +395,7 @@ struct ChatPromptBlockView: View {
 
     @State private var text = ""
     @State private var responding = false
+    @State private var sentMessage = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -408,6 +421,35 @@ struct ChatPromptBlockView: View {
                 }
             }
 
+            // Sent message bubble — visible from submit until Claude replies with new context
+            if !sentMessage.isEmpty {
+                VStack(alignment: .trailing, spacing: 4) {
+                    HStack {
+                        Spacer(minLength: 40)
+                        Text(sentMessage)
+                            .font(.subheadline)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.accentColor)
+                            .clipShape(RoundedRectangle(cornerRadius: 16))
+                    }
+                    HStack(spacing: 4) {
+                        Spacer()
+                        if responding {
+                            ProgressView().scaleEffect(0.6)
+                            Text("Sending…")
+                        } else {
+                            Image(systemName: "checkmark")
+                            Text("Sent to Claude")
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
+                .transition(.opacity)
+            }
+
             // Input area
             VStack(alignment: .leading, spacing: 6) {
                 Text(payload.title)
@@ -420,16 +462,9 @@ struct ChatPromptBlockView: View {
                         .textFieldStyle(.roundedBorder)
                         .lineLimit(1...6)
                         .disabled(responding)
+                        .onSubmit { submit() }
 
-                    Button {
-                        let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !answer.isEmpty else { return }
-                        Task {
-                            responding = true
-                            await onRespond(answer)
-                            responding = false
-                        }
-                    } label: {
+                    Button { submit() } label: {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.title2)
                             .foregroundStyle(
@@ -442,13 +477,21 @@ struct ChatPromptBlockView: View {
             }
         }
         .padding(.vertical, 4)
-        .overlay {
-            if responding {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-            }
+        .onChange(of: payload.context) { _, _ in
+            // Claude responded with new context — clear the sent bubble
+            withAnimation { sentMessage = "" }
+        }
+    }
+
+    private func submit() {
+        let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !answer.isEmpty, !responding else { return }
+        withAnimation { sentMessage = answer }
+        text = ""
+        Task {
+            responding = true
+            await onRespond(answer)
+            responding = false
         }
     }
 }

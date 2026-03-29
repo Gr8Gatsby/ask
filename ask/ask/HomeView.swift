@@ -1,4 +1,6 @@
 import SwiftUI
+import UIKit
+import CloudKit
 
 struct HomeView: View {
     @Environment(iOSCloudKitService.self) private var cloudKit
@@ -19,7 +21,9 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if !hasLoaded {
+                if cloudKit.accountStatus == .noAccount || cloudKit.accountStatus == .restricted {
+                    iCloudSignInState
+                } else if !hasLoaded {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if machines.isEmpty {
@@ -57,6 +61,7 @@ struct HomeView: View {
                         BlockView(block: block) { value in
                             await respondToBlock(block, value: value)
                         }
+                        .transition(.opacity)
                     }
                 } header: {
                     Image("claudecode")
@@ -89,6 +94,23 @@ struct HomeView: View {
         }
     }
 
+    // MARK: - iCloud sign-in required
+
+    private var iCloudSignInState: some View {
+        ContentUnavailableView {
+            Label("Sign in to iCloud", systemImage: "icloud")
+        } description: {
+            Text("Sign into your Apple iCloud account to automatically discover devices.\n\nGo to Settings → [your name] → iCloud.")
+        } actions: {
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
     // MARK: - Empty state
 
     private var emptyState: some View {
@@ -111,7 +133,9 @@ struct HomeView: View {
             print("[HomeView] Failed to fetch machines: \(error)")
         }
         if let machine = activeMachine {
-            blocks = (try? await cloudKit.fetchBlocks(machineID: machine.id)) ?? blocks
+            if let fresh = try? await cloudKit.fetchBlocks(machineID: machine.id) {
+                withAnimation(.easeOut(duration: 0.25)) { blocks = fresh.filter { $0.blockType != .alert } }
+            }
         }
         hasLoaded = true
     }
@@ -126,7 +150,9 @@ struct HomeView: View {
                     machines = fresh
                 }
                 if let machine = activeMachine {
-                    blocks = (try? await cloudKit.fetchBlocks(machineID: machine.id)) ?? blocks
+                    if let fresh = try? await cloudKit.fetchBlocks(machineID: machine.id) {
+                        withAnimation(.easeOut(duration: 0.25)) { blocks = fresh.filter { $0.blockType != .alert } }
+                    }
                 }
             }
         }
@@ -140,7 +166,8 @@ struct HomeView: View {
                 scriptID: block.scriptID,
                 value: value
             )
-            withAnimation { blocks.removeAll { $0.id == block.id } }
+            // Don't remove the block locally — let the server clear it and the next
+            // poll will update the list. This avoids a jarring immediate redraw.
         } catch {
             print("[HomeView] Failed to post block response: \(error)")
         }
