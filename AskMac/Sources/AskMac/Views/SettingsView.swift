@@ -2,80 +2,96 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct SettingsView: View {
-    @Environment(AppSettings.self) private var settings
-    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        TabView {
+            GeneralSettingsTab()
+                .tabItem { Label("General", systemImage: "gearshape") }
+            ActionsSettingsTab()
+                .tabItem { Label("Actions", systemImage: "terminal") }
+        }
+        .frame(width: 480)
+    }
+}
 
-    @State private var machineName = ""
+// MARK: - General tab
+
+private struct GeneralSettingsTab: View {
+    @Environment(AppSettings.self) private var settings
+
     @State private var showVaultPicker = false
-    @State private var showAddAgent = false
 
     var body: some View {
         @Bindable var settings = settings
 
-        NavigationStack {
-            Form {
-                Section("Machine") {
-                    TextField("Name", text: $settings.machineName)
-                    LabeledContent("Machine ID") {
-                        Text(settings.machineID)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
+        Form {
+            Section("Machine") {
+                LabeledContent("Name") {
+                    TextField("Machine name", text: $settings.machineName)
+                        .multilineTextAlignment(.trailing)
                 }
+                LabeledContent("Machine ID") {
+                    Text(settings.machineID)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
 
-                Section("Scripts Vault") {
-                    if let vault = settings.vaultPath {
-                        LabeledContent("Directory") {
-                            Text(vault.abbreviatingWithTildeInPath)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                    }
-                    Button(settings.vaultPath == nil ? "Choose Vault Directory…" : "Change Vault Directory…") {
-                        showVaultPicker = true
-                    }
+            Section("Scripts Vault") {
+                LabeledContent("Directory") {
+                    Text(settings.vaultPath?.abbreviatingWithTildeInPath ?? "Not set")
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-
-                Section {
-                    ForEach(settings.agents) { agent in
-                        AgentRow(agent: agent)
-                    }
-                    .onDelete { indexSet in
-                        indexSet.forEach { settings.removeAgent(id: settings.agents[$0].id) }
-                    }
-                    Button("Add Action…") { showAddAgent = true }
-                } header: {
-                    Text("Actions")
-                } footer: {
-                    Text("Scripts must be located within the vault directory.")
-                        .font(.caption)
-                }
-            }
-            .formStyle(.grouped)
-            .navigationTitle("Ask Settings")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-            .fileImporter(
-                isPresented: $showVaultPicker,
-                allowedContentTypes: [.folder]
-            ) { result in
-                if case .success(let url) = result {
-                    _ = url.startAccessingSecurityScopedResource()
-                    settings.vaultPath = url
-                }
-            }
-            .sheet(isPresented: $showAddAgent) {
-                AddAgentView()
-                    .environment(settings)
+                Button("Change Vault Directory…") { showVaultPicker = true }
             }
         }
-        .frame(minWidth: 440, minHeight: 520)
+        .formStyle(.grouped)
+        .frame(minHeight: 240)
+        .fileImporter(
+            isPresented: $showVaultPicker,
+            allowedContentTypes: [.folder]
+        ) { result in
+            if case .success(let url) = result {
+                _ = url.startAccessingSecurityScopedResource()
+                settings.vaultPath = url
+            }
+        }
+    }
+}
+
+// MARK: - Actions tab
+
+private struct ActionsSettingsTab: View {
+    @Environment(AppSettings.self) private var settings
+
+    @State private var showAddAgent = false
+
+    var body: some View {
+        Form {
+            Section {
+                if settings.agents.isEmpty {
+                    Text("No actions configured.")
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 2)
+                } else {
+                    ForEach(settings.agents) { agent in
+                        AgentRow(agent: agent) {
+                            settings.removeAgent(id: agent.id)
+                        }
+                    }
+                }
+                Button("Add Action…") { showAddAgent = true }
+            } footer: {
+                Text("Scripts must be located within the vault directory.")
+            }
+        }
+        .formStyle(.grouped)
+        .frame(minHeight: 300)
+        .sheet(isPresented: $showAddAgent) {
+            AddAgentView()
+                .environment(settings)
+        }
     }
 }
 
@@ -83,32 +99,33 @@ struct SettingsView: View {
 
 private struct AgentRow: View {
     let agent: AgentConfig
+    let onDelete: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(agent.name).font(.body)
-            Text(agent.scriptName)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            capabilityBadges
+        HStack(alignment: .center, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(agent.name).font(.body)
+                Text(agent.scriptName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                capabilityBadges
+            }
+            Spacer()
+            Button(role: .destructive) { onDelete() } label: {
+                Image(systemName: "minus.circle.fill")
+                    .foregroundStyle(.red.opacity(0.8))
+            }
+            .buttonStyle(.plain)
         }
         .padding(.vertical, 2)
     }
 
     private var capabilityBadges: some View {
         HStack(spacing: 4) {
-            if agent.capabilityNetwork {
-                badge("Network", color: .blue)
-            }
-            if agent.capabilitySubprocess {
-                badge("Subprocess", color: .purple)
-            }
-            if !agent.capabilityReadPaths.isEmpty {
-                badge("Read", color: .green)
-            }
-            if !agent.capabilityWritePaths.isEmpty {
-                badge("Write", color: .orange)
-            }
+            if agent.capabilityNetwork   { badge("Network",    color: .blue)   }
+            if agent.capabilitySubprocess { badge("Subprocess", color: .purple) }
+            if !agent.capabilityReadPaths.isEmpty  { badge("Read",  color: .green)  }
+            if !agent.capabilityWritePaths.isEmpty { badge("Write", color: .orange) }
         }
         .padding(.top, 2)
     }
@@ -140,9 +157,7 @@ struct AddAgentView: View {
     @State private var envKeys = ""
     @State private var timeout = 60
 
-    private var isValid: Bool {
-        selectedScript != nil && !name.isEmpty
-    }
+    private var isValid: Bool { selectedScript != nil && !name.isEmpty }
 
     var body: some View {
         NavigationStack {
@@ -185,7 +200,7 @@ struct AddAgentView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {
                         guard let script = selectedScript else { return }
-                        let agent = AgentConfig(
+                        settings.addAgent(AgentConfig(
                             name: name,
                             scriptName: script,
                             capabilityNetwork: capabilityNetwork,
@@ -194,8 +209,7 @@ struct AddAgentView: View {
                             capabilityWritePaths: writePaths.splitTrimmed,
                             capabilityEnvKeys: envKeys.splitTrimmed,
                             timeout: timeout
-                        )
-                        settings.addAgent(agent)
+                        ))
                         dismiss()
                     }
                     .disabled(!isValid)
@@ -221,7 +235,7 @@ struct AddAgentView: View {
 
 private extension String {
     var splitTrimmed: [String] {
-        split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
     }
 
     func abbreviatingWithTildeInPath() -> String {
