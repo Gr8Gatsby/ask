@@ -249,6 +249,31 @@ final class CloudKitService {
         cachedRecords[jobID] = saved
     }
 
+    // MARK: - Startup cleanup
+
+    /// Deletes all legacy event/session/response/job records for this machine from CloudKit.
+    /// Also clears any stale RKBlock records so the iOS app starts with a clean slate.
+    /// Safe to call on every launch — runs atomically=false so partial success is fine.
+    func purgeOldRecords(machineID: String) async {
+        let types: [(recordType: String, field: String)] = [
+            (CKSchema.RecordType.event,    CKSchema.Event.machineID),
+            (CKSchema.RecordType.session,  CKSchema.Session.machineID),
+            (CKSchema.RecordType.response, CKSchema.Response.machineID),
+            (CKSchema.RecordType.job,      CKSchema.Job.machineID),
+            (CKSchema.RecordType.rkBlock,  CKSchema.RKBlock.machineID),
+        ]
+        let predicate = NSPredicate(format: "%K == %@", "machineID", machineID)
+
+        for (recordType, _) in types {
+            let query = CKQuery(recordType: recordType, predicate: predicate)
+            guard let results = try? await database.records(matching: query, resultsLimit: 200) else { continue }
+            let ids = results.matchResults.compactMap { _, result in try? result.get() }.map(\.recordID)
+            guard !ids.isEmpty else { continue }
+            _ = try? await database.modifyRecords(saving: [], deleting: ids, savePolicy: .allKeys, atomically: false)
+            print("[CloudKitService] Purged \(ids.count) \(recordType) records")
+        }
+    }
+
     // MARK: - RKBlocks
 
     /// Saves (creates or replaces) an RKBlock record. The blockID is used as the record name.

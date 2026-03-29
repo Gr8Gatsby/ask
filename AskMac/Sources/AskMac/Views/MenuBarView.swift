@@ -2,10 +2,9 @@ import SwiftUI
 
 struct MenuBarView: View {
     @Environment(AppSettings.self) private var settings
-    @Environment(JobWatcher.self) private var watcher
     @Environment(HeartbeatService.self) private var heartbeat
-    @Environment(ResponseWatcherService.self) private var responseWatcher
     @Environment(MessageWatcherService.self) private var messageWatcher
+    @Environment(ScriptManager.self) private var scriptManager
 
     @Environment(\.openWindow) private var openWindow
 
@@ -15,7 +14,7 @@ struct MenuBarView: View {
             Divider()
             statusSection
             Divider()
-            iPhoneSection
+            scriptsSection
             Divider()
             actions
         }
@@ -37,26 +36,15 @@ struct MenuBarView: View {
 
     private var statusSection: some View {
         Group {
-            if watcher.isExecuting, let job = watcher.currentJob {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("Running", systemImage: "gearshape.fill")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Text(job.prompt)
-                        .font(.caption)
-                        .lineLimit(2)
-                        .foregroundStyle(.primary)
-                }
-            } else if !settings.isConfigured {
+            if !settings.isConfigured {
                 Label("Setup required", systemImage: "exclamationmark.triangle")
                     .font(.subheadline)
                     .foregroundStyle(.orange)
             } else {
-                Label("Idle", systemImage: "checkmark.circle")
+                Label("Ready", systemImage: "checkmark.circle")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
-
             if let lastBeat = heartbeat.lastHeartbeat {
                 Text("Last sync \(lastBeat.formatted(.relative(presentation: .named)))")
                     .font(.caption2)
@@ -65,29 +53,43 @@ struct MenuBarView: View {
         }
     }
 
-    private var iPhoneSection: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "iphone")
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("iPhone")
-                    .font(.subheadline)
-                Text(iPhoneSubtitle)
-                    .font(.caption2)
+    private var scriptsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if scriptManager.scripts.isEmpty {
+                Text("No scripts configured")
+                    .font(.caption)
                     .foregroundStyle(.tertiary)
+            } else {
+                ForEach(scriptManager.scripts) { script in
+                    HStack(spacing: 8) {
+                        Image(systemName: script.icon ?? "terminal.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 14)
+                        Text(script.name)
+                            .font(.subheadline)
+                        Spacer()
+                        scriptStatusBadge(script.status)
+                    }
+                }
             }
-            Spacer()
         }
     }
 
-    private var iPhoneSubtitle: String {
-        if let last = responseWatcher.lastResponseAt {
-            return "Responded \(last.formatted(.relative(presentation: .named)))"
+    private func scriptStatusBadge(_ status: ManagedScript.ScriptStatus) -> some View {
+        let (label, color): (String, Color) = switch status {
+        case .running:  ("Running", .green)
+        case .starting: ("Starting", .blue)
+        case .crashed:  ("Crashed", .red)
+        case .stopped:  ("Stopped", .secondary)
         }
-        if let last = watcher.lastJobReceivedAt {
-            return "Last job \(last.formatted(.relative(presentation: .named)))"
-        }
-        return "Paired via iCloud"
+        return Text(label)
+            .font(.caption2)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.12))
+            .foregroundStyle(color)
+            .clipShape(Capsule())
     }
 
     private var actions: some View {
@@ -115,7 +117,7 @@ struct MenuBarView: View {
 
     private var statusColor: Color {
         if !settings.isConfigured { return .orange }
-        if watcher.isExecuting { return .blue }
-        return .green
+        if scriptManager.scripts.contains(where: { $0.status == .running }) { return .green }
+        return .secondary
     }
 }

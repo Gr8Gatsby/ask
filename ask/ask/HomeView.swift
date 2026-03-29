@@ -4,44 +4,16 @@ struct HomeView: View {
     @Environment(iOSCloudKitService.self) private var cloudKit
 
     @State private var machines: [AskMachine] = []
-    @State private var sessions: [AskSession] = []
-    @State private var agents: [AskAgent] = []
-    @State private var pendingEvents: [AskEvent] = []
     @State private var blocks: [RKBlock] = []
 
     @State private var hasLoaded = false
     @State private var activeMachineID: String?
     @State private var showSettings = false
-    @State private var selectedAgent: AskAgent?
-    @State private var showNewSession = false
     @State private var pollTask: Task<Void, Never>?
 
     private var activeMachine: AskMachine? {
         if let id = activeMachineID { return machines.first { $0.id == id } }
         return machines.sorted { $0.lastHeartbeat > $1.lastHeartbeat }.first
-    }
-
-    // Sessions waiting for input
-    private var waitingSessions: [AskSession] {
-        sessions.filter { $0.status.isWaiting }
-    }
-
-    // Sessions that are active / recently active
-    private var activeSessions: [AskSession] {
-        sessions.filter { !$0.status.isWaiting }
-    }
-
-    // The registered Claude Code action (if any)
-    private var claudeAction: AskAgent? {
-        agents.first {
-            $0.name.lowercased().contains("claude") ||
-            $0.scriptName.lowercased().contains("claude")
-        }
-    }
-
-    // Legacy events not tied to a session
-    private var legacyEvents: [AskEvent] {
-        pendingEvents.filter { $0.requiresResponse && ($0.sessionID == nil || $0.sessionID!.isEmpty) }
     }
 
     var body: some View {
@@ -63,19 +35,6 @@ struct HomeView: View {
         .sheet(isPresented: $showSettings) {
             SettingsSheetView()
                 .environment(cloudKit)
-        }
-        .sheet(item: $selectedAgent) { agent in
-            if let machine = activeMachine {
-                NewJobView(machine: machine, agent: agent)
-                    .environment(cloudKit)
-            }
-        }
-        .sheet(isPresented: $showNewSession) {
-            NewClaudeSessionView(
-                machine: activeMachine,
-                claudeAction: claudeAction
-            )
-            .environment(cloudKit)
         }
         .task {
             await cloudKit.checkAccountStatus()
@@ -99,7 +58,7 @@ struct HomeView: View {
                 }
             }
 
-            // RemoteKit blocks — script-driven UI, always at top
+            // Active blocks from scripts
             if !blocks.isEmpty {
                 Section {
                     ForEach(blocks) { block in
@@ -113,107 +72,13 @@ struct HomeView: View {
                             .resizable()
                             .scaledToFit()
                             .frame(width: 14, height: 14)
-                        Text("Needs Input")
-                            .foregroundStyle(.orange)
-                    }
-                }
-            }
-
-            // Waiting sessions — urgent, always at top
-            if !waitingSessions.isEmpty {
-                Section {
-                    ForEach(waitingSessions) { session in
-                        NavigationLink {
-                            SessionDetailView(session: session, machineID: activeMachine?.id ?? "")
-                                .environment(cloudKit)
-                        } label: {
-                            SessionRow(session: session)
+                        if blocks.contains(where: { $0.requiresResponse }) {
+                            Text("Needs Input")
+                                .foregroundStyle(.orange)
+                        } else {
+                            Text("Claude Code")
                         }
                     }
-                } header: {
-                    HStack(spacing: 6) {
-                        Image("claudecode")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 14, height: 14)
-                        Text("Needs Input")
-                            .foregroundStyle(.orange)
-                    }
-                }
-            }
-
-            // Legacy events (no sessionID)
-            if !legacyEvents.isEmpty {
-                Section {
-                    ForEach(legacyEvents) { event in
-                        EventCard(event: event) { choice in
-                            await respond(to: event, choice: choice)
-                        }
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                Task { await dismissEvent(event) }
-                            } label: {
-                                Label("Dismiss", systemImage: "xmark")
-                            }
-                        }
-                    }
-                } header: {
-                    HStack(spacing: 6) {
-                        Image("claudecode")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 14, height: 14)
-                        Text("Waiting for Input")
-                            .foregroundStyle(.orange)
-                    }
-                }
-            }
-
-            // Active / recent sessions (most recent 5 only)
-            if !activeSessions.isEmpty {
-                Section {
-                    ForEach(activeSessions.prefix(5)) { session in
-                        NavigationLink {
-                            SessionDetailView(session: session, machineID: activeMachine?.id ?? "")
-                                .environment(cloudKit)
-                        } label: {
-                            SessionRow(session: session)
-                        }
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                Task { await deleteSession(session) }
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                        }
-                    }
-                } header: {
-                    HStack(spacing: 6) {
-                        Image("claudecode")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 14, height: 14)
-                        Text("Claude Sessions")
-                    }
-                }
-            }
-
-            // Actions
-            if !agents.isEmpty {
-                Section {
-                    ForEach(agents) { agent in
-                        Button {
-                            selectedAgent = agent
-                        } label: {
-                            AgentRow(agent: agent)
-                        }
-                        .tint(.primary)
-                    }
-                } header: {
-                    Text("Actions")
-                } footer: {
-                    Text("Tap an action to send a job.")
-                        .font(.caption)
                 }
             }
         }
@@ -232,7 +97,9 @@ struct HomeView: View {
                     ForEach(machines) { machine in
                         Button {
                             activeMachineID = machine.id
-                            Task { await loadMachineContent(machineID: machine.id) }
+                            Task {
+                                blocks = (try? await cloudKit.fetchBlocks(machineID: machine.id)) ?? blocks
+                            }
                         } label: {
                             Label(machine.name, systemImage: machine.systemImage)
                         }
@@ -245,14 +112,6 @@ struct HomeView: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
-                }
-            }
-        }
-
-        if activeMachine?.connectionStatus == .online || activeMachine?.connectionStatus == .busy {
-            ToolbarItem(placement: .primaryAction) {
-                Button { showNewSession = true } label: {
-                    Image(systemName: "square.and.pencil")
                 }
             }
         }
@@ -286,20 +145,9 @@ struct HomeView: View {
             print("[HomeView] Failed to fetch machines: \(error)")
         }
         if let machine = activeMachine {
-            await loadMachineContent(machineID: machine.id)
+            blocks = (try? await cloudKit.fetchBlocks(machineID: machine.id)) ?? blocks
         }
         hasLoaded = true
-    }
-
-    private func loadMachineContent(machineID: String) async {
-        async let sessionsFetch = cloudKit.fetchSessions(machineID: machineID)
-        async let agentsFetch = cloudKit.fetchAgents(machineID: machineID)
-        async let eventsFetch = cloudKit.fetchPendingEvents(machineID: machineID)
-        async let blocksFetch = cloudKit.fetchBlocks(machineID: machineID)
-        sessions = (try? await sessionsFetch) ?? sessions
-        agents = (try? await agentsFetch) ?? agents
-        pendingEvents = (try? await eventsFetch) ?? pendingEvents
-        blocks = (try? await blocksFetch) ?? blocks
     }
 
     private func startPolling() {
@@ -308,35 +156,14 @@ struct HomeView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
                 guard !Task.isCancelled else { break }
-                // Always retry machine list so a transient failure on first load heals itself
                 if let fresh = try? await cloudKit.fetchMachines(), !fresh.isEmpty {
                     machines = fresh
                 }
                 if let machine = activeMachine {
-                    await loadMachineContent(machineID: machine.id)
+                    blocks = (try? await cloudKit.fetchBlocks(machineID: machine.id)) ?? blocks
                 }
             }
         }
-    }
-
-    private func deleteSession(_ session: AskSession) async {
-        try? await cloudKit.deleteSession(session)
-        withAnimation { sessions.removeAll { $0.id == session.id } }
-    }
-
-    private func respond(to event: AskEvent, choice: String) async {
-        do {
-            try await cloudKit.saveResponse(eventID: event.id, machineID: event.machineID, choice: choice)
-            try? await cloudKit.deleteEvent(event)
-            withAnimation { pendingEvents.removeAll { $0.id == event.id } }
-        } catch {
-            print("[HomeView] Failed to save response: \(error)")
-        }
-    }
-
-    private func dismissEvent(_ event: AskEvent) async {
-        try? await cloudKit.deleteEvent(event)
-        withAnimation { pendingEvents.removeAll { $0.id == event.id } }
     }
 
     private func respondToBlock(_ block: RKBlock, value: String) async {
