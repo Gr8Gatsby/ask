@@ -77,38 +77,7 @@ struct MenuBarView: View {
                     .foregroundStyle(.tertiary)
             } else {
                 ForEach(scriptManager.scripts) { script in
-                    HStack(spacing: 8) {
-                        if let img = script.iconImage {
-                            Image(nsImage: img)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 14, height: 14)
-                                .grayscale(script.isEnabled ? 0 : 1)
-                                .opacity(script.isEnabled ? 1 : 0.4)
-                        } else {
-                            Image(systemName: script.icon ?? "terminal.fill")
-                                .font(.caption)
-                                .foregroundStyle(script.isEnabled ? .secondary : .tertiary)
-                                .frame(width: 14)
-                        }
-                        Text(script.name)
-                            .font(.subheadline)
-                            .foregroundStyle(script.isEnabled ? .primary : .secondary)
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { script.isEnabled },
-                            set: { enabled in
-                                if enabled {
-                                    scriptManager.enableScript(id: script.id)
-                                } else {
-                                    scriptManager.disableScript(id: script.id)
-                                }
-                            }
-                        ))
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .labelsHidden()
-                    }
+                    ScriptRow(script: script, scriptManager: scriptManager)
                 }
             }
         }
@@ -141,5 +110,57 @@ struct MenuBarView: View {
         if !settings.isConfigured { return .orange }
         if scriptManager.scripts.contains(where: { $0.status == .running }) { return .green }
         return .secondary
+    }
+}
+
+// MARK: - Script row
+
+private struct ScriptRow: View {
+    let script: ManagedScript
+    let scriptManager: ScriptManager
+
+    @State private var confirmDisable = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let img = script.iconImage {
+                Image(nsImage: img)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 14, height: 14)
+                    .grayscale(script.isEnabled ? 0 : 1)
+                    .opacity(script.isEnabled ? 1 : 0.4)
+            } else {
+                Image(systemName: script.icon ?? "terminal.fill")
+                    .font(.caption)
+                    .foregroundStyle(script.isEnabled ? .secondary : .tertiary)
+                    .frame(width: 14)
+            }
+            Text(script.name)
+                .font(.subheadline)
+                .foregroundStyle(script.isEnabled ? .primary : .secondary)
+            Spacer()
+            Toggle("", isOn: Binding(
+                get: { script.isEnabled },
+                set: { enabled in
+                    if enabled {
+                        scriptManager.enableScript(id: script.id)
+                    } else {
+                        confirmDisable = true
+                    }
+                }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .labelsHidden()
+        }
+        .alert("Disable \"\(script.name)\"?", isPresented: $confirmDisable) {
+            Button("Disable", role: .destructive) {
+                scriptManager.disableScript(id: script.id)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The script will be stopped and its pending requests removed from your iPhone.")
+        }
     }
 }

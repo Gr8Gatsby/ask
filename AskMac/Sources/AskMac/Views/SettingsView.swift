@@ -101,6 +101,8 @@ private struct AgentRow: View {
     let agent: AgentConfig
     let onDelete: () -> Void
 
+    @State private var confirmDelete = false
+
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
@@ -111,13 +113,19 @@ private struct AgentRow: View {
                 capabilityBadges
             }
             Spacer()
-            Button(role: .destructive) { onDelete() } label: {
+            Button(role: .destructive) { confirmDelete = true } label: {
                 Image(systemName: "minus.circle.fill")
                     .foregroundStyle(.red.opacity(0.8))
             }
             .buttonStyle(.plain)
         }
         .padding(.vertical, 2)
+        .alert("Remove \"\(agent.name)\"?", isPresented: $confirmDelete) {
+            Button("Remove", role: .destructive) { onDelete() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will remove the action from Ask. The script file will not be deleted.")
+        }
     }
 
     private var capabilityBadges: some View {
