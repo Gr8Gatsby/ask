@@ -148,10 +148,10 @@ struct HomeView: View {
                 }
             }
 
-            // Active / recent sessions
+            // Active / recent sessions (most recent 5 only)
             if !activeSessions.isEmpty {
                 Section {
-                    ForEach(activeSessions) { session in
+                    ForEach(activeSessions.prefix(5)) { session in
                         NavigationLink {
                             SessionDetailView(session: session, machineID: activeMachine?.id ?? "")
                                 .environment(cloudKit)
@@ -160,7 +160,13 @@ struct HomeView: View {
                         }
                     }
                 } header: {
-                    Label("Claude Sessions", systemImage: "sparkles")
+                    HStack(spacing: 6) {
+                        Image("claudecode")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 14, height: 14)
+                        Text("Claude Sessions")
+                    }
                 }
             }
 

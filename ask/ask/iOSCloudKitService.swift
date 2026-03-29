@@ -227,7 +227,7 @@ final class iOSCloudKitService {
         let predicate = NSPredicate(format: "%K == %@", CKSchema.Session.machineID, machineID)
         let query = CKQuery(recordType: CKSchema.RecordType.session, predicate: predicate)
         query.sortDescriptors = [NSSortDescriptor(key: CKSchema.Session.lastActivityAt, ascending: false)]
-        let (results, _) = try await database.records(matching: query, resultsLimit: 50)
+        let (results, _) = try await database.records(matching: query, resultsLimit: 10)
 
         let hookCutoff = Date().addingTimeInterval(-360)
         // Only surface sessions active in the last 24 hours
