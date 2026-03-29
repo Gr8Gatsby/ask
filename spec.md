@@ -411,3 +411,4 @@ AskSession status updated to "active"; iOS view dismisses; session list refreshe
 | 2026-03-29 | UI: renamed "Agents" → "Actions" in all labels (no schema change) |
 | 2026-03-29 | Action History: local JSONL log, History window in Mac companion (Dashboard + Log tabs), stale event auto-cleanup (6-min TTL for hook-based events) |
 | 2026-03-29 | Flatten iOS navigation: HomeView surfaces sessions + actions + machine status directly; gear button opens SettingsSheetView with machine drill-down |
+| 2026-03-29 | New Claude Session: compose button on home screen dispatches a new Claude Code session directly from iPhone (requires a registered "claude" action) |
