@@ -239,8 +239,8 @@ final class iOSCloudKitService {
         for (recordID, result) in results {
             guard let record = try? result.get(),
                   let session = AskSession(record: record) else { continue }
-            if session.lastActivityAt < displayCutoff {
-                // Older than 24 h — delete from CloudKit to prevent accumulation
+            if session.lastActivityAt < displayCutoff || session.status == .completed {
+                // Older than 24 h or completed — delete from CloudKit to prevent accumulation
                 toDelete.append(recordID)
                 continue
             }

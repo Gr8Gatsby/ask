@@ -72,11 +72,25 @@ final class LocalEventService {
             }
 
             let eventID = json["id"] as? String ?? UUID().uuidString
+            let sessionID = json["sessionID"] as? String
+
+            // Session-complete marker — just update session status, no event to save
+            if let sid = sessionID, !sid.isEmpty, json["sessionComplete"] as? Bool == true {
+                print("[LocalEventService] Session complete: \(sid)")
+                try? await cloudKit.upsertSession(
+                    sessionID: sid,
+                    machineID: machineID,
+                    title: nil,
+                    status: "completed"
+                )
+                try? fm.removeItem(at: file)
+                continue
+            }
+
             let title = json["title"] as? String ?? "Claude Code"
             let message = json["message"] as? String ?? json["content"] as? String ?? ""
             let source = json["source"] as? String ?? "claude-code"
             let options = (json["options"] as? [Any])?.compactMap { $0 as? String } ?? []
-            let sessionID = json["sessionID"] as? String
 
             print("[LocalEventService] Processing: title=\(title) options=\(options) machineID=\(machineID)")
 

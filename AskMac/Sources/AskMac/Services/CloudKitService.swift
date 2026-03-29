@@ -77,7 +77,7 @@ final class CloudKitService {
     }
 
     /// Creates or updates a session record. Preserves startedAt if the record already exists.
-    func upsertSession(sessionID: String, machineID: String, title: String, status: String) async throws {
+    func upsertSession(sessionID: String, machineID: String, title: String?, status: String) async throws {
         let record: CKRecord
         if let cached = cachedRecords[sessionID] {
             record = cached
@@ -91,7 +91,7 @@ final class CloudKitService {
         }
         record[CKSchema.Session.sessionID] = sessionID
         record[CKSchema.Session.machineID] = machineID
-        record[CKSchema.Session.title] = title
+        if let title { record[CKSchema.Session.title] = title }
         record[CKSchema.Session.status] = status
         record[CKSchema.Session.lastActivityAt] = Date()
         let saved = try await save(record)
