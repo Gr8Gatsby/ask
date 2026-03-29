@@ -11,6 +11,7 @@ struct MachineDetailView: View {
     @State private var pendingEvents: [AskEvent] = []
     @State private var sessions: [AskSession] = []
     @State private var isLoading = false
+    @State private var hasLoaded = false
     @State private var selectedAgent: AskAgent?
     @State private var pollTask: Task<Void, Never>?
 
@@ -72,7 +73,15 @@ struct MachineDetailView: View {
                 }
             }
         } header: {
-            Label("Claude Sessions", systemImage: "sparkles")
+            HStack {
+                Label("Claude Sessions", systemImage: "sparkles")
+                Spacer()
+                if sessions.contains(where: { $0.status == .active }) {
+                    Label("Active", systemImage: "bolt.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.green)
+                }
+            }
         }
     }
 
@@ -127,7 +136,7 @@ struct MachineDetailView: View {
 
     private var agentsSection: some View {
         Section {
-            if isLoading && agents.isEmpty {
+            if !hasLoaded && isLoading && agents.isEmpty {
                 ProgressView()
                     .frame(maxWidth: .infinity)
             } else if agents.isEmpty {
@@ -187,7 +196,10 @@ struct MachineDetailView: View {
 
     private func load() async {
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            isLoading = false
+            hasLoaded = true
+        }
         async let machineFetch = cloudKit.fetchMachine(machineID: machine.id)
         async let agentsFetch = cloudKit.fetchAgents(machineID: machine.id)
         async let jobsFetch = cloudKit.fetchRecentJobs(machineID: machine.id)

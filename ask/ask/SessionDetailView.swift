@@ -9,19 +9,33 @@ struct SessionDetailView: View {
 
     @State private var pendingEvents: [AskEvent] = []
     @State private var isLoading = false
+    @State private var hasLoaded = false
     @State private var pollTask: Task<Void, Never>?
 
     var body: some View {
         Group {
-            if isLoading && pendingEvents.isEmpty {
+            if !hasLoaded && isLoading {
+                // Only show spinner on the very first load — not during background polls
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if pendingEvents.isEmpty {
-                ContentUnavailableView(
-                    "No pending requests",
-                    systemImage: "checkmark.circle",
-                    description: Text("Claude is running. You'll be notified when input is needed.")
-                )
+                VStack(spacing: 16) {
+                    Spacer()
+                    Image(systemName: session.status.isWaiting ? "clock.fill" : "bolt.fill")
+                        .font(.system(size: 40))
+                        .foregroundStyle(session.status.isWaiting ? Color.orange : Color.green)
+                    Text(session.status.isWaiting ? "Waiting…" : "Running")
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                    Text(session.status.isWaiting
+                         ? "A response may still be incoming."
+                         : "Claude is working. You'll be notified when input is needed.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                    Spacer()
+                }
             } else {
                 List {
                     Section {
@@ -53,7 +67,10 @@ struct SessionDetailView: View {
 
     private func load() async {
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            isLoading = false
+            hasLoaded = true
+        }
         pendingEvents = (try? await cloudKit.fetchEvents(sessionID: session.id, machineID: machineID)) ?? pendingEvents
     }
 
