@@ -28,8 +28,7 @@ struct HomeView: View {
                     content
                 }
             }
-            .navigationTitle("Ask")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbar }
         }
         .sheet(isPresented: $showSettings) {
@@ -51,13 +50,6 @@ struct HomeView: View {
 
     private var content: some View {
         List {
-            // Machine status — compact, always visible
-            if let machine = activeMachine {
-                Section {
-                    MachineStatusRow(machine: machine)
-                }
-            }
-
             // Active blocks from scripts
             if !blocks.isEmpty {
                 Section {
@@ -67,18 +59,11 @@ struct HomeView: View {
                         }
                     }
                 } header: {
-                    HStack(spacing: 6) {
-                        Image("claudecode")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 14, height: 14)
-                        if blocks.contains(where: { $0.requiresResponse }) {
-                            Text("Needs Input")
-                                .foregroundStyle(.orange)
-                        } else {
-                            Text("Claude Code")
-                        }
-                    }
+                    Image("claudecode")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 28, height: 28)
+                        .padding(.top, 4)
                 }
             }
         }
@@ -90,33 +75,14 @@ struct HomeView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        // Machine switcher — only shown when multiple machines exist
-        if machines.count > 1 {
-            ToolbarItem(placement: .principal) {
-                Menu {
-                    ForEach(machines) { machine in
-                        Button {
-                            activeMachineID = machine.id
-                            Task {
-                                blocks = (try? await cloudKit.fetchBlocks(machineID: machine.id)) ?? blocks
-                            }
-                        } label: {
-                            Label(machine.name, systemImage: machine.systemImage)
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(activeMachine?.name ?? "Ask")
-                            .font(.headline)
-                        Image(systemName: "chevron.down")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
+        ToolbarItem(placement: .principal) {
+            Text(activeMachine.map { "Ask \($0.name)" } ?? "Ask")
+                .font(.custom("PlaywriteNGModern-Regular", size: 22))
         }
-
-        ToolbarItem(placement: .cancellationAction) {
+        ToolbarItem(placement: .bottomBar) {
+            Spacer()
+        }
+        ToolbarItem(placement: .bottomBar) {
             Button { showSettings = true } label: {
                 Image(systemName: "gearshape")
             }
@@ -177,46 +143,6 @@ struct HomeView: View {
             withAnimation { blocks.removeAll { $0.id == block.id } }
         } catch {
             print("[HomeView] Failed to post block response: \(error)")
-        }
-    }
-}
-
-// MARK: - Machine status row
-
-struct MachineStatusRow: View {
-    let machine: AskMachine
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: machine.systemImage)
-                .font(.title3)
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(machine.name)
-                    .font(.subheadline)
-                Text(machine.lastHeartbeat.briefRelative)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-            Spacer()
-            HStack(spacing: 5) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 7, height: 7)
-                Text(machine.connectionStatus.label)
-                    .font(.caption)
-                    .foregroundStyle(statusColor)
-            }
-        }
-        .padding(.vertical, 2)
-    }
-
-    private var statusColor: Color {
-        switch machine.connectionStatus {
-        case .online:   .green
-        case .busy:     .blue
-        case .sleeping: .yellow
-        case .offline:  .secondary
         }
     }
 }

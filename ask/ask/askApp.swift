@@ -14,6 +14,7 @@ struct askApp: App {
     init() {
         let container = CKContainer(identifier: CKSchema.containerID)
         _push = State(initialValue: PushService(container: container))
+
     }
 
     var body: some Scene {

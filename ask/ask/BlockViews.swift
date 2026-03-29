@@ -28,6 +28,10 @@ struct BlockView: View {
             if let p = block.infoCardPayload {
                 InfoCardBlockView(payload: p)
             }
+        case .chatPrompt:
+            if let p = block.chatPromptPayload {
+                ChatPromptBlockView(payload: p, onRespond: onRespond)
+            }
         }
     }
 }
@@ -43,21 +47,15 @@ struct ConfirmationBlockView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top) {
-                Image("claudecode")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 22, height: 22)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(payload.title)
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                    if !payload.body.isEmpty {
-                        Text(payload.body)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fontDesign(.monospaced)
-                    }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(payload.title)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                if !payload.body.isEmpty {
+                    Text(payload.body)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fontDesign(.monospaced)
                 }
             }
             if payload.options.count <= 2 {
@@ -90,7 +88,6 @@ struct ConfirmationBlockView: View {
             }
         } label: {
             Text(option)
-                .font(.subheadline)
                 .fontWeight(.medium)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
@@ -125,7 +122,6 @@ struct ConfirmationBlockView: View {
                             }
                         }
                         Text(option)
-                            .font(.subheadline)
                             .foregroundStyle(.primary)
                             .multilineTextAlignment(.leading)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -263,6 +259,84 @@ struct PromptBlockView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+// MARK: - ChatPrompt
+
+struct ChatPromptBlockView: View {
+    let payload: RKChatPromptPayload
+    let onRespond: (String) async -> Void
+
+    @State private var text = ""
+    @State private var responding = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Claude's last message shown as context
+            if let context = payload.context, !context.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image("claudecode")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 16, height: 16)
+                        Text("Claude Code")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(context)
+                        .font(.subheadline)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(.systemGray6))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+            }
+
+            // Input area
+            VStack(alignment: .leading, spacing: 6) {
+                Text(payload.title)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+
+                HStack(alignment: .bottom, spacing: 8) {
+                    TextField(payload.placeholder ?? "Reply to Claude…", text: $text, axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .lineLimit(1...6)
+                        .disabled(responding)
+
+                    Button {
+                        let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !answer.isEmpty else { return }
+                        Task {
+                            responding = true
+                            await onRespond(answer)
+                            responding = false
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(
+                                text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    ? Color.secondary : Color.accentColor
+                            )
+                    }
+                    .disabled(responding || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .overlay {
+            if responding {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+        }
     }
 }
 

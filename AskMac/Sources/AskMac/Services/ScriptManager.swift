@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -10,6 +11,12 @@ struct ScriptManifest: Codable {
     let description: String?
     let entry: String       // relative path to the executable entry point
     let icon: String?
+    let iconFile: String?   // relative path to an image file (SVG/PNG)
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, version, description, entry, icon
+        case iconFile = "icon_file"
+    }
 }
 
 // MARK: - UI model
@@ -17,7 +24,8 @@ struct ScriptManifest: Codable {
 struct ManagedScript: Identifiable {
     let id: String          // manifest.id
     let name: String
-    let icon: String?
+    let icon: String?       // SF Symbol fallback
+    let iconImage: NSImage? // loaded from icon_file
     var status: ScriptStatus
 
     enum ScriptStatus {
@@ -99,9 +107,16 @@ final class ScriptManager {
 
         guard canRun else {
             print("[ScriptManager] \(manifest.id): entry not runnable at \(entryURL.path)")
-            upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, status: .stopped)
+            upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: nil, status: .stopped)
             return
         }
+
+        // Load icon image from icon_file, or try icon.svg by convention
+        let iconImage: NSImage? = {
+            let candidate = manifest.iconFile ?? "icon.svg"
+            let url = scriptDir.appendingPathComponent(candidate)
+            return NSImage(contentsOf: url)
+        }()
 
         let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id)
         let conn = MCPConnection(scriptID: manifest.id, entryURL: entryURL, blockService: blockService)
@@ -113,14 +128,14 @@ final class ScriptManager {
         }
 
         connections[manifest.id] = conn
-        upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, status: .starting)
+        upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .starting)
 
         conn.start()
-        upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, status: .running)
+        upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .running)
     }
 
     private func handleCrash(manifest: ScriptManifest, scriptDir: URL) {
-        upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, status: .crashed)
+        upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: nil, status: .crashed)
         connections.removeValue(forKey: manifest.id)
 
         let delay = restartDelays[manifest.id] ?? 1.0
@@ -134,11 +149,11 @@ final class ScriptManager {
         }
     }
 
-    private func upsertStatus(_ id: String, name: String, icon: String?, status: ManagedScript.ScriptStatus) {
+    private func upsertStatus(_ id: String, name: String, icon: String?, iconImage: NSImage?, status: ManagedScript.ScriptStatus) {
         if let idx = scripts.firstIndex(where: { $0.id == id }) {
             scripts[idx].status = status
         } else {
-            scripts.append(ManagedScript(id: id, name: name, icon: icon, status: status))
+            scripts.append(ManagedScript(id: id, name: name, icon: icon, iconImage: iconImage, status: status))
         }
     }
 }

@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		0A99F2212F795B0D003B10BE /* PlaywriteNGModern-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 0A99F2202F795B0D003B10BE /* PlaywriteNGModern-Regular.ttf */; };
+		0A99F2222F795B0D003B10BE /* PlaywriteNGModern-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 0A99F2202F795B0D003B10BE /* PlaywriteNGModern-Regular.ttf */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		0A99F19A2F784290003B10BE /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -27,6 +32,7 @@
 		0A99F1882F78428F003B10BE /* ask.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ask.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		0A99F1992F784290003B10BE /* askTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = askTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0A99F1A32F784290003B10BE /* askUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = askUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		0A99F2202F795B0D003B10BE /* PlaywriteNGModern-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "PlaywriteNGModern-Regular.ttf"; sourceTree = "<group>"; };
 		AA000001000000000000AA01 /* AskMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AskMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -106,6 +112,7 @@
 				0A99F1A62F784290003B10BE /* askUITests */,
 				AA000002000000000000AA01 /* ../AskMac/Sources/AskMac */,
 				0A99F1892F78428F003B10BE /* Products */,
+				0A99F2202F795B0D003B10BE /* PlaywriteNGModern-Regular.ttf */,
 			);
 			sourceTree = "<group>";
 		};
@@ -266,6 +273,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0A99F2222F795B0D003B10BE /* PlaywriteNGModern-Regular.ttf in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -287,6 +295,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0A99F2212F795B0D003B10BE /* PlaywriteNGModern-Regular.ttf in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

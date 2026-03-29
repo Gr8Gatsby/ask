@@ -139,8 +139,7 @@ final class MCPConnection: @unchecked Sendable {
                 let blockID = args["blockId"] as? String,
                 let blockType = args["blockType"] as? String,
                 let payloadObj = args["payload"],
-                let payloadData = try? JSONSerialization.data(withJSONObject: payloadObj),
-                let payloadJSON = String(data: payloadData, encoding: .utf8)
+                let payloadJSON = payloadString(from: payloadObj)
             else {
                 replyError(id: id, code: -32602, message: "Invalid arguments for emit_block")
                 return
@@ -199,6 +198,44 @@ final class MCPConnection: @unchecked Sendable {
         pipe.fileHandleForWriting.write(bytes)
     }
 
+    // MARK: - Payload serialisation
+
+    /// Serialises `object` to a JSON string, decoding any UTF-16 surrogate pairs that
+    /// `JSONSerialization` emits for emoji (e.g. `\uD83C\uDF55` → 🍕) so that the raw
+    /// UTF-8 characters are stored in CloudKit instead of escape sequences.
+    private func payloadString(from object: Any) -> String? {
+        guard let data = try? JSONSerialization.data(withJSONObject: object),
+              let json = String(data: data, encoding: .utf8)
+        else { return nil }
+        return decodeSurrogatePairs(in: json)
+    }
+
+    private func decodeSurrogatePairs(in json: String) -> String {
+        // High surrogate: U+D800–U+DBFF  →  \uD[89AB]xx
+        // Low  surrogate: U+DC00–U+DFFF  →  \uD[CDEF]xx
+        let pattern = #"\\u([Dd][89AaBb][0-9A-Fa-f]{2})\\u([Dd][CcDdEeFf][0-9A-Fa-f]{2})"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return json }
+
+        var result = json
+        let matches = regex.matches(in: result, range: NSRange(result.startIndex..., in: result))
+
+        // Iterate in reverse so replacement doesn't shift earlier match ranges.
+        for match in matches.reversed() {
+            guard let highRange = Range(match.range(at: 1), in: result),
+                  let lowRange  = Range(match.range(at: 2), in: result),
+                  let highCode  = UInt32(result[highRange], radix: 16),
+                  let lowCode   = UInt32(result[lowRange],  radix: 16),
+                  let fullRange = Range(match.range, in: result)
+            else { continue }
+
+            let codePoint = 0x10000 + (highCode - 0xD800) * 0x400 + (lowCode - 0xDC00)
+            guard let scalar = Unicode.Scalar(codePoint) else { continue }
+            result.replaceSubrange(fullRange, with: String(scalar))
+        }
+
+        return result
+    }
+
     // MARK: - Static data
 
     private var toolsList: [[String: Any]] {
@@ -210,7 +247,7 @@ final class MCPConnection: @unchecked Sendable {
                     "type": "object",
                     "properties": [
                         "blockId": ["type": "string", "description": "Unique block identifier (use UUID)"],
-                        "blockType": ["type": "string", "enum": ["confirmation", "alert", "status", "prompt", "info_card"]],
+                        "blockType": ["type": "string", "enum": ["confirmation", "alert", "status", "prompt", "info_card", "chat_prompt"]],
                         "payload": ["type": "object", "description": "Block-type-specific payload — see get_schema"],
                         "ttl": ["type": "number", "description": "Seconds until the block auto-expires (optional)"]
                     ],
@@ -245,6 +282,7 @@ final class MCPConnection: @unchecked Sendable {
         status        {"label":string, "detail":string?, "icon":string?, "color":"green"|"blue"|"orange"|"red"|"yellow"}
         prompt        {"title":string, "placeholder":string?, "multiline":bool?}
         info_card     {"title":string, "pairs":[{"key":string,"value":string}]}
+        chat_prompt   {"title":string, "context":string?, "placeholder":string?}
 
         User responses are delivered as notifications/message with:
           data.type == "user_response", data.blockId, data.value

@@ -80,7 +80,8 @@ struct MenuBarLabel: View {
     let hasActiveScripts: Bool
 
     var body: some View {
-        Image(systemName: hasActiveScripts ? "bolt.fill" : "bolt")
+        Image(systemName: "icloud.fill")
             .symbolEffect(.pulse, isActive: hasActiveScripts)
+            .foregroundStyle(Color.accentColor)
     }
 }

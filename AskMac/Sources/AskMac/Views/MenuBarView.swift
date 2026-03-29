@@ -24,7 +24,7 @@ struct MenuBarView: View {
 
     private var header: some View {
         HStack {
-            Image(systemName: "bolt")
+            Image(systemName: machineIcon)
             Text(settings.machineName.isEmpty ? "Ask" : settings.machineName)
                 .font(.headline)
             Spacer()
@@ -32,6 +32,22 @@ struct MenuBarView: View {
                 .fill(statusColor)
                 .frame(width: 8, height: 8)
         }
+    }
+
+    private var machineIcon: String {
+        let name = settings.machineName.lowercased()
+        if name.contains("macbook pro") || name.contains("macbook air") || name.contains("macbook") {
+            return "laptopcomputer"
+        } else if name.contains("mac pro") {
+            return "macpro.gen3"
+        } else if name.contains("mac mini") {
+            return "macmini"
+        } else if name.contains("mac studio") {
+            return "macstudio"
+        } else if name.contains("imac") {
+            return "desktopcomputer"
+        }
+        return "desktopcomputer"
     }
 
     private var statusSection: some View {
@@ -62,10 +78,17 @@ struct MenuBarView: View {
             } else {
                 ForEach(scriptManager.scripts) { script in
                     HStack(spacing: 8) {
-                        Image(systemName: script.icon ?? "terminal.fill")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .frame(width: 14)
+                        if let img = script.iconImage {
+                            Image(nsImage: img)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 14, height: 14)
+                        } else {
+                            Image(systemName: script.icon ?? "terminal.fill")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 14)
+                        }
                         Text(script.name)
                             .font(.subheadline)
                         Spacer()
