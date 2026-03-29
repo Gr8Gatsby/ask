@@ -377,8 +377,10 @@ struct EventCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top) {
-                Image(systemName: "questionmark.circle.fill")
-                    .foregroundStyle(.orange)
+                Image("claudecode")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 22, height: 22)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(event.title)
                         .font(.subheadline)
@@ -395,25 +397,18 @@ struct EventCard: View {
                     .foregroundStyle(.tertiary)
             }
             if !event.options.isEmpty {
-                HStack(spacing: 8) {
-                    ForEach(event.options, id: \.self) { option in
-                        Button {
-                            Task {
-                                responding = true
-                                await onRespond(option)
-                                responding = false
-                            }
-                        } label: {
-                            Text(option)
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 8)
-                                .background(Color.accentColor.opacity(0.12))
-                                .foregroundStyle(Color.accentColor)
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                // 2 options: side by side. 3+: vertical stack so labels aren't truncated.
+                if event.options.count <= 2 {
+                    HStack(spacing: 8) {
+                        ForEach(event.options, id: \.self) { option in
+                            optionButton(option)
                         }
-                        .disabled(responding)
+                    }
+                } else {
+                    VStack(spacing: 8) {
+                        ForEach(event.options, id: \.self) { option in
+                            optionButton(option)
+                        }
                     }
                 }
             } else {
@@ -448,5 +443,25 @@ struct EventCard: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10))
             }
         }
+    }
+
+    private func optionButton(_ option: String) -> some View {
+        Button {
+            Task {
+                responding = true
+                await onRespond(option)
+                responding = false
+            }
+        } label: {
+            Text(option)
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(Color.accentColor.opacity(0.12))
+                .foregroundStyle(Color.accentColor)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .disabled(responding)
     }
 }

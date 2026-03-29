@@ -45,8 +45,14 @@ struct SessionDetailView: View {
                             }
                         }
                     } header: {
-                        Label("Waiting for your response", systemImage: "person.fill.questionmark")
-                            .foregroundStyle(.orange)
+                        HStack(spacing: 6) {
+                            Image("claudecode")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 14, height: 14)
+                            Text("Waiting for your response")
+                                .foregroundStyle(.orange)
+                        }
                     }
                 }
                 .listStyle(.insetGrouped)

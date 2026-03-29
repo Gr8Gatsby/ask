@@ -94,8 +94,14 @@ struct HomeView: View {
                         }
                     }
                 } header: {
-                    Label("Needs Input", systemImage: "person.fill.questionmark")
-                        .foregroundStyle(.orange)
+                    HStack(spacing: 6) {
+                        Image("claudecode")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 14, height: 14)
+                        Text("Needs Input")
+                            .foregroundStyle(.orange)
+                    }
                 }
             }
 
@@ -108,8 +114,14 @@ struct HomeView: View {
                         }
                     }
                 } header: {
-                    Label("Waiting for Input", systemImage: "person.fill.questionmark")
-                        .foregroundStyle(.orange)
+                    HStack(spacing: 6) {
+                        Image("claudecode")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 14, height: 14)
+                        Text("Waiting for Input")
+                            .foregroundStyle(.orange)
+                    }
                 }
             }
 
