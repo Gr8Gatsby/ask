@@ -230,29 +230,50 @@ final class iOSCloudKitService {
         let (results, _) = try await database.records(matching: query, resultsLimit: 50)
 
         let hookCutoff = Date().addingTimeInterval(-360)
+        // Only surface sessions active in the last 24 hours
+        let displayCutoff = Date().addingTimeInterval(-86400)
         var sessions: [AskSession] = []
 
-        for (_, result) in results {
+        var toDelete: [CKRecord.ID] = []
+
+        for (recordID, result) in results {
             guard let record = try? result.get(),
                   let session = AskSession(record: record) else { continue }
+            if session.lastActivityAt < displayCutoff {
+                // Older than 24 h — delete from CloudKit to prevent accumulation
+                toDelete.append(recordID)
+                continue
+            }
             if session.status.isWaiting && session.lastActivityAt < hookCutoff {
-                await updateSessionStatus(sessionID: session.id, status: "active")
-                // Return a corrected copy so the UI doesn't flash "waiting"
+                // Stale waiting session — correct status without touching lastActivityAt
+                await fixSessionStatus(sessionID: session.id, status: "active")
                 sessions.append(AskSession(correcting: session, status: .active))
             } else {
                 sessions.append(session)
             }
         }
 
+        if !toDelete.isEmpty {
+            _ = try? await database.modifyRecords(saving: [], deleting: toDelete)
+        }
+
         return sessions
     }
 
-    /// Updates the status of a session (e.g., "active" after user responds).
+    /// Updates session status AND bumps lastActivityAt (use after user interaction).
     func updateSessionStatus(sessionID: String, status: String) async {
         let recordID = CKRecord.ID(recordName: sessionID)
         guard let record = try? await database.record(for: recordID) else { return }
         record[CKSchema.Session.status] = status
         record[CKSchema.Session.lastActivityAt] = Date()
+        _ = try? await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys)
+    }
+
+    /// Corrects a session's status without changing lastActivityAt (used for stale-session cleanup).
+    private func fixSessionStatus(sessionID: String, status: String) async {
+        let recordID = CKRecord.ID(recordName: sessionID)
+        guard let record = try? await database.record(for: recordID) else { return }
+        record[CKSchema.Session.status] = status
         _ = try? await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys)
     }
 
