@@ -372,6 +372,7 @@ struct EventCard: View {
     let onRespond: (String) async -> Void
 
     @State private var responding = false
+    @State private var selectedOption: String?
     @State private var textInput = ""
 
     var body: some View {
@@ -397,19 +398,16 @@ struct EventCard: View {
                     .foregroundStyle(.tertiary)
             }
             if !event.options.isEmpty {
-                // 2 options: side by side. 3+: vertical stack so labels aren't truncated.
                 if event.options.count <= 2 {
+                    // Allow/Deny style: compact side-by-side buttons
                     HStack(spacing: 8) {
                         ForEach(event.options, id: \.self) { option in
                             optionButton(option)
                         }
                     }
                 } else {
-                    VStack(spacing: 8) {
-                        ForEach(event.options, id: \.self) { option in
-                            optionButton(option)
-                        }
-                    }
+                    // 3+ options: single-select list with full text visible
+                    optionList
                 }
             } else {
                 HStack(spacing: 8) {
@@ -445,6 +443,7 @@ struct EventCard: View {
         }
     }
 
+    // Compact button for 2-option (Allow/Deny) layout
     private func optionButton(_ option: String) -> some View {
         Button {
             Task {
@@ -463,5 +462,55 @@ struct EventCard: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .disabled(responding)
+    }
+
+    // Single-select list for 3+ options
+    private var optionList: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(event.options.enumerated()), id: \.element) { idx, option in
+                Button {
+                    selectedOption = option
+                    Task {
+                        responding = true
+                        await onRespond(option)
+                        responding = false
+                    }
+                } label: {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            Circle()
+                                .stroke(selectedOption == option ? Color.accentColor : Color.secondary.opacity(0.4), lineWidth: 1.5)
+                                .frame(width: 20, height: 20)
+                            if selectedOption == option {
+                                Circle()
+                                    .fill(Color.accentColor)
+                                    .frame(width: 11, height: 11)
+                            }
+                        }
+                        Text(option)
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 11)
+                    .background(selectedOption == option
+                        ? Color.accentColor.opacity(0.08)
+                        : Color(.secondarySystemGroupedBackground))
+                }
+                .buttonStyle(.plain)
+                .disabled(responding)
+
+                if idx < event.options.count - 1 {
+                    Divider().padding(.leading, 44)
+                }
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.secondary.opacity(0.2), lineWidth: 0.5)
+        )
     }
 }
