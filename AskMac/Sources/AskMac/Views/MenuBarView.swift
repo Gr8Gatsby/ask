@@ -96,6 +96,11 @@ struct MenuBarView: View {
                 .buttonStyle(.plain)
                 .font(.subheadline)
             Spacer()
+            Button("History") { openWindow(id: "history") }
+                .buttonStyle(.plain)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer()
             Button("Settings") { openWindow(id: "settings") }
                 .buttonStyle(.plain)
                 .font(.subheadline)

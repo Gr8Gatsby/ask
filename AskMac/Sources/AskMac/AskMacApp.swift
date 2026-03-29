@@ -11,12 +11,14 @@ struct AskMacApp: App {
     @State private var localEvents: LocalEventService
     @State private var responseWatcher: ResponseWatcherService
     @State private var messageWatcher: MessageWatcherService
+    @State private var actionHistory: ActionHistoryService
 
     init() {
         let s = settings
         let ck = cloudKit
         let hb = HeartbeatService(cloudKit: ck, settings: s)
-        let ex = JobExecutor(cloudKit: ck, settings: s)
+        let ah = ActionHistoryService()
+        let ex = JobExecutor(cloudKit: ck, settings: s, history: ah)
         let jw = JobWatcher(cloudKit: ck, executor: ex, heartbeat: hb, settings: s)
         let le = LocalEventService(cloudKit: ck, machineID: s.machineID)
         let rw = ResponseWatcherService(cloudKit: ck, machineID: s.machineID)
@@ -28,6 +30,7 @@ struct AskMacApp: App {
         _localEvents = State(initialValue: le)
         _responseWatcher = State(initialValue: rw)
         _messageWatcher = State(initialValue: mw)
+        _actionHistory = State(initialValue: ah)
 
         // Start services immediately on launch.
         Task {
@@ -48,6 +51,7 @@ struct AskMacApp: App {
                 .environment(heartbeat)
                 .environment(responseWatcher)
                 .environment(messageWatcher)
+                .environment(actionHistory)
         } label: {
             MenuBarLabel(isBusy: watcher.isExecuting)
         }
@@ -67,6 +71,13 @@ struct AskMacApp: App {
                 .environment(settings)
         }
         .windowResizability(.contentSize)
+        .defaultPosition(.center)
+
+        Window("Action History", id: "history") {
+            HistoryView()
+                .environment(actionHistory)
+        }
+        .defaultSize(width: 720, height: 520)
         .defaultPosition(.center)
     }
 }

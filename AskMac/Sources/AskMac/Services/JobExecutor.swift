@@ -6,10 +6,12 @@ import Security
 final class JobExecutor {
     private let cloudKit: CloudKitService
     private let settings: AppSettings
+    private let history: ActionHistoryService
 
-    init(cloudKit: CloudKitService, settings: AppSettings) {
+    init(cloudKit: CloudKitService, settings: AppSettings, history: ActionHistoryService) {
         self.cloudKit = cloudKit
         self.settings = settings
+        self.history = history
     }
 
     /// Runs the agent script for the given job.
@@ -17,6 +19,20 @@ final class JobExecutor {
     func execute(job: JobRecord, agent: AgentConfig) async {
         // TODO: Verify job.signature against paired iOS public key before executing.
         // This is the cryptographic gate that ensures only the paired iPhone can trigger execution.
+
+        let startTime = Date()
+        var historyStatus = "failed"
+        var historyExitCode: Int? = nil
+        defer {
+            history.record(
+                jobID: job.jobID,
+                actionName: agent.name,
+                prompt: job.prompt,
+                status: historyStatus,
+                durationSeconds: Date().timeIntervalSince(startTime),
+                exitCode: historyExitCode
+            )
+        }
 
         guard let scriptURL = settings.scriptURL(for: agent) else {
             await failJob(job, message: "Script '\(agent.scriptName)' not found in vault.")
@@ -90,6 +106,8 @@ final class JobExecutor {
 
         process.waitUntilExit()
         let exitCode = Int(process.terminationStatus)
+        historyExitCode = exitCode
+        historyStatus = exitCode == 0 ? "completed" : "failed"
 
         do {
             let finalStatus: JobStatus = exitCode == 0 ? .completed : .failed
@@ -205,7 +223,7 @@ final class JobExecutor {
         return scriptPath.hasPrefix(vaultPath + "/") || scriptPath == vaultPath
     }
 
-    private func failJob(_ job: JobRecord, message: String) async {
+    private func failJob(_ job: JobRecord, message: String, status: String = "failed") async {
         let chunk = OutputChunkRecord(
             jobID: job.jobID,
             sequence: 0,

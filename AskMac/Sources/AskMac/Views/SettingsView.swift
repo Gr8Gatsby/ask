@@ -46,9 +46,9 @@ struct SettingsView: View {
                     .onDelete { indexSet in
                         indexSet.forEach { settings.removeAgent(id: settings.agents[$0].id) }
                     }
-                    Button("Add Agent…") { showAddAgent = true }
+                    Button("Add Action…") { showAddAgent = true }
                 } header: {
-                    Text("Agents")
+                    Text("Actions")
                 } footer: {
                     Text("Scripts must be located within the vault directory.")
                         .font(.caption)
@@ -147,7 +147,7 @@ struct AddAgentView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Script") {
+                Section("Action Script") {
                     if availableScripts.isEmpty {
                         Text("No scripts found in vault directory.")
                             .foregroundStyle(.secondary)
@@ -177,7 +177,7 @@ struct AddAgentView: View {
                 }
             }
             .formStyle(.grouped)
-            .navigationTitle("Add Agent")
+            .navigationTitle("Add Action")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

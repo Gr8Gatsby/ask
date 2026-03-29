@@ -408,3 +408,5 @@ AskSession status updated to "active"; iOS view dismisses; session list refreshe
 | 2026-03-28 | Added security model: cryptographic pairing, Scripts Vault, capability declarations, threat model |
 | 2026-03-28 | Mac companion service layer v1: CloudKit schema, HeartbeatService, JobWatcher, JobExecutor, minimal menu bar UI |
 | 2026-03-29 | Claude Code supervision: PermissionRequest hook, AskSession record type, Sessions UI in iOS (MachineDetailView + SessionDetailView), dynamic options from permission_suggestions, real-time refresh pipeline |
+| 2026-03-29 | UI: renamed "Agents" → "Actions" in all labels (no schema change) |
+| 2026-03-29 | Action History: local JSONL log, History window in Mac companion (Dashboard + Log tabs), stale event auto-cleanup (6-min TTL for hook-based events) |

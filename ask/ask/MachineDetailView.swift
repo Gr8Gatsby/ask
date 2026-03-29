@@ -131,7 +131,7 @@ struct MachineDetailView: View {
                 ProgressView()
                     .frame(maxWidth: .infinity)
             } else if agents.isEmpty {
-                Text("No agents configured")
+                Text("No actions configured")
                     .foregroundStyle(.secondary)
                     .font(.subheadline)
             } else {
@@ -145,10 +145,10 @@ struct MachineDetailView: View {
                 }
             }
         } header: {
-            Text("Agents")
+            Text("Actions")
         } footer: {
             if !agents.isEmpty {
-                Text("Tap an agent to send a job.")
+                Text("Tap an action to send a job.")
                     .font(.caption)
             }
         }

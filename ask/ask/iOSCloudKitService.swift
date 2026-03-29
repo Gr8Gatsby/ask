@@ -118,7 +118,8 @@ final class iOSCloudKitService {
 
         var events: [AskEvent] = []
         var toDelete: [CKRecord.ID] = []
-        let cutoff = Date().addingTimeInterval(-3600)
+        let notificationCutoff = Date().addingTimeInterval(-3600)  // 1 hr for notification-only
+        let hookCutoff = Date().addingTimeInterval(-360)            // 6 min for permission requests (hook timeout is 5 min)
 
         for (recordID, result) in results {
             guard let record = try? result.get() else { continue }
@@ -126,7 +127,10 @@ final class iOSCloudKitService {
                 toDelete.append(recordID)
                 continue
             }
-            if !event.requiresResponse && event.timestamp < cutoff {
+            if !event.requiresResponse && event.timestamp < notificationCutoff {
+                toDelete.append(recordID)
+            } else if event.requiresResponse && event.timestamp < hookCutoff {
+                // Hook already timed out — response is impossible; clean up
                 toDelete.append(recordID)
             } else {
                 events.append(event)
@@ -218,15 +222,29 @@ final class iOSCloudKitService {
     // MARK: - Sessions
 
     /// Fetches all sessions for a machine, most recently active first.
+    /// Waiting sessions whose hook already timed out are auto-resolved to "active".
     func fetchSessions(machineID: String) async throws -> [AskSession] {
         let predicate = NSPredicate(format: "%K == %@", CKSchema.Session.machineID, machineID)
         let query = CKQuery(recordType: CKSchema.RecordType.session, predicate: predicate)
         query.sortDescriptors = [NSSortDescriptor(key: CKSchema.Session.lastActivityAt, ascending: false)]
         let (results, _) = try await database.records(matching: query, resultsLimit: 50)
-        return results.compactMap { _, result in
-            guard let record = try? result.get() else { return nil }
-            return AskSession(record: record)
+
+        let hookCutoff = Date().addingTimeInterval(-360)
+        var sessions: [AskSession] = []
+
+        for (_, result) in results {
+            guard let record = try? result.get(),
+                  let session = AskSession(record: record) else { continue }
+            if session.status.isWaiting && session.lastActivityAt < hookCutoff {
+                await updateSessionStatus(sessionID: session.id, status: "active")
+                // Return a corrected copy so the UI doesn't flash "waiting"
+                sessions.append(AskSession(correcting: session, status: .active))
+            } else {
+                sessions.append(session)
+            }
         }
+
+        return sessions
     }
 
     /// Updates the status of a session (e.g., "active" after user responds).
@@ -238,17 +256,35 @@ final class iOSCloudKitService {
         _ = try? await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys)
     }
 
-    /// Fetches pending events for a specific session.
+    /// Fetches pending events for a specific session, cleaning up stale ones.
     func fetchEvents(sessionID: String, machineID: String) async throws -> [AskEvent] {
         let predicate = NSPredicate(format: "%K == %@ AND %K == %@",
                                     CKSchema.Event.sessionID, sessionID,
                                     CKSchema.Event.machineID, machineID)
         let query = CKQuery(recordType: CKSchema.RecordType.event, predicate: predicate)
         let (results, _) = try await database.records(matching: query, resultsLimit: 20)
-        return results.compactMap { _, result in
-            guard let record = try? result.get() else { return nil }
-            return AskEvent(record: record)
+
+        let hookCutoff = Date().addingTimeInterval(-360)
+        var events: [AskEvent] = []
+        var toDelete: [CKRecord.ID] = []
+
+        for (recordID, result) in results {
+            guard let record = try? result.get(),
+                  let event = AskEvent(record: record) else {
+                toDelete.append(recordID); continue
+            }
+            if event.requiresResponse && event.timestamp < hookCutoff {
+                toDelete.append(recordID)
+            } else {
+                events.append(event)
+            }
         }
+
+        if !toDelete.isEmpty {
+            _ = try? await database.modifyRecords(saving: [], deleting: toDelete, savePolicy: .allKeys, atomically: false)
+        }
+
+        return events
     }
 
     // MARK: - Output

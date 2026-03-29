@@ -369,6 +369,16 @@ struct AskSession: Identifiable {
         let statusRaw = record[CKSchema.Session.status] as? String ?? "active"
         self.status = SessionStatus(rawValue: statusRaw) ?? .active
     }
+
+    /// Returns a copy with a corrected status (used to reflect server-side auto-resolution locally).
+    init(correcting other: AskSession, status: SessionStatus) {
+        self.id = other.id
+        self.machineID = other.machineID
+        self.title = other.title
+        self.status = status
+        self.startedAt = other.startedAt
+        self.lastActivityAt = other.lastActivityAt
+    }
 }
 
 // MARK: - Message
