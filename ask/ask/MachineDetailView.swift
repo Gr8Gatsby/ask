@@ -71,6 +71,13 @@ struct MachineDetailView: View {
                 } label: {
                     SessionRow(session: session)
                 }
+                .swipeActions(edge: .trailing) {
+                    Button(role: .destructive) {
+                        Task { await deleteSession(session) }
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
             }
         } header: {
             HStack {
@@ -221,6 +228,11 @@ struct MachineDetailView: View {
                 await load()
             }
         }
+    }
+
+    private func deleteSession(_ session: AskSession) async {
+        try? await cloudKit.deleteSession(session)
+        withAnimation { sessions.removeAll { $0.id == session.id } }
     }
 
     private func respond(to event: AskEvent, choice: String) async {

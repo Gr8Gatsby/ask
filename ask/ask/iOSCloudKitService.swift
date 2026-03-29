@@ -269,6 +269,12 @@ final class iOSCloudKitService {
         _ = try? await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys)
     }
 
+    /// Deletes a session record from CloudKit.
+    func deleteSession(_ session: AskSession) async throws {
+        let recordID = CKRecord.ID(recordName: session.id)
+        _ = try await database.modifyRecords(saving: [], deleting: [recordID])
+    }
+
     /// Corrects a session's status without changing lastActivityAt (used for stale-session cleanup).
     private func fixSessionStatus(sessionID: String, status: String) async {
         let recordID = CKRecord.ID(recordName: sessionID)

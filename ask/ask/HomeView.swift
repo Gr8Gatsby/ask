@@ -158,6 +158,13 @@ struct HomeView: View {
                         } label: {
                             SessionRow(session: session)
                         }
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                Task { await deleteSession(session) }
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
                     }
                 } header: {
                     HStack(spacing: 6) {
@@ -278,11 +285,20 @@ struct HomeView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
                 guard !Task.isCancelled else { break }
+                // Always retry machine list so a transient failure on first load heals itself
+                if let fresh = try? await cloudKit.fetchMachines(), !fresh.isEmpty {
+                    machines = fresh
+                }
                 if let machine = activeMachine {
                     await loadMachineContent(machineID: machine.id)
                 }
             }
         }
+    }
+
+    private func deleteSession(_ session: AskSession) async {
+        try? await cloudKit.deleteSession(session)
+        withAnimation { sessions.removeAll { $0.id == session.id } }
     }
 
     private func respond(to event: AskEvent, choice: String) async {
