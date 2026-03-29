@@ -1,110 +1,6 @@
 import SwiftUI
 
-struct MachinesView: View {
-    @Environment(iOSCloudKitService.self) private var cloudKit
-
-    @State private var machines: [AskMachine] = []
-    @State private var isLoading = false
-    @State private var lastRefresh: Date?
-    @State private var error: Error?
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                if isLoading && machines.isEmpty {
-                    ProgressView("Connecting…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if machines.isEmpty {
-                    emptyState
-                } else {
-                    list
-                }
-            }
-            .navigationTitle("Ask")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    if isLoading {
-                        ProgressView().scaleEffect(0.8)
-                    } else {
-                        Button {
-                            Task { await load() }
-                        } label: {
-                            Label("Refresh", systemImage: "arrow.clockwise")
-                        }
-                    }
-                }
-            }
-            .alert("Error", isPresented: .constant(error != nil)) {
-                Button("OK") { error = nil }
-            } message: {
-                Text(error?.localizedDescription ?? "")
-            }
-        }
-        .task {
-            await cloudKit.checkAccountStatus()
-            await load()
-        }
-    }
-
-    // MARK: - Subviews
-
-    private var list: some View {
-        List {
-            Section {
-                ForEach(machines) { machine in
-                    NavigationLink(value: machine.id) {
-                        MachineRow(machine: machine)
-                    }
-                }
-            } footer: {
-                HStack(spacing: 4) {
-                    Image(systemName: "icloud.fill")
-                        .font(.caption2)
-                    if let refresh = lastRefresh {
-                        Text("Synced \(refresh.briefRelative)")
-                    } else {
-                        Text("Syncing via iCloud…")
-                    }
-                }
-                .foregroundStyle(.secondary)
-                .font(.caption)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.top, 4)
-            }
-        }
-        .listStyle(.insetGrouped)
-        .refreshable { await load() }
-        .navigationDestination(for: String.self) { machineID in
-            if let machine = machines.first(where: { $0.id == machineID }) {
-                MachineDetailView(machine: machine)
-                    .environment(cloudKit)
-            }
-        }
-    }
-
-    private var emptyState: some View {
-        ContentUnavailableView {
-            Label("No Machines", systemImage: "desktopcomputer.trianglebadge.exclamationmark")
-        } description: {
-            Text("Open Ask on your Mac to get started. Both devices must be signed into the same iCloud account.")
-        }
-    }
-
-    // MARK: - Data
-
-    private func load() async {
-        isLoading = true
-        defer { isLoading = false }
-        do {
-            machines = try await cloudKit.fetchMachines()
-            lastRefresh = Date()
-        } catch {
-            self.error = error
-        }
-    }
-}
-
-// MARK: - Machine row
+// MARK: - Machine row (used in SettingsSheetView)
 
 struct MachineRow: View {
     let machine: AskMachine
@@ -138,10 +34,10 @@ struct MachineRow: View {
 
     private func statusColor(_ status: AskMachine.ConnectionStatus) -> Color {
         switch status {
-        case .online: .green
-        case .busy: .blue
+        case .online:   .green
+        case .busy:     .blue
         case .sleeping: .yellow
-        case .offline: .secondary
+        case .offline:  .secondary
         }
     }
 }
