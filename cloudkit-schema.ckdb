@@ -90,9 +90,28 @@ DEFINE SCHEMA
         eventID         STRING QUERYABLE,
         machineID       STRING QUERYABLE,
         options         LIST<STRING>,
+        sessionID       STRING QUERYABLE,
         source          STRING,
         timestamp       TIMESTAMP QUERYABLE SORTABLE,
         title           STRING,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE AskSession (
+        "___createTime"  TIMESTAMP,
+        "___createdBy"   REFERENCE,
+        "___etag"        STRING,
+        "___modTime"     TIMESTAMP,
+        "___modifiedBy"  REFERENCE,
+        "___recordID"    REFERENCE QUERYABLE,
+        lastActivityAt   TIMESTAMP QUERYABLE SORTABLE,
+        machineID        STRING QUERYABLE,
+        sessionID        STRING QUERYABLE,
+        startedAt        TIMESTAMP,
+        status           STRING QUERYABLE,
+        title            STRING,
         GRANT WRITE TO "_creator",
         GRANT CREATE TO "_icloud",
         GRANT READ TO "_world"
@@ -109,6 +128,38 @@ DEFINE SCHEMA
         eventID         STRING QUERYABLE,
         machineID       STRING QUERYABLE,
         timestamp       TIMESTAMP,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE AskMessage (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE QUERYABLE,
+        fromDevice      STRING QUERYABLE,
+        machineID       STRING QUERYABLE,
+        messageID       STRING QUERYABLE,
+        text            STRING,
+        timestamp       TIMESTAMP QUERYABLE SORTABLE,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE AskTyping (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE QUERYABLE,
+        fromDevice      STRING QUERYABLE,
+        machineID       STRING QUERYABLE,
+        timestamp       TIMESTAMP QUERYABLE SORTABLE,
         GRANT WRITE TO "_creator",
         GRANT CREATE TO "_icloud",
         GRANT READ TO "_world"

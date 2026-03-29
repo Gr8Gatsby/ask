@@ -5,6 +5,7 @@ struct MenuBarView: View {
     @Environment(JobWatcher.self) private var watcher
     @Environment(HeartbeatService.self) private var heartbeat
     @Environment(ResponseWatcherService.self) private var responseWatcher
+    @Environment(MessageWatcherService.self) private var messageWatcher
 
     @Environment(\.openWindow) private var openWindow
 
@@ -91,11 +92,16 @@ struct MenuBarView: View {
 
     private var actions: some View {
         HStack {
-            Button("Settings") { openWindow(id: "settings") }
+            Button("Messages") { openWindow(id: "messages") }
                 .buttonStyle(.plain)
                 .font(.subheadline)
             Spacer()
-            Button("Quit Ask") { NSApplication.shared.terminate(nil) }
+            Button("Settings") { openWindow(id: "settings") }
+                .buttonStyle(.plain)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button("Quit") { NSApplication.shared.terminate(nil) }
                 .buttonStyle(.plain)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)

@@ -10,6 +10,7 @@ struct AskMacApp: App {
     @State private var watcher: JobWatcher
     @State private var localEvents: LocalEventService
     @State private var responseWatcher: ResponseWatcherService
+    @State private var messageWatcher: MessageWatcherService
 
     init() {
         let s = settings
@@ -19,12 +20,14 @@ struct AskMacApp: App {
         let jw = JobWatcher(cloudKit: ck, executor: ex, heartbeat: hb, settings: s)
         let le = LocalEventService(cloudKit: ck, machineID: s.machineID)
         let rw = ResponseWatcherService(cloudKit: ck, machineID: s.machineID)
+        let mw = MessageWatcherService(cloudKit: ck, machineID: s.machineID)
 
         _heartbeat = State(initialValue: hb)
         _executor = State(initialValue: ex)
         _watcher = State(initialValue: jw)
         _localEvents = State(initialValue: le)
         _responseWatcher = State(initialValue: rw)
+        _messageWatcher = State(initialValue: mw)
 
         // Start services immediately on launch.
         Task {
@@ -33,6 +36,7 @@ struct AskMacApp: App {
             jw.start()
             le.start()
             rw.start()
+            mw.start()
         }
     }
 
@@ -43,10 +47,20 @@ struct AskMacApp: App {
                 .environment(watcher)
                 .environment(heartbeat)
                 .environment(responseWatcher)
+                .environment(messageWatcher)
         } label: {
             MenuBarLabel(isBusy: watcher.isExecuting)
         }
         .menuBarExtraStyle(.window)
+
+        Window("Messages", id: "messages") {
+            MacMessagesView()
+                .environment(settings)
+                .environment(cloudKit)
+                .environment(messageWatcher)
+        }
+        .windowResizability(.contentSize)
+        .defaultSize(width: 400, height: 560)
 
         Window("Ask Settings", id: "settings") {
             SettingsView()

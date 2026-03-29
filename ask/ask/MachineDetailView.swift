@@ -9,8 +9,10 @@ struct MachineDetailView: View {
     @State private var agents: [AskAgent] = []
     @State private var recentJobs: [AskJob] = []
     @State private var pendingEvents: [AskEvent] = []
+    @State private var sessions: [AskSession] = []
     @State private var isLoading = false
     @State private var selectedAgent: AskAgent?
+    @State private var pollTask: Task<Void, Never>?
 
     init(machine: AskMachine) {
         self.machine = machine
@@ -19,10 +21,14 @@ struct MachineDetailView: View {
 
     var body: some View {
         List {
-            if !actionableEvents.isEmpty {
-                eventsSection
+            if !sessions.isEmpty {
+                sessionsSection
+            }
+            if !legacyActionableEvents.isEmpty {
+                legacyEventsSection
             }
             statusSection
+            messagesSection
             agentsSection
             if !recentJobs.isEmpty {
                 recentJobsSection
@@ -36,18 +42,52 @@ struct MachineDetailView: View {
             NewJobView(machine: machine, agent: agent)
                 .environment(cloudKit)
         }
-        .task { await load() }
+        .task {
+            await load()
+            startPolling()
+        }
+        .onDisappear {
+            pollTask?.cancel()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .askRefreshRequired)) { _ in
+            Task { await load() }
+        }
     }
 
     // MARK: - Sections
 
-    private var actionableEvents: [AskEvent] {
-        pendingEvents.filter(\.requiresResponse)
+    /// Events not tied to a session (legacy / non-Claude-Code events).
+    private var legacyActionableEvents: [AskEvent] {
+        pendingEvents.filter { $0.requiresResponse && ($0.sessionID == nil || $0.sessionID!.isEmpty) }
     }
 
-    private var eventsSection: some View {
+    private var sessionsSection: some View {
         Section {
-            ForEach(actionableEvents) { event in
+            ForEach(sortedSessions) { session in
+                NavigationLink {
+                    SessionDetailView(session: session, machineID: machine.id)
+                        .environment(cloudKit)
+                } label: {
+                    SessionRow(session: session)
+                }
+            }
+        } header: {
+            Label("Claude Sessions", systemImage: "sparkles")
+        }
+    }
+
+    private var sortedSessions: [AskSession] {
+        sessions.sorted {
+            if $0.status.isWaiting != $1.status.isWaiting {
+                return $0.status.isWaiting
+            }
+            return $0.lastActivityAt > $1.lastActivityAt
+        }
+    }
+
+    private var legacyEventsSection: some View {
+        Section {
+            ForEach(legacyActionableEvents) { event in
                 EventCard(event: event) { choice in
                     await respond(to: event, choice: choice)
                 }
@@ -70,6 +110,17 @@ struct MachineDetailView: View {
             LabeledContent("Last seen") {
                 Text(currentMachine.lastHeartbeat.briefRelative)
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var messagesSection: some View {
+        Section {
+            NavigationLink {
+                MessagesView(machine: currentMachine)
+                    .environment(cloudKit)
+            } label: {
+                Label("Messages", systemImage: "message")
             }
         }
     }
@@ -141,10 +192,23 @@ struct MachineDetailView: View {
         async let agentsFetch = cloudKit.fetchAgents(machineID: machine.id)
         async let jobsFetch = cloudKit.fetchRecentJobs(machineID: machine.id)
         async let eventsFetch = cloudKit.fetchPendingEvents(machineID: machine.id)
+        async let sessionsFetch = cloudKit.fetchSessions(machineID: machine.id)
         currentMachine = (try? await machineFetch) ?? currentMachine
         agents = (try? await agentsFetch) ?? agents
         recentJobs = (try? await jobsFetch) ?? recentJobs
         pendingEvents = (try? await eventsFetch) ?? pendingEvents
+        sessions = (try? await sessionsFetch) ?? sessions
+    }
+
+    private func startPolling() {
+        pollTask?.cancel()
+        pollTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled else { break }
+                await load()
+            }
+        }
     }
 
     private func respond(to event: AskEvent, choice: String) async {
@@ -155,6 +219,40 @@ struct MachineDetailView: View {
         } catch {
             print("[MachineDetailView] Failed to save response: \(error)")
         }
+    }
+}
+
+// MARK: - Session row
+
+struct SessionRow: View {
+    let session: AskSession
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(session.status.isWaiting ? Color.orange : Color.green)
+                .frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(session.title)
+                    .font(.subheadline)
+                    .fontWeight(session.status.isWaiting ? .semibold : .regular)
+                Text(session.lastActivityAt.briefRelative)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if session.status.isWaiting {
+                Text("Waiting")
+                    .font(.caption2)
+                    .fontWeight(.medium)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color.orange.opacity(0.12))
+                    .foregroundStyle(.orange)
+                    .clipShape(Capsule())
+            }
+        }
+        .padding(.vertical, 2)
     }
 }
 
@@ -262,6 +360,7 @@ struct EventCard: View {
     let onRespond: (String) async -> Void
 
     @State private var responding = false
+    @State private var textInput = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -304,6 +403,27 @@ struct EventCard: View {
                         }
                         .disabled(responding)
                     }
+                }
+            } else {
+                HStack(spacing: 8) {
+                    TextField("Type your answer…", text: $textInput, axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .lineLimit(1...4)
+                        .disabled(responding)
+                    Button {
+                        let answer = textInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !answer.isEmpty else { return }
+                        Task {
+                            responding = true
+                            await onRespond(answer)
+                            responding = false
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(textInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.secondary : Color.accentColor)
+                    }
+                    .disabled(responding || textInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }

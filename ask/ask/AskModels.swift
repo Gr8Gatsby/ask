@@ -13,6 +13,32 @@ enum CKSchema {
         static let outputChunk = "OutputChunk"
         static let event = "AskEvent"
         static let response = "AskResponse"
+        static let message = "AskMessage"
+        static let typing = "AskTyping"
+        static let session = "AskSession"
+    }
+
+    enum Session {
+        static let sessionID = "sessionID"
+        static let machineID = "machineID"
+        static let title = "title"
+        static let status = "status"
+        static let startedAt = "startedAt"
+        static let lastActivityAt = "lastActivityAt"
+    }
+
+    enum Typing {
+        static let machineID = "machineID"
+        static let fromDevice = "fromDevice"
+        static let timestamp = "timestamp"
+    }
+
+    enum Message {
+        static let messageID = "messageID"
+        static let machineID = "machineID"
+        static let text = "text"
+        static let fromDevice = "fromDevice"
+        static let timestamp = "timestamp"
     }
 
     enum Event {
@@ -23,6 +49,7 @@ enum CKSchema {
         static let source = "source"
         static let options = "options"
         static let timestamp = "timestamp"
+        static let sessionID = "sessionID"
     }
 
     enum Response {
@@ -285,8 +312,10 @@ struct AskEvent: Identifiable {
     let source: String
     let options: [String]   // empty = notification only
     let timestamp: Date
+    let sessionID: String?
 
-    var requiresResponse: Bool { !options.isEmpty }
+    /// True for any ask-prompt event (has buttons or needs typed answer).
+    var requiresResponse: Bool { !options.isEmpty || source == "ask-prompt" }
 
     init?(record: CKRecord) {
         guard
@@ -303,6 +332,69 @@ struct AskEvent: Identifiable {
         self.body = record[CKSchema.Event.body] as? String ?? ""
         self.source = record[CKSchema.Event.source] as? String ?? ""
         self.options = (record[CKSchema.Event.options] as? [Any])?.compactMap { $0 as? String } ?? []
+        self.timestamp = timestamp
+        self.sessionID = record[CKSchema.Event.sessionID] as? String
+    }
+}
+
+// MARK: - Session
+
+struct AskSession: Identifiable {
+    let id: String          // sessionID
+    let machineID: String
+    let title: String
+    let status: SessionStatus
+    let startedAt: Date
+    let lastActivityAt: Date
+
+    enum SessionStatus: String {
+        case waiting, active, completed
+
+        var isWaiting: Bool { self == .waiting }
+    }
+
+    init?(record: CKRecord) {
+        guard
+            let sessionID = record[CKSchema.Session.sessionID] as? String,
+            let machineID = record[CKSchema.Session.machineID] as? String,
+            let title = record[CKSchema.Session.title] as? String,
+            let lastActivityAt = record[CKSchema.Session.lastActivityAt] as? Date
+        else { return nil }
+
+        self.id = sessionID
+        self.machineID = machineID
+        self.title = title
+        self.lastActivityAt = lastActivityAt
+        self.startedAt = record[CKSchema.Session.startedAt] as? Date ?? lastActivityAt
+        let statusRaw = record[CKSchema.Session.status] as? String ?? "active"
+        self.status = SessionStatus(rawValue: statusRaw) ?? .active
+    }
+}
+
+// MARK: - Message
+
+struct AskMessage: Identifiable {
+    let id: String       // messageID
+    let machineID: String
+    let text: String
+    let fromDevice: String   // "mac" or "iphone"
+    let timestamp: Date
+
+    var fromIPhone: Bool { fromDevice == "iphone" }
+
+    init?(record: CKRecord) {
+        guard
+            let messageID = record[CKSchema.Message.messageID] as? String,
+            let machineID = record[CKSchema.Message.machineID] as? String,
+            let text = record[CKSchema.Message.text] as? String,
+            let fromDevice = record[CKSchema.Message.fromDevice] as? String,
+            let timestamp = record[CKSchema.Message.timestamp] as? Date
+        else { return nil }
+
+        self.id = messageID
+        self.machineID = machineID
+        self.text = text
+        self.fromDevice = fromDevice
         self.timestamp = timestamp
     }
 }

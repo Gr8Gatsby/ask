@@ -320,6 +320,73 @@ If the Mac is offline when a job is sent, the job remains `Queued` until the Mac
 
 ---
 
+## Claude Code Supervision
+
+### Overview
+
+The app can supervise any Claude Code session running on a paired Mac — whether launched from the terminal or from the Mac companion app. When Claude Code needs permission to run a tool, the user receives a prompt on iPhone and can approve or deny it without touching the Mac.
+
+Claude Code sessions appear as first-class items in the iOS app, grouped like conversation threads. Each session corresponds to one Claude Code invocation. No script names or filesystem paths are shown — the UI surfaces what Claude wants to do (e.g., "Allow Bash?"), not how it is implemented.
+
+### Session States
+
+| State | Meaning |
+|---|---|
+| **Waiting** | Claude is paused, waiting for the user to respond to a permission request |
+| **Active** | Claude is running; no pending requests |
+| **Completed** | Session has ended |
+
+### iOS — Claude Sessions Screen
+
+- The Machine Detail screen shows a "Claude Sessions" section above all other content when any sessions exist for that machine
+- Each session row shows: a status dot (orange = waiting, green = active), the session title (what Claude is requesting), and how long ago it was last active
+- Sessions with pending requests are sorted to the top; within each group, sorted by most recent activity
+- Tapping a session navigates to the Session Detail screen
+- The screen refreshes automatically: every 5 seconds while visible, immediately when the app foregrounds, and immediately after the user responds to a request
+
+### iOS — Session Detail Screen
+
+- Shows all pending permission requests for the session
+- Each request shows the tool name (title) and a preview of what it wants to do (body text)
+- Below the description, the dynamic response options are shown as buttons (e.g., Allow / Always allow Bash(git *) / Deny)
+- When no requests are pending, shows an empty state: "Claude is running. You'll be notified when input is needed."
+- After the user responds to the last pending request, the screen dismisses automatically and the session list refreshes
+
+### Mac — Hook Integration
+
+- A `PermissionRequest` hook in `~/.claude/settings.json` fires whenever Claude Code needs tool authorization
+- The hook script reads the structured JSON payload (tool name, tool input, session ID, permission suggestions) from stdin
+- It extracts a human-readable preview of what Claude wants to do (command, file path, query, etc.)
+- It builds a dynamic option list from `permission_suggestions` in the payload — these are Claude Code's own contextual suggestions (e.g., "Always allow Bash(git status)")
+- The prompt is sent to the iPhone via the event pipeline; the hook blocks until the user responds (5-minute timeout → auto-deny)
+- Response mapping:
+  - **Allow**: hook exits 0, Claude proceeds
+  - **Always allow X**: hook outputs `updatedPermissions` referencing the suggestion — Claude Code natively records the rule; hook exits 0
+  - **Deny**: hook outputs deny decision with message; Claude sees an error; hook exits 2
+  - **Timeout**: hook exits 2 (safe default — deny)
+
+### Event Pipeline
+
+```
+Claude Code needs tool authorization
+    ↓ PermissionRequest hook fires
+~/.ask/scripts/ask-permission.sh reads JSON from stdin
+    ↓ extracts preview, builds options from permission_suggestions
+~/.ask/scripts/ask-prompt.sh --session-id SESSION --body PREVIEW TITLE [options...]
+    ↓ writes ~/.ask/incoming/{eventID}.json (atomically)
+LocalEventService (Mac companion) picks up file
+    ↓ upserts AskSession (status: waiting) + saves AskEvent (linked to session)
+CloudKit push → iPhone notified
+    ↓ user taps Allow
+iOSCloudKitService.saveResponse() → AskResponse record in CloudKit
+    ↓ ResponseWatcherService (Mac) picks up response → writes ~/.ask/responses/{eventID}.json
+ask-prompt.sh unblocks → ask-permission.sh outputs allow decision → Claude proceeds
+    ↓
+AskSession status updated to "active"; iOS view dismisses; session list refreshes
+```
+
+---
+
 ## Constraints and Scope (v1)
 
 - Single iCloud account — no sharing between users
@@ -340,3 +407,4 @@ If the Mac is offline when a job is sent, the job remains `Queued` until the Mac
 | 2026-03-28 | Initial spec created |
 | 2026-03-28 | Added security model: cryptographic pairing, Scripts Vault, capability declarations, threat model |
 | 2026-03-28 | Mac companion service layer v1: CloudKit schema, HeartbeatService, JobWatcher, JobExecutor, minimal menu bar UI |
+| 2026-03-29 | Claude Code supervision: PermissionRequest hook, AskSession record type, Sessions UI in iOS (MachineDetailView + SessionDetailView), dynamic options from permission_suggestions, real-time refresh pipeline |

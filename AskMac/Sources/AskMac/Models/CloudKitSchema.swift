@@ -13,6 +13,32 @@ enum CKSchema {
         static let outputChunk = "OutputChunk"
         static let event = "AskEvent"
         static let response = "AskResponse"
+        static let message = "AskMessage"
+        static let typing = "AskTyping"
+        static let session = "AskSession"
+    }
+
+    enum Session {
+        static let sessionID = "sessionID"
+        static let machineID = "machineID"
+        static let title = "title"
+        static let status = "status"
+        static let startedAt = "startedAt"
+        static let lastActivityAt = "lastActivityAt"
+    }
+
+    enum Typing {
+        static let machineID = "machineID"
+        static let fromDevice = "fromDevice"
+        static let timestamp = "timestamp"
+    }
+
+    enum Message {
+        static let messageID = "messageID"
+        static let machineID = "machineID"
+        static let text = "text"
+        static let fromDevice = "fromDevice"
+        static let timestamp = "timestamp"
     }
 
     enum Response {
@@ -65,6 +91,7 @@ enum CKSchema {
         static let source = "source"
         static let options = "options"
         static let timestamp = "timestamp"
+        static let sessionID = "sessionID"
     }
 
     enum OutputChunk {

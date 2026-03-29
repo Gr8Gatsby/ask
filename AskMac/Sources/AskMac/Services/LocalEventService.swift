@@ -66,7 +66,7 @@ final class LocalEventService {
             guard !data.isEmpty,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else {
-                log("JSON parse failed for \(file.lastPathComponent) (\(data.count) bytes)")
+                print("[LocalEventService] JSON parse failed for \(file.lastPathComponent) (\(data.count) bytes)")
                 if !data.isEmpty { try? fm.removeItem(at: file) }
                 continue
             }
@@ -76,8 +76,20 @@ final class LocalEventService {
             let message = json["message"] as? String ?? json["content"] as? String ?? ""
             let source = json["source"] as? String ?? "claude-code"
             let options = (json["options"] as? [Any])?.compactMap { $0 as? String } ?? []
+            let sessionID = json["sessionID"] as? String
 
-            log("Processing: title=\(title) options=\(options) machineID=\(machineID)")
+            print("[LocalEventService] Processing: title=\(title) options=\(options) machineID=\(machineID)")
+
+            // Upsert session record when event is tied to a Claude Code session
+            if let sessionID = sessionID, !sessionID.isEmpty {
+                let sessionStatus = options.isEmpty ? "active" : "waiting"
+                try? await cloudKit.upsertSession(
+                    sessionID: sessionID,
+                    machineID: machineID,
+                    title: title,
+                    status: sessionStatus
+                )
+            }
 
             do {
                 try await cloudKit.saveEvent(
@@ -86,13 +98,13 @@ final class LocalEventService {
                     title: title,
                     body: message,
                     source: source,
-                    options: options
+                    options: options,
+                    sessionID: sessionID
                 )
-                log("Saved OK: \(title) options=\(options)")
+                print("[LocalEventService] Saved OK: \(title) options=\(options)")
                 try fm.removeItem(at: file)
             } catch {
-                log("Save FAILED: \(error)")
-                print("[LocalEventService] Failed to forward event: \(error)")
+                print("[LocalEventService] Save FAILED: \(error)")
             }
         }
     }

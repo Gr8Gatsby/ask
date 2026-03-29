@@ -15,14 +15,14 @@ final class PushService: NSObject {
 
     func setup() async {
         await requestPermission()
-        await UIApplication.shared.registerForRemoteNotifications()
+        UIApplication.shared.registerForRemoteNotifications()
         await saveSubscriptionsIfNeeded()
     }
 
     // MARK: - Private
 
     private func requestPermission() async {
-        try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+        _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
     }
 
     private func saveSubscriptionsIfNeeded() async {
@@ -55,7 +55,7 @@ final class PushService: NSObject {
             toSave.append(makeEventSubscription())
         }
 
-        try? await database.modifySubscriptions(saving: toSave, deleting: [])
+        _ = try? await database.modifySubscriptions(saving: toSave, deleting: [])
     }
 
     private func makeJobSubscription(id: String, statuses: [String], title: String, body: String) -> CKQuerySubscription {
@@ -87,5 +87,11 @@ final class PushService: NSObject {
         info.shouldBadge = false
         sub.notificationInfo = info
         return sub
+    }
+
+    /// Called by the app delegate when a remote notification arrives (including silent pushes).
+    /// Posts a refresh notification so open views update immediately without waiting for the poll interval.
+    func handleRemoteNotification() {
+        NotificationCenter.default.post(name: .askRefreshRequired, object: nil)
     }
 }
