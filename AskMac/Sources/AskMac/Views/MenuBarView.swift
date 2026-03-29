@@ -86,13 +86,29 @@ struct MenuBarView: View {
                         } else {
                             Image(systemName: script.icon ?? "terminal.fill")
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(script.isEnabled ? .secondary : .tertiary)
                                 .frame(width: 14)
                         }
                         Text(script.name)
                             .font(.subheadline)
+                            .foregroundStyle(script.isEnabled ? .primary : .secondary)
                         Spacer()
-                        scriptStatusBadge(script.status)
+                        if script.isEnabled {
+                            scriptStatusBadge(script.status)
+                        }
+                        Toggle("", isOn: Binding(
+                            get: { script.isEnabled },
+                            set: { enabled in
+                                if enabled {
+                                    scriptManager.enableScript(id: script.id)
+                                } else {
+                                    scriptManager.disableScript(id: script.id)
+                                }
+                            }
+                        ))
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .labelsHidden()
                     }
                 }
             }

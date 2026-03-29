@@ -63,6 +63,7 @@ final class AppSettings {
         static let machineName = "machineName"
         static let vaultPath = "vaultPath"
         static let agents = "agents"
+        static let disabledScripts = "disabledScripts"
     }
 
     private let defaults: UserDefaults
@@ -82,6 +83,10 @@ final class AppSettings {
 
     var agents: [AgentConfig] {
         didSet { saveAgents() }
+    }
+
+    var disabledScripts: Set<String> {
+        didSet { defaults.set(Array(disabledScripts), forKey: Key.disabledScripts) }
     }
 
     var isConfigured: Bool {
@@ -119,6 +124,17 @@ final class AppSettings {
         }
 
         self.agents = Self.loadAgents(from: defaults)
+
+        let storedDisabled = defaults.stringArray(forKey: Key.disabledScripts) ?? []
+        self.disabledScripts = Set(storedDisabled)
+    }
+
+    func setScriptEnabled(_ id: String, enabled: Bool) {
+        if enabled {
+            disabledScripts.remove(id)
+        } else {
+            disabledScripts.insert(id)
+        }
     }
 
     func scriptURL(for agent: AgentConfig) -> URL? {

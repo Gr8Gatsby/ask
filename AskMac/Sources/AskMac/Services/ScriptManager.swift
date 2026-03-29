@@ -27,6 +27,7 @@ struct ManagedScript: Identifiable {
     let icon: String?       // SF Symbol fallback
     let iconImage: NSImage? // loaded from icon_file
     var status: ScriptStatus
+    var isEnabled: Bool
 
     enum ScriptStatus {
         case starting, running, crashed, stopped
@@ -51,16 +52,20 @@ final class ScriptManager {
     private let cloudKit: CloudKitService
     private let machineID: String
     private let scriptsDir: URL
+    private let settings: AppSettings
 
     private(set) var scripts: [ManagedScript] = []
 
     // Internal — not exposed to UI
     private var connections: [String: MCPConnection] = [:]
     private var restartDelays: [String: TimeInterval] = [:]
+    // Cached manifests so we can re-launch after enable
+    private var manifests: [String: (manifest: ScriptManifest, dir: URL)] = [:]
 
-    init(cloudKit: CloudKitService, machineID: String) {
+    init(cloudKit: CloudKitService, machineID: String, settings: AppSettings) {
         self.cloudKit = cloudKit
         self.machineID = machineID
+        self.settings = settings
         self.scriptsDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".ask/scripts")
     }
@@ -80,6 +85,33 @@ final class ScriptManager {
 
     // MARK: - Private
 
+    func disableScript(id: String) {
+        settings.setScriptEnabled(id, enabled: false)
+        if let idx = scripts.firstIndex(where: { $0.id == id }) {
+            scripts[idx].isEnabled = false
+            scripts[idx].status = .stopped
+        }
+        connections[id]?.stop()
+        connections.removeValue(forKey: id)
+        restartDelays.removeValue(forKey: id)
+        Task {
+            let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: id)
+            try? await blockService.clearAllBlocks()
+        }
+    }
+
+    func enableScript(id: String) {
+        settings.setScriptEnabled(id, enabled: true)
+        if let idx = scripts.firstIndex(where: { $0.id == id }) {
+            scripts[idx].isEnabled = true
+        }
+        if let cached = manifests[id] {
+            launch(manifest: cached.manifest, scriptDir: cached.dir)
+        }
+    }
+
+    // MARK: - Private
+
     private func discoverAndLaunch() {
         let fm = FileManager.default
         guard let subdirs = try? fm.contentsOfDirectory(
@@ -94,7 +126,13 @@ final class ScriptManager {
             guard let data = try? Data(contentsOf: manifestURL),
                   let manifest = try? JSONDecoder().decode(ScriptManifest.self, from: data)
             else { continue }
-            launch(manifest: manifest, scriptDir: dir)
+            manifests[manifest.id] = (manifest, dir)
+            let isEnabled = !settings.disabledScripts.contains(manifest.id)
+            if isEnabled {
+                launch(manifest: manifest, scriptDir: dir)
+            } else {
+                upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: nil, status: .stopped, isEnabled: false)
+            }
         }
     }
 
@@ -107,7 +145,7 @@ final class ScriptManager {
 
         guard canRun else {
             print("[ScriptManager] \(manifest.id): entry not runnable at \(entryURL.path)")
-            upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: nil, status: .stopped)
+            upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: nil, status: .stopped, isEnabled: true)
             return
         }
 
@@ -128,14 +166,17 @@ final class ScriptManager {
         }
 
         connections[manifest.id] = conn
-        upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .starting)
+        upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .starting, isEnabled: true)
 
         conn.start()
-        upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .running)
+        upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .running, isEnabled: true)
     }
 
     private func handleCrash(manifest: ScriptManifest, scriptDir: URL) {
-        upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: nil, status: .crashed)
+        // Don't restart if the script was disabled
+        guard !settings.disabledScripts.contains(manifest.id) else { return }
+
+        upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: nil, status: .crashed, isEnabled: true)
         connections.removeValue(forKey: manifest.id)
 
         let delay = restartDelays[manifest.id] ?? 1.0
@@ -145,15 +186,17 @@ final class ScriptManager {
 
         Task {
             try? await Task.sleep(for: .seconds(delay))
+            guard !self.settings.disabledScripts.contains(manifest.id) else { return }
             launch(manifest: manifest, scriptDir: scriptDir)
         }
     }
 
-    private func upsertStatus(_ id: String, name: String, icon: String?, iconImage: NSImage?, status: ManagedScript.ScriptStatus) {
+    private func upsertStatus(_ id: String, name: String, icon: String?, iconImage: NSImage?, status: ManagedScript.ScriptStatus, isEnabled: Bool) {
         if let idx = scripts.firstIndex(where: { $0.id == id }) {
             scripts[idx].status = status
+            scripts[idx].isEnabled = isEnabled
         } else {
-            scripts.append(ManagedScript(id: id, name: name, icon: icon, iconImage: iconImage, status: status))
+            scripts.append(ManagedScript(id: id, name: name, icon: icon, iconImage: iconImage, status: status, isEnabled: isEnabled))
         }
     }
 }
