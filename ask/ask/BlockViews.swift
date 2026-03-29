@@ -1,12 +1,96 @@
 import SwiftUI
+import UIKit
+import CoreText
+
+// MARK: - Emoji-safe text
+
+/// UITextView-backed text view with an explicit CoreText emoji cascade.
+///
+/// iOS 26 beta broke the automatic Apple Color Emoji fallback in the San Francisco
+/// font cascade for both UILabel and UITextView. The fix: build a UIFontDescriptor
+/// that explicitly lists Apple Color Emoji as the first cascade font via
+/// kCTFontCascadeListAttribute. CoreText then finds emoji glyphs correctly.
+private struct EmojiText: UIViewRepresentable {
+    let text: String
+    var uiFont: UIFont = .preferredFont(forTextStyle: .body)
+    var color: UIColor = .label
+    var alignment: NSTextAlignment = .left
+    var numberOfLines: Int = 0
+
+    func makeUIView(context: Context) -> UITextView {
+        let tv = UITextView()
+        tv.isEditable = false
+        tv.isScrollEnabled = false
+        tv.backgroundColor = .clear
+        tv.textContainerInset = .zero
+        tv.textContainer.lineFragmentPadding = 0
+        tv.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        tv.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        if numberOfLines > 0 {
+            tv.textContainer.maximumNumberOfLines = numberOfLines
+            tv.textContainer.lineBreakMode = .byTruncatingTail
+        }
+        return tv
+    }
+
+    func updateUIView(_ uiView: UITextView, context: Context) {
+        uiView.attributedText = NSAttributedString(string: text, attributes: [
+            .font: fontWithEmojiCascade,
+            .foregroundColor: color,
+        ])
+        uiView.textAlignment = alignment
+    }
+
+    /// Returns `uiFont` with Apple Color Emoji injected as the first cascade font.
+    /// Uses kCTFontCascadeListAttribute so CoreText resolves emoji glyphs directly,
+    /// bypassing whatever broke the automatic cascade on iOS 26 beta.
+    private var fontWithEmojiCascade: UIFont {
+        let emojiDescriptor = UIFontDescriptor(name: "Apple Color Emoji", size: uiFont.pointSize)
+        let descriptor = uiFont.fontDescriptor.addingAttributes([
+            UIFontDescriptor.AttributeName(rawValue: kCTFontCascadeListAttribute as String): [emojiDescriptor]
+        ])
+        return UIFont(descriptor: descriptor, size: uiFont.pointSize)
+    }
+}
 
 // MARK: - Block dispatcher
+
+private extension UIFont {
+    func withWeight(_ weight: UIFont.Weight) -> UIFont {
+        let descriptor = fontDescriptor.addingAttributes([
+            .traits: [UIFontDescriptor.TraitKey.weight: weight]
+        ])
+        return UIFont(descriptor: descriptor, size: pointSize)
+    }
+}
 
 struct BlockView: View {
     let block: RKBlock
     let onRespond: (String) async -> Void
 
+    @State private var showDebug = false
+
     var body: some View {
+        ZStack(alignment: .topTrailing) {
+            if showDebug {
+                debugView
+            } else {
+                blockContent
+            }
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { showDebug.toggle() }
+            } label: {
+                Image(systemName: showDebug ? "xmark.circle.fill" : "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(4)
+        }
+    }
+
+    @ViewBuilder
+    private var blockContent: some View {
         switch block.blockType {
         case .confirmation:
             if let p = block.confirmationPayload {
@@ -34,6 +118,33 @@ struct BlockView: View {
             }
         }
     }
+
+    private var debugView: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(block.blockType.rawValue)
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(block.id)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            ScrollView {
+                Text(block.payloadJSON)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 200)
+        }
+        .padding(.vertical, 4)
+        .padding(.trailing, 20)
+    }
 }
 
 // MARK: - Confirmation
@@ -48,14 +159,14 @@ struct ConfirmationBlockView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(payload.title)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
+                EmojiText(text: payload.title,
+                          uiFont: .preferredFont(forTextStyle: .subheadline).withWeight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
                 if !payload.body.isEmpty {
-                    Text(payload.body)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fontDesign(.monospaced)
+                    EmojiText(text: payload.body,
+                              uiFont: .monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .caption1).pointSize, weight: .regular),
+                              color: .secondaryLabel)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             if payload.options.count <= 2 {
@@ -87,12 +198,14 @@ struct ConfirmationBlockView: View {
                 responding = false
             }
         } label: {
-            Text(option)
-                .fontWeight(.medium)
+            EmojiText(text: option,
+                      uiFont: .preferredFont(forTextStyle: .body).withWeight(.semibold),
+                      color: UIColor(Color.accentColor),
+                      alignment: .center)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
                 .background(Color.accentColor.opacity(0.12))
-                .foregroundStyle(Color.accentColor)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .disabled(responding)
@@ -121,9 +234,9 @@ struct ConfirmationBlockView: View {
                                     .frame(width: 11, height: 11)
                             }
                         }
-                        Text(option)
-                            .foregroundStyle(.primary)
-                            .multilineTextAlignment(.leading)
+                        EmojiText(text: option,
+                                  uiFont: .preferredFont(forTextStyle: .body))
+                            .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .padding(.horizontal, 12)

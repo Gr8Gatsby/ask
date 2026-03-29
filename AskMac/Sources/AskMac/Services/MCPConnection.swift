@@ -107,6 +107,8 @@ final class MCPConnection: @unchecked Sendable {
 
         switch method {
         case "initialize":
+            // Purge any stale blocks from a previous run before the script starts fresh.
+            try? await blockService.clearAllBlocks()
             reply(id: id, result: [
                 "protocolVersion": "2024-11-05",
                 "capabilities": ["tools": [String: String]()],

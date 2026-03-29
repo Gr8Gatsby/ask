@@ -28,4 +28,9 @@ final class BlockService: @unchecked Sendable {
     func clearBlock(blockID: String) async throws {
         try await cloudKit.clearBlock(blockID: blockID)
     }
+
+    /// Deletes all RKBlock records for this script. Called when the script reconnects.
+    func clearAllBlocks() async throws {
+        try await cloudKit.clearBlocksForScript(scriptID: scriptID, machineID: machineID)
+    }
 }

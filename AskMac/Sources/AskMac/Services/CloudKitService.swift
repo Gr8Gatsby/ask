@@ -283,6 +283,22 @@ final class CloudKitService {
         cachedRecords[block.blockID] = saved
     }
 
+    /// Deletes all RKBlock records for a given script. Called on script reconnect for a clean slate.
+    func clearBlocksForScript(scriptID: String, machineID: String) async throws {
+        let predicate = NSPredicate(
+            format: "%K == %@ AND %K == %@",
+            CKSchema.RKBlock.scriptID, scriptID,
+            CKSchema.RKBlock.machineID, machineID
+        )
+        let query = CKQuery(recordType: CKSchema.RecordType.rkBlock, predicate: predicate)
+        let (results, _) = try await database.records(matching: query, resultsLimit: 200)
+        let ids = results.compactMap { _, result in try? result.get() }.map(\.recordID)
+        guard !ids.isEmpty else { return }
+        _ = try? await database.modifyRecords(saving: [], deleting: ids, savePolicy: .allKeys, atomically: false)
+        ids.forEach { cachedRecords.removeValue(forKey: $0.recordName) }
+        print("[CloudKitService] Cleared \(ids.count) stale blocks for script \(scriptID)")
+    }
+
     /// Deletes an RKBlock record by blockID.
     func clearBlock(blockID: String) async throws {
         let recordID = CKRecord.ID(recordName: blockID)
