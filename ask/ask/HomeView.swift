@@ -112,6 +112,13 @@ struct HomeView: View {
                         EventCard(event: event) { choice in
                             await respond(to: event, choice: choice)
                         }
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                Task { await dismissEvent(event) }
+                            } label: {
+                                Label("Dismiss", systemImage: "xmark")
+                            }
+                        }
                     }
                 } header: {
                     HStack(spacing: 6) {
@@ -252,10 +259,15 @@ struct HomeView: View {
         do {
             try await cloudKit.saveResponse(eventID: event.id, machineID: event.machineID, choice: choice)
             try? await cloudKit.deleteEvent(event)
-            pendingEvents.removeAll { $0.id == event.id }
+            withAnimation { pendingEvents.removeAll { $0.id == event.id } }
         } catch {
             print("[HomeView] Failed to save response: \(error)")
         }
+    }
+
+    private func dismissEvent(_ event: AskEvent) async {
+        try? await cloudKit.deleteEvent(event)
+        withAnimation { pendingEvents.removeAll { $0.id == event.id } }
     }
 }
 

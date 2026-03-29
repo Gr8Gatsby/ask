@@ -43,6 +43,13 @@ struct SessionDetailView: View {
                             EventCard(event: event) { choice in
                                 await respond(to: event, choice: choice)
                             }
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) {
+                                    Task { await dismissEvent(event) }
+                                } label: {
+                                    Label("Dismiss", systemImage: "xmark")
+                                }
+                            }
                         }
                     } header: {
                         HStack(spacing: 6) {
@@ -88,6 +95,18 @@ struct SessionDetailView: View {
                 guard !Task.isCancelled else { break }
                 await load()
             }
+        }
+    }
+
+    private func dismissEvent(_ event: AskEvent) async {
+        try? await cloudKit.deleteEvent(event)
+        withAnimation {
+            pendingEvents.removeAll { $0.id == event.id }
+        }
+        if pendingEvents.isEmpty {
+            await cloudKit.updateSessionStatus(sessionID: session.id, status: "active")
+            NotificationCenter.default.post(name: .askRefreshRequired, object: nil)
+            dismiss()
         }
     }
 
