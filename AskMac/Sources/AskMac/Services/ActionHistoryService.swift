@@ -3,7 +3,7 @@ import Observation
 
 // MARK: - Model
 
-struct ActionHistoryEntry: Codable, Identifiable, Sendable {
+struct ActionHistoryEntry: Codable, Identifiable, Hashable, Sendable {
     var id: String { jobID }
     let timestamp: Date
     let actionName: String
