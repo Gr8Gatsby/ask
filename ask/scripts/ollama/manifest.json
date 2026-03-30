@@ -1,0 +1,9 @@
+{
+  "id": "ollama",
+  "name": "Ollama",
+  "version": "1.0",
+  "description": "Chat with locally installed Ollama models and manage Ollama updates",
+  "entry": "main.py",
+  "icon": "cpu",
+  "icon_file": "icon.svg"
+}

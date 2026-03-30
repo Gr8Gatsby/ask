@@ -1,0 +1,9 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "version": "1.0",
+  "description": "Browse repositories and manage issues",
+  "entry": "main.py",
+  "icon": "ant.circle",
+  "icon_file": "icon.svg"
+}

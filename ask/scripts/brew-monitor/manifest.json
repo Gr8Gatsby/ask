@@ -1,0 +1,9 @@
+{
+  "id": "brew-monitor",
+  "name": "Homebrew",
+  "version": "1.0",
+  "description": "Checks for outdated Homebrew packages and lets you upgrade from iPhone",
+  "entry": "brew-monitor-bin",
+  "icon": "shippingbox",
+  "icon_file": "icon.svg"
+}

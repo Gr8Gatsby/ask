@@ -69,7 +69,16 @@ struct HomeView: View {
     @State private var dismissedToastScriptIDs: Set<String> = []
     @State private var burstPollingUntil: Date = .distantPast
     @State private var responseErrorMessage: String?
+    @State private var queuedMessage: String?
     @State private var deviceEnabled: Bool = true
+    @State private var showQueueReview: Bool = false
+    @State private var wasOffline: Bool = false
+
+    private var offlineQueue: OfflineQueue { .shared }
+
+    private var macIsOffline: Bool {
+        activeMachine?.connectionStatus == .offline
+    }
 
     private var activeMachine: AskMachine? {
         if let id = activeMachineID { return machines.first { $0.id == id } }
@@ -120,8 +129,22 @@ struct HomeView: View {
                     }
                 }
             }
+            .sheet(isPresented: $showQueueReview) {
+                QueueReviewSheet(isPresented: $showQueueReview)
+                    .environment(cloudKit)
+            }
             .overlay(alignment: .bottom) {
                 VStack(spacing: 8) {
+                    if let msg = queuedMessage {
+                        Text(msg)
+                            .font(.caption)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .background(Color.orange.opacity(0.9))
+                            .clipShape(Capsule())
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                     if let errorMsg = responseErrorMessage {
                         Text(errorMsg)
                             .font(.caption)
@@ -153,6 +176,7 @@ struct HomeView: View {
                 .padding(.bottom, 20)
                 .animation(.spring(response: 0.35, dampingFraction: 0.8), value: visibleToastGroups.map(\.scriptID))
                 .animation(.spring(response: 0.3, dampingFraction: 0.8), value: responseErrorMessage)
+                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: queuedMessage)
             }
         }
         .fullScreenCover(
@@ -253,21 +277,22 @@ struct HomeView: View {
     @ViewBuilder
     private var machinePickerButton: some View {
         if let machine = activeMachine {
+            let offline = machine.connectionStatus == .offline
             Button {
                 if machines.count > 1 { showMachinePicker = true }
             } label: {
                 HStack(spacing: 4) {
-                    Image(systemName: "desktopcomputer")
+                    Image(systemName: machine.systemImage)
                         .font(.footnote)
                     Text(machine.name)
                         .font(.footnote)
                     if machines.count > 1 {
                         Image(systemName: "chevron.up.chevron.down")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(offline ? .tertiary : .secondary)
                     }
                 }
-                .foregroundStyle(.primary)
+                .foregroundStyle(offline ? .secondary : .primary)
             }
             .disabled(machines.count <= 1)
         }
@@ -380,6 +405,14 @@ struct HomeView: View {
                 if let fresh = try? await cloudKit.fetchMachines(), !fresh.isEmpty {
                     machines = fresh
                 }
+
+                // Detect Mac coming back online — show queue review if needed.
+                let nowOffline = macIsOffline
+                if wasOffline && !nowOffline && !offlineQueue.isEmpty {
+                    showQueueReview = true
+                }
+                wasOffline = nowOffline
+
                 if let machine = activeMachine {
                     let isEnabled = await cloudKit.checkDeviceEnabled(machineID: machine.id)
                     if deviceEnabled != isEnabled { deviceEnabled = isEnabled }
@@ -402,6 +435,24 @@ struct HomeView: View {
 
     private func respondToBlock(_ block: RKBlock, value: String) async {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+
+        // If Mac is offline, queue the response for later review.
+        if macIsOffline {
+            let name = block.scriptName ?? block.scriptID
+            offlineQueue.enqueue(
+                machineID: block.machineID,
+                scriptID: block.scriptID,
+                scriptName: name,
+                blockID: block.id,
+                value: value
+            )
+            withAnimation { queuedMessage = "Queued — Mac is offline" }
+            Task {
+                try? await Task.sleep(for: .seconds(3))
+                withAnimation { queuedMessage = nil }
+            }
+            return
+        }
 
         let shouldRemove: Bool
         switch block.blockType {
@@ -704,9 +755,19 @@ private struct ScriptDetailView: View {
                         payload: payload,
                         onClose: {
                             detailSentResponse = true
-                            dismissedDetailBlockID = block.id
+                            let closedID = block.id
+                            dismissedDetailBlockID = closedID
                             Task { await onRespond(block, "dismissed") }
                             isShowingDetail = false
+                            // Safety timer: clear the guard after the script has had time
+                            // to remove the block from CloudKit (~3–5 s). Without this,
+                            // re-tapping the same issue would be permanently blocked.
+                            Task {
+                                try? await Task.sleep(for: .seconds(6))
+                                if dismissedDetailBlockID == closedID {
+                                    dismissedDetailBlockID = nil
+                                }
+                            }
                         },
                         onAction: { value in
                             await onRespond(block, value)
@@ -730,8 +791,12 @@ private struct ScriptDetailView: View {
                 dismissedDetailBlockID = nil
                 isShowingDetail = true
             } else {
-                // Block is gone from CloudKit — safe to forget the dismissed ID.
-                dismissedDetailBlockID = nil
+                // Block gone — could be optimistic removal (before CloudKit confirms)
+                // or the script genuinely cleared it. Do NOT clear dismissedDetailBlockID
+                // here: clearing it now would let burst polling re-push the dismissed block.
+                // The close/swipe-back handlers each start a 6-second safety timer to
+                // clear dismissedDetailBlockID once the script has had time to remove the
+                // block from CloudKit.
                 if isShowingDetail {
                     // Cleared externally (script refreshed, etc.) — pop silently.
                     detailSentResponse = true
@@ -747,8 +812,16 @@ private struct ScriptDetailView: View {
             if !showing && !detailSentResponse {
                 // User swiped back via the system gesture.
                 if let block = pushedDetail {
-                    dismissedDetailBlockID = block.id
+                    let swipedID = block.id
+                    dismissedDetailBlockID = swipedID
                     Task { await onRespond(block, "dismissed") }
+                    // Safety timer: clear guard after script has removed block from CloudKit.
+                    Task {
+                        try? await Task.sleep(for: .seconds(6))
+                        if dismissedDetailBlockID == swipedID {
+                            dismissedDetailBlockID = nil
+                        }
+                    }
                 }
             }
             if !showing {
@@ -931,6 +1004,9 @@ struct SettingsSheetView: View {
 
     @AppStorage("showBlockDebugInfo") private var showDebugInfo: Bool = false
     @State private var machines: [AskMachine] = []
+    @State private var showQueueReview = false
+
+    private var queue: OfflineQueue { .shared }
 
     var body: some View {
         NavigationStack {
@@ -957,6 +1033,28 @@ struct SettingsSheetView: View {
                     }
                 }
 
+                if !queue.isEmpty {
+                    Section {
+                        Button {
+                            showQueueReview = true
+                        } label: {
+                            HStack {
+                                Label("Queued Actions", systemImage: "tray.and.arrow.up")
+                                Spacer()
+                                Text("\(queue.count)")
+                                    .font(.caption)
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 2)
+                                    .background(Color.orange)
+                                    .clipShape(Capsule())
+                            }
+                        }
+                    } footer: {
+                        Text("Actions taken while your Mac was offline. Review before sending.")
+                    }
+                }
+
                 Section("Developer") {
                     Toggle("Show Debug Info on Cards", isOn: $showDebugInfo)
                 }
@@ -972,6 +1070,153 @@ struct SettingsSheetView: View {
             .task {
                 machines = (try? await cloudKit.fetchMachines()) ?? []
             }
+            .sheet(isPresented: $showQueueReview) {
+                QueueReviewSheet(isPresented: $showQueueReview)
+                    .environment(cloudKit)
+            }
         }
+    }
+}
+
+// MARK: - Queue Review Sheet
+
+struct QueueReviewSheet: View {
+    @Environment(iOSCloudKitService.self) private var cloudKit
+    @Binding var isPresented: Bool
+
+    private var queue: OfflineQueue { .shared }
+
+    @State private var sendingIDs: Set<String> = []
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if queue.isEmpty {
+                    ContentUnavailableView(
+                        "No Queued Actions",
+                        systemImage: "tray",
+                        description: Text("Actions you take while your Mac is offline will appear here.")
+                    )
+                } else {
+                    List {
+                        Section {
+                            ForEach(queue.entries) { entry in
+                                QueueEntryRow(entry: entry, isSending: sendingIDs.contains(entry.id)) {
+                                    await sendEntry(entry)
+                                } onDiscard: {
+                                    queue.remove(id: entry.id)
+                                }
+                            }
+                        } footer: {
+                            if let err = errorMessage {
+                                Text(err).foregroundStyle(.red)
+                            }
+                        }
+                    }
+                    .listStyle(.insetGrouped)
+                }
+            }
+            .navigationTitle("Queued Actions")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Discard All", role: .destructive) {
+                        queue.removeAll()
+                        isPresented = false
+                    }
+                    .foregroundStyle(.red)
+                    .disabled(queue.isEmpty)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Send All") {
+                        Task { await sendAll() }
+                    }
+                    .disabled(queue.isEmpty || !sendingIDs.isEmpty)
+                }
+            }
+        }
+    }
+
+    private func sendEntry(_ entry: OfflineQueueEntry) async {
+        sendingIDs.insert(entry.id)
+        do {
+            try await cloudKit.postResponse(
+                blockID: entry.blockID,
+                machineID: entry.machineID,
+                scriptID: entry.scriptID,
+                value: entry.responseValue
+            )
+            queue.remove(id: entry.id)
+        } catch {
+            errorMessage = "Failed to send — check your connection"
+            Task {
+                try? await Task.sleep(for: .seconds(3))
+                errorMessage = nil
+            }
+        }
+        sendingIDs.remove(entry.id)
+        if queue.isEmpty { isPresented = false }
+    }
+
+    private func sendAll() async {
+        let all = queue.entries
+        await withTaskGroup(of: Void.self) { group in
+            for entry in all {
+                group.addTask { await sendEntry(entry) }
+            }
+        }
+    }
+}
+
+private struct QueueEntryRow: View {
+    let entry: OfflineQueueEntry
+    let isSending: Bool
+    let onSend: () async -> Void
+    let onDiscard: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.scriptName)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                HStack(spacing: 4) {
+                    Text(entry.responseValue)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("·")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    Text(entry.queuedAt, style: .relative)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            Spacer()
+            if isSending {
+                ProgressView().controlSize(.small)
+            } else {
+                HStack(spacing: 8) {
+                    Button {
+                        onDiscard()
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(.red)
+
+                    Button("Send") {
+                        Task { await onSend() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+            }
+        }
+        .padding(.vertical, 2)
     }
 }

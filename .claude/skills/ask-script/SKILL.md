@@ -6,6 +6,23 @@ argument-hint: [describe what the script should do]
 
 Create a complete, working Ask script for the system described below. The script must work correctly the first time — follow all patterns exactly.
 
+## Script vault location
+
+Scripts are installed into a **vault directory** that AskMac watches. Two modes:
+
+| Mode | Path | When to use |
+|------|------|-------------|
+| **Prod** | `~/.ask/scripts` | Default; persistent across repo checkouts |
+| **Dev** | `<repo-root>/ask/scripts` | Iterating in this repo |
+
+The active vault path is stored in UserDefaults (`simple.askmac` → `vaultPath`). Use the `/vault-setup` skill to switch between modes.
+
+Example scripts (for reference when building new ones) live in `ask/scripts/` in this repo:
+- `brew-monitor` — monitors Homebrew outdated packages
+- `claudecode-controller` — remote Claude Code session control
+- `github` — GitHub notifications
+- `ollama` — Ollama model status
+
 ## What to build
 
 $ARGUMENTS
@@ -69,10 +86,13 @@ All blocks are emitted via `emit_block`. iOS polls every 5 s. Re-emit the same `
 | `confirmation` | `title`, `body` (monospaced), `options: [string]` | ✅ tapped option |
 | `prompt` | `title`, `placeholder?`, `multiline?` | ✅ submitted text |
 | `chat_prompt` | `title`, `context?` (last reply bubble), `placeholder?` | ✅ submitted text |
+| `picker` | `title`, `options: [string]`, `selected?` | ✅ selected value — renders as native dropdown + Select button |
 | `status` | `label`, `detail?`, `icon?` (SF Symbol), `color` (green/blue/orange/red/yellow) | ❌ |
 | `alert` | `title`, `body`, `icon?` | ❌ (passive, not persisted) |
 | `info_card` | `title`, `pairs: [{key, value}]` | ❌ |
 | `icon_card` | `title`, `subtitle?` | ❌ (use at startup for idle state) |
+| `countdown` | `label`, `time` (ISO 8601 UTC) | ❌ — renders live "label in Xh Ym" on tile and detail |
+| `tile` | `label`, `status_color?`, `body?`, `action_required?` | ❌ — drives home-screen tile only, not shown in detail |
 
 **Block ID conventions:**
 - Use stable, meaningful strings: `"my-script-status"`, `"my-script-confirm"`
@@ -160,12 +180,19 @@ class MCPClient:
     # -- Stdin read loop --
 
     async def read_loop(self):
-        """Reads JSON-RPC messages from stdin and dispatches them."""
+        """Reads JSON-RPC messages from stdin and dispatches them.
+        Uses run_in_executor so the blocking readline() doesn't stall the event loop.
+        connect_read_pipe is NOT used — it only delivers the first message on macOS."""
         loop = asyncio.get_running_loop()
-        reader = asyncio.StreamReader()
-        await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
-        async for raw in reader:
-            line = raw.decode().strip()
+        stdin_buf = sys.stdin.buffer
+        while True:
+            try:
+                raw = await loop.run_in_executor(None, stdin_buf.readline)
+            except Exception:
+                break
+            if not raw:   # EOF — daemon closed the pipe
+                break
+            line = raw.decode('utf-8', errors='replace').strip()
             if not line:
                 continue
             try:
@@ -292,12 +319,13 @@ async def main():
         print('[my-script] running in test mode', file=sys.stderr)
 
     mcp = MCPClient()
-    await mcp.initialize(client_name='my-script')
 
-    await asyncio.gather(
-        mcp.read_loop(),
-        run(mcp, test_mode=test_mode),
-    )
+    # read_loop MUST be running before initialize() so the response from AskMac
+    # can be dispatched. Using gather() or awaiting initialize() first causes a
+    # deadlock because the response never gets dispatched.
+    asyncio.create_task(mcp.read_loop())
+    await mcp.initialize(client_name='my-script')
+    await run(mcp, test_mode=test_mode)
 
 if __name__ == '__main__':
     asyncio.run(main())
@@ -504,7 +532,20 @@ If you see `code object is not signed at all`, the binary will be blocked at lau
 
 4. **Callbacks before emit** — Call `set_callback` / `setCallback` before `emit_block`. If CloudKit is fast and the user responds before the callback is registered, the response is lost.
 
-5. **Non-blocking stdin read** — Use the GCD-based `stdinLines` (Swift) or `connect_read_pipe` (Python) pattern. Do not use `readLine()` or `sys.stdin.readline()` — they block the event loop and prevent all async work.
+5. **Non-blocking stdin read** — Python: use `run_in_executor(None, sys.stdin.buffer.readline)` in a loop. **Never use `connect_read_pipe`** — it only delivers the first message on macOS and silently drops all subsequent ones. Swift: use the GCD-based `stdinLines` pattern. Do not use `readLine()` directly — it blocks the event loop.
+
+6. **read_loop before initialize** — Always `asyncio.create_task(mcp.read_loop())` before `await mcp.initialize()`. If `initialize()` is awaited first, its response can never be dispatched and the script deadlocks.
+
+7. **Tile blocks need a TTL + heartbeat** — If you emit a `tile` block, give it a short TTL (e.g. `ttl=600`) and refresh it every 5 minutes with a background task. Without this, the tile disappears from the iOS home screen after the TTL expires. Example:
+
+```python
+async def _heartbeat(mcp):
+    while True:
+        await asyncio.sleep(300)
+        await emit_tile(mcp)   # re-emit with same ttl=600
+
+asyncio.create_task(_heartbeat(mcp))  # start unconditionally, before try/except
+```
 
 6. **Scripts run forever** — The daemon expects the process to stay alive. Design a loop with `await asyncio.sleep(interval)` / `try await Task.sleep(...)`. Exit only on unrecoverable errors.
 
