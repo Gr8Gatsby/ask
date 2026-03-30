@@ -20,8 +20,10 @@ DerivedData/
 .build/
 .swiftpm/
 
-# Claude Code project files
-.claude/
+# Claude Code — ignore local config/state but keep shared skills
+.claude/settings.local.json
+.claude/settings.json
+.claude/*.json
 
 # Credentials / secrets
 *.p8
