@@ -53,8 +53,31 @@ pkill -x AskMac && open -a AskMac
 3. Print the path that was set so the user can confirm it
 4. Remind the user to restart AskMac if needed
 
+## Installing example scripts
+
+Example scripts live in `ask/scripts/` in this repo. To install them, copy the desired script folder into the vault:
+
+```bash
+cp -r ask/scripts/github ~/.ask/scripts/
+cp -r ask/scripts/ollama ~/.ask/scripts/
+cp -r ask/scripts/claudecode-controller ~/.ask/scripts/
+cp -r ask/scripts/brew-monitor ~/.ask/scripts/
+```
+
+### Swift scripts require a rebuild
+
+`brew-monitor` is the only Swift script. Its compiled binary (`brew-monitor-bin`) was signed on the original developer's machine — macOS will block it on any other Mac. After copying, rebuild and re-sign it:
+
+```bash
+cd ~/.ask/scripts/brew-monitor
+./build.sh
+```
+
+This requires Swift (comes with Xcode or `xcode-select --install`). The build script compiles a release binary and ad-hoc signs it with `codesign --sign -` — no Apple Developer account needed.
+
+All other scripts (`github`, `ollama`, `claudecode-controller`) are Python and run as-is.
+
 ## Notes
 
 - Scripts in the vault must have a `manifest.json` to be auto-discovered
-- Example scripts live in `ask/scripts/` in this repo — copy them to your vault to use them
 - The prod vault (`~/.ask/scripts`) persists across repo checkouts; the dev vault is repo-relative
