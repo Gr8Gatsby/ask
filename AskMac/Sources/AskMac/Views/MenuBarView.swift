@@ -61,14 +61,18 @@ struct MenuBarView: View {
                     .font(.subheadline)
                     .foregroundStyle(.orange)
             } else {
-                Label("Ready", systemImage: "checkmark.circle")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            if let lastBeat = heartbeat.lastHeartbeat {
-                Text("Last sync \(lastBeat.formatted(.relative(presentation: .named)))")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                HStack(spacing: 4) {
+                    Image(systemName: "icloud")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("iCloud sync")
+                        .foregroundStyle(.secondary)
+                    if let lastBeat = heartbeat.lastHeartbeat {
+                        Text("·").foregroundStyle(.tertiary)
+                        Text(lastBeat, style: .relative).foregroundStyle(.tertiary)
+                    }
+                }
+                .font(.subheadline)
             }
         }
     }
