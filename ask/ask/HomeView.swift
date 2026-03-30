@@ -161,7 +161,7 @@ struct HomeView: View {
                                 selectedScriptID = group.scriptID
                             }, onDismiss: {
                                 let anim = SwiftUI.Animation.spring(response: 0.3, dampingFraction: 0.8)
-                                withAnimation(anim) {
+                                _ = withAnimation(anim) {
                                     dismissedToastScriptIDs.insert(group.scriptID)
                                 }
                             })
@@ -199,7 +199,7 @@ struct HomeView: View {
                     },
                     onToastDismiss: { scriptID in
                         let anim = SwiftUI.Animation.spring(response: 0.3, dampingFraction: 0.8)
-                        withAnimation(anim) { dismissedToastScriptIDs.insert(scriptID) }
+                        _ = withAnimation(anim) { dismissedToastScriptIDs.insert(scriptID) }
                     }
                 )
             }
@@ -446,10 +446,10 @@ struct HomeView: View {
                 blockID: block.id,
                 value: value
             )
-            withAnimation { queuedMessage = "Queued — Mac is offline" }
+            withAnimation(.default) { queuedMessage = "Queued — Mac is offline" }
             Task {
                 try? await Task.sleep(for: .seconds(3))
-                withAnimation { queuedMessage = nil }
+                withAnimation(.default) { queuedMessage = nil }
             }
             return
         }
@@ -486,10 +486,10 @@ struct HomeView: View {
                 }
             }
             burstPollingUntil = .distantPast
-            withAnimation { responseErrorMessage = "Couldn't send — check your connection" }
+            withAnimation(.default) { responseErrorMessage = "Couldn't send — check your connection" }
             Task {
                 try? await Task.sleep(for: .seconds(3))
-                withAnimation { responseErrorMessage = nil }
+                withAnimation(.default) { responseErrorMessage = nil }
             }
         }
     }
@@ -722,9 +722,9 @@ private struct ScriptDetailView: View {
                     List {
                         ForEach(mainBlocks) { block in
                             Section {
-                                BlockView(block: block, isWaiting: isWaiting) { value in
+                                BlockView(block: block, onRespond: { value in
                                     await onRespond(block, value)
-                                }
+                                }, isWaiting: isWaiting)
                             }
                         }
                     }

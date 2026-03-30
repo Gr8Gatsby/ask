@@ -502,7 +502,7 @@ struct ChatPromptBlockView: View {
         .padding(.vertical, 4)
         .onChange(of: payload.context) { _, _ in
             // Claude responded with new context — clear the sent bubble
-            withAnimation { sentMessage = "" }
+            withAnimation(.default) { sentMessage = "" }
         }
     }
 
@@ -510,7 +510,7 @@ struct ChatPromptBlockView: View {
         let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !answer.isEmpty, !responding else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        withAnimation { sentMessage = answer }
+        withAnimation(.default) { sentMessage = answer }
         text = ""
         Task {
             responding = true

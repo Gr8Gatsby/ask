@@ -192,7 +192,7 @@ struct MessagesView: View {
             }
         } catch {
             // Keep message visible but mark as failed
-            withAnimation {
+            withAnimation(.default) {
                 if let idx = messages.firstIndex(where: { $0.id == messageID }) {
                     messages[idx].status = .failed
                 }
@@ -299,7 +299,7 @@ private struct MessageBubble: View {
                 withAnimation(.easeOut(duration: 0.4)) { showStatus = false }
             }
         case .failed:
-            withAnimation { showStatus = true }
+            withAnimation(.default) { showStatus = true }
         }
     }
 
