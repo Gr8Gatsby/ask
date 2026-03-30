@@ -388,6 +388,15 @@ final class iOSCloudKitService {
         }
     }
 
+    /// Returns false if the Mac has disabled this device. Defaults to true (enabled) if record is absent.
+    func checkDeviceEnabled(machineID: String) async -> Bool {
+        let recordName = "device-\(Self.stableDeviceID)-\(machineID)"
+        let recordID = CKRecord.ID(recordName: recordName)
+        guard let record = try? await database.record(for: recordID) else { return true }
+        guard let enabledInt = record[CKSchema.Device.enabled] as? Int64 else { return true }
+        return enabledInt != 0
+    }
+
     private static var stableDeviceID: String {
         let key = "askDeviceID"
         if let existing = UserDefaults.standard.string(forKey: key) { return existing }

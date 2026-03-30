@@ -26,6 +26,7 @@ enum CKSchema {
         static let deviceName = "deviceName"
         static let machineID = "machineID"
         static let lastSeen = "lastSeen"
+        static let enabled = "enabled"
     }
 
     enum RKBlock {

@@ -46,23 +46,7 @@ private struct GeneralSettingsTab: View {
                 Button("Change Vault Directory…") { showVaultPicker = true }
             }
 
-            if !settings.blockedDevices.isEmpty {
-                Section("Blocked Devices") {
-                    ForEach(settings.blockedDevices) { device in
-                        HStack {
-                            Image(systemName: "iphone.slash")
-                                .foregroundStyle(.secondary)
-                            Text(device.deviceName)
-                                .font(.subheadline)
-                            Spacer()
-                            Button("Unblock") {
-                                settings.unblockDevice(id: device.deviceID)
-                            }
-                            .buttonStyle(.borderless)
-                        }
-                    }
-                }
-            }
+
         }
         .formStyle(.grouped)
         .frame(minHeight: 240)

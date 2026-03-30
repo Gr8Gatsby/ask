@@ -1,14 +1,6 @@
 import Foundation
 import Observation
 
-// MARK: - Blocked device (stored locally in UserDefaults)
-
-struct BlockedDevice: Codable, Sendable, Identifiable {
-    var id: String { deviceID }
-    let deviceID: String
-    let deviceName: String
-}
-
 // MARK: - Agent configuration (stored locally in UserDefaults)
 
 struct AgentConfig: Codable, Sendable, Identifiable {
@@ -72,7 +64,6 @@ final class AppSettings {
         static let vaultPath = "vaultPath"
         static let agents = "agents"
         static let disabledScripts = "disabledScripts"
-        static let blockedDevices = "blockedDevices"
     }
 
     private let defaults: UserDefaults
@@ -96,14 +87,6 @@ final class AppSettings {
 
     var disabledScripts: Set<String> {
         didSet { defaults.set(Array(disabledScripts), forKey: Key.disabledScripts) }
-    }
-
-    var blockedDevices: [BlockedDevice] {
-        didSet { saveBlockedDevices() }
-    }
-
-    var blockedDeviceIDs: Set<String> {
-        Set(blockedDevices.map { $0.deviceID })
     }
 
     var isConfigured: Bool {
@@ -144,17 +127,6 @@ final class AppSettings {
 
         let storedDisabled = defaults.stringArray(forKey: Key.disabledScripts) ?? []
         self.disabledScripts = Set(storedDisabled)
-
-        self.blockedDevices = Self.loadBlockedDevices(from: defaults)
-    }
-
-    func blockDevice(id: String, name: String) {
-        guard !blockedDevices.contains(where: { $0.deviceID == id }) else { return }
-        blockedDevices.append(BlockedDevice(deviceID: id, deviceName: name))
-    }
-
-    func unblockDevice(id: String) {
-        blockedDevices.removeAll { $0.deviceID == id }
     }
 
     func setScriptEnabled(_ id: String, enabled: Bool) {
@@ -200,16 +172,4 @@ final class AppSettings {
         return decoded
     }
 
-    private func saveBlockedDevices() {
-        guard let data = try? JSONEncoder().encode(blockedDevices) else { return }
-        defaults.set(data, forKey: Key.blockedDevices)
-    }
-
-    private static func loadBlockedDevices(from defaults: UserDefaults) -> [BlockedDevice] {
-        guard
-            let data = defaults.data(forKey: Key.blockedDevices),
-            let decoded = try? JSONDecoder().decode([BlockedDevice].self, from: data)
-        else { return [] }
-        return decoded
-    }
 }

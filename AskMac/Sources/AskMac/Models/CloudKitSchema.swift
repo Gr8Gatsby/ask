@@ -26,6 +26,7 @@ enum CKSchema {
         static let deviceName = "deviceName"
         static let machineID = "machineID"
         static let lastSeen = "lastSeen"
+        static let enabled = "enabled"
     }
 
     enum RKBlock {
@@ -368,6 +369,7 @@ struct DeviceRecord: Sendable {
     let deviceName: String
     let machineID: String
     let lastSeen: Date
+    var enabled: Bool
 
     var recordName: String { "device-\(deviceID)-\(machineID)" }
 
@@ -382,6 +384,9 @@ struct DeviceRecord: Sendable {
         self.deviceName = deviceName
         self.machineID = machineID
         self.lastSeen = lastSeen
+        // Default true when field is absent (new records from iOS don't set it)
+        let enabledInt = record[CKSchema.Device.enabled] as? Int64 ?? 1
+        self.enabled = enabledInt != 0
     }
 }
 

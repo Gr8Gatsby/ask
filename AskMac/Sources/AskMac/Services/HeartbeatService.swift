@@ -62,27 +62,19 @@ final class HeartbeatService {
         }
     }
 
-    func revokeDevice(_ device: DeviceRecord) {
-        settings.blockDevice(id: device.deviceID, name: device.deviceName)
-        connectedDevices.removeAll { $0.deviceID == device.deviceID }
-        Task { try? await cloudKit.deleteDevice(recordName: device.recordName) }
+    func setDeviceEnabled(_ device: DeviceRecord, enabled: Bool) {
+        if let idx = connectedDevices.firstIndex(where: { $0.deviceID == device.deviceID }) {
+            connectedDevices[idx].enabled = enabled
+        }
+        Task { try? await cloudKit.setDeviceEnabled(recordName: device.recordName, enabled: enabled) }
     }
 
     private func refreshDevices() async {
         guard let devices = try? await cloudKit.fetchDevices(machineID: settings.machineID) else { return }
         let cutoff = Date().addingTimeInterval(-3600) // 1 hour
-        let blocked = settings.blockedDeviceIDs
-        var visible: [DeviceRecord] = []
-
-        for device in devices {
-            if blocked.contains(device.deviceID) {
-                Task { try? await cloudKit.deleteDevice(recordName: device.recordName) }
-            } else if device.lastSeen > cutoff {
-                visible.append(device)
-            }
-        }
-
-        connectedDevices = visible.sorted { $0.deviceName < $1.deviceName }
+        connectedDevices = devices
+            .filter { $0.lastSeen > cutoff }
+            .sorted { $0.deviceName < $1.deviceName }
     }
 
     private func makeMachineRecord(status: MachineStatus) -> MachineRecord {

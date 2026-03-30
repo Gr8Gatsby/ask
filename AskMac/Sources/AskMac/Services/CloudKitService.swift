@@ -294,6 +294,14 @@ final class CloudKitService {
         try await database.deleteRecord(withID: recordID)
     }
 
+    /// Sets the enabled flag on a Device record. Does nothing if the record doesn't exist yet.
+    func setDeviceEnabled(recordName: String, enabled: Bool) async throws {
+        let recordID = CKRecord.ID(recordName: recordName)
+        guard let record = try? await database.record(for: recordID) else { return }
+        record[CKSchema.Device.enabled] = Int64(enabled ? 1 : 0)
+        _ = try await database.save(record)
+    }
+
     // MARK: - RKBlocks
 
     /// Saves (creates or replaces) an RKBlock record. The blockID is used as the record name.

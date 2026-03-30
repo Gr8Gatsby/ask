@@ -94,10 +94,8 @@ struct MenuBarView: View {
                     }
                     Spacer()
                     Toggle("", isOn: Binding(
-                        get: { true },
-                        set: { enabled in
-                            if !enabled { heartbeat.revokeDevice(device) }
-                        }
+                        get: { device.enabled },
+                        set: { heartbeat.setDeviceEnabled(device, enabled: $0) }
                     ))
                     .toggleStyle(.switch)
                     .controlSize(.mini)
@@ -109,6 +107,21 @@ struct MenuBarView: View {
 
     private var scriptsSection: some View {
         VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Scripts")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Button {
+                    scriptManager.reload()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Reload Scripts")
+            }
             if scriptManager.scripts.isEmpty {
                 Text("No scripts configured")
                     .font(.caption)
