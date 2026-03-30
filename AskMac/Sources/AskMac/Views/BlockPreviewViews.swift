@@ -22,6 +22,8 @@ struct BlockPreviewView: View {
             case "alert":        AlertPreview(payload: payload)
             case "prompt", "chat_prompt": PromptPreview(payload: payload, onRespond: onRespond)
             case "countdown":    CountdownPreview(payload: payload)
+            case "list":         ListPreview(payload: payload)
+            case "detail":       DetailPreview(payload: payload)
             default:             EmptyView()
             }
         }
@@ -245,6 +247,84 @@ private struct PromptPreview: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.secondary.opacity(0.1))
                     .clipShape(RoundedRectangle(cornerRadius: 5))
+            }
+        }
+        .padding(8)
+        .background(Color.secondary.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+}
+
+// MARK: - List
+
+private struct ListPreview: View {
+    let payload: [String: Any]
+
+    private var items: [(id: String, label: String, subtitle: String?)] {
+        guard let raw = payload["items"] as? [[String: Any]] else { return [] }
+        return raw.compactMap { dict in
+            guard let id = dict["id"] as? String, let label = dict["label"] as? String else { return nil }
+            return (id, label, dict["subtitle"] as? String)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let title = payload["title"] as? String, !title.isEmpty {
+                Text(title).font(.caption).fontWeight(.medium)
+                    .padding(.horizontal, 8).padding(.top, 7).padding(.bottom, 5)
+            }
+            ForEach(Array(items.prefix(5).enumerated()), id: \.element.id) { idx, item in
+                HStack {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(item.label).font(.caption).lineLimit(2)
+                        if let sub = item.subtitle {
+                            Text(sub).font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 8).padding(.vertical, 5)
+                if idx < min(items.count, 5) - 1 {
+                    Divider().padding(.leading, 8)
+                }
+            }
+            if items.count > 5 {
+                Text("+ \(items.count - 5) more")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+            }
+        }
+        .background(Color.secondary.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+}
+
+// MARK: - Detail
+
+private struct DetailPreview: View {
+    let payload: [String: Any]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if let title = payload["title"] as? String, !title.isEmpty {
+                Text(title).font(.subheadline).fontWeight(.medium)
+            }
+            if let body = payload["body"] as? String, !body.isEmpty {
+                Text(body).font(.caption).foregroundStyle(.secondary).lineLimit(5)
+            }
+            if let actions = payload["actions"] as? [String], !actions.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(actions, id: \.self) { action in
+                        Text(action)
+                            .font(.caption2)
+                            .padding(.horizontal, 7).padding(.vertical, 3)
+                            .background(Color.accentColor.opacity(0.1))
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
+                    Spacer()
+                }
             }
         }
         .padding(8)

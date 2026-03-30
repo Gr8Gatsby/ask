@@ -428,4 +428,5 @@ AskSession status updated to "active"; iOS view dismisses; session list refreshe
 | 2026-03-30 | Connected Devices: Mac menu bar popover shows which iPhones have connected in the last hour. User can revoke a device (blocks it, deletes its presence record). Blocked devices manageable in Settings > General. iOS writes device heartbeat per Mac on app load (throttled to 30 min). |
 | 2026-03-30 | Countdown block type: scripts emit `{ label, time }` payloads; iOS renders a live-updating relative countdown ("Next sync in about 3 hours") refreshing every 30 s. brew-monitor emits a countdown block after each check cycle. |
 | 2026-03-30 | Reload Scripts button in Settings > Actions toolbar: rescans the vault directory and starts any newly discovered scripts without restarting the app. |
+| 2026-03-30 | New block types: `list` (scrollable tappable rows, responds with row id) and `detail` (scrollable body up to 320pt with action buttons). GitHub script updated to use these for issue browsing and detail view. |
 | 2026-03-30 | brew-monitor: add "Sync Now" confirmation block that triggers an immediate check without waiting for the 4-hour interval. |

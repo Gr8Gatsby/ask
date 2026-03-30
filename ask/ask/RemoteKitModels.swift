@@ -14,6 +14,8 @@ enum RKBlockType: String, Codable {
     case tile   // drives home-screen tile display; not shown in detail view
     case countdown
     case picker
+    case list
+    case detail
 }
 
 // MARK: - Block payloads
@@ -79,6 +81,22 @@ struct RKPickerPayload: Codable {
     let selected: String?   // pre-selected value, if any
 }
 
+struct RKListPayload: Codable {
+    struct Item: Codable, Identifiable {
+        let id: String
+        let label: String
+        let subtitle: String?
+    }
+    let title: String?
+    let items: [Item]
+}
+
+struct RKDetailPayload: Codable {
+    let title: String
+    let body: String
+    let actions: [String]?
+}
+
 struct RKInfoCardPayload: Codable {
     struct Pair: Codable {
         let key: String
@@ -105,9 +123,8 @@ struct RKBlock: Identifiable {
 
     var requiresResponse: Bool {
         switch blockType {
-        case .confirmation, .prompt, .chatPrompt: return true
+        case .confirmation, .prompt, .chatPrompt, .picker, .list, .detail: return true
         case .alert, .status, .infoCard, .iconCard, .tile, .countdown: return false
-        case .picker: return true
         }
     }
 
@@ -160,6 +177,16 @@ struct RKBlock: Identifiable {
     var pickerPayload: RKPickerPayload? {
         guard blockType == .picker else { return nil }
         return try? JSONDecoder().decode(RKPickerPayload.self, from: payloadData)
+    }
+
+    var listPayload: RKListPayload? {
+        guard blockType == .list else { return nil }
+        return try? JSONDecoder().decode(RKListPayload.self, from: payloadData)
+    }
+
+    var detailPayload: RKDetailPayload? {
+        guard blockType == .detail else { return nil }
+        return try? JSONDecoder().decode(RKDetailPayload.self, from: payloadData)
     }
 
     /// payloadJSON with UTF-16 surrogate pairs decoded to real Unicode scalars, as UTF-8 Data.

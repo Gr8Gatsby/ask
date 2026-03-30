@@ -173,6 +173,14 @@ struct BlockView: View {
             if let p = block.countdownPayload {
                 CountdownBlockView(payload: p)
             }
+        case .list:
+            if let p = block.listPayload {
+                ListBlockView(payload: p, onRespond: onRespond)
+            }
+        case .detail:
+            if let p = block.detailPayload {
+                DetailBlockView(payload: p, onRespond: onRespond)
+            }
         }
     }
 
@@ -675,6 +683,147 @@ struct PickerBlockView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+// MARK: - List
+
+struct ListBlockView: View {
+    let payload: RKListPayload
+    let onRespond: (String) async -> Void
+
+    @State private var tappedID: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let title = payload.title, !title.isEmpty {
+                EmojiText(text: title,
+                          uiFont: .preferredFont(forTextStyle: .subheadline).withWeight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
+                    .padding(.bottom, 8)
+            }
+            ForEach(Array(payload.items.enumerated()), id: \.element.id) { idx, item in
+                Button {
+                    guard tappedID == nil else { return }
+                    tappedID = item.id
+                    Task {
+                        await onRespond(item.id)
+                        tappedID = nil
+                    }
+                } label: {
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            EmojiText(text: item.label,
+                                      uiFont: .preferredFont(forTextStyle: .subheadline))
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if let subtitle = item.subtitle, !subtitle.isEmpty {
+                                EmojiText(text: subtitle,
+                                          uiFont: .preferredFont(forTextStyle: .caption1),
+                                          color: .secondaryLabel)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        if tappedID == item.id {
+                            ProgressView().scaleEffect(0.7).tint(Color.accentColor)
+                        } else {
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(Color(.tertiaryLabel))
+                        }
+                    }
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(tappedID == item.id
+                                ? Color.accentColor.opacity(0.08)
+                                : Color(.secondarySystemGroupedBackground))
+                }
+                .buttonStyle(.plain)
+                .animation(.easeInOut(duration: 0.15), value: tappedID)
+
+                if idx < payload.items.count - 1 {
+                    Divider().padding(.leading, 12)
+                }
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .stroke(Color.secondary.opacity(0.2), lineWidth: 0.5))
+        .padding(.vertical, 4)
+    }
+}
+
+// MARK: - Detail
+
+struct DetailBlockView: View {
+    let payload: RKDetailPayload
+    let onRespond: (String) async -> Void
+
+    @State private var responding = false
+    @State private var selectedAction: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            EmojiText(text: payload.title,
+                      uiFont: .preferredFont(forTextStyle: .subheadline).withWeight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+
+            ScrollView {
+                Text(payload.body)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .padding(.bottom, 2)
+            }
+            .frame(maxHeight: 320)
+
+            if let actions = payload.actions, !actions.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(actions, id: \.self) { action in
+                        actionButton(action)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func actionButton(_ action: String) -> some View {
+        let isSelected = selectedAction == action
+        return Button {
+            guard !responding else { return }
+            selectedAction = action
+            Task {
+                responding = true
+                await onRespond(action)
+                responding = false
+            }
+        } label: {
+            ZStack {
+                if responding && isSelected {
+                    ProgressView().tint(Color.accentColor)
+                } else {
+                    EmojiText(text: action,
+                              uiFont: .preferredFont(forTextStyle: .body).withWeight(.semibold),
+                              color: UIColor(Color.accentColor),
+                              alignment: .center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 36)
+            .padding(.vertical, 8)
+            .background(isSelected ? Color.accentColor.opacity(0.2) : Color.accentColor.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .disabled(responding)
+        .opacity(responding && !isSelected ? 0.4 : 1)
+        .animation(.easeInOut(duration: 0.15), value: responding)
     }
 }
 
