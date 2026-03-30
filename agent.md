@@ -169,11 +169,35 @@ Reserve `.ultraThinMaterial` for secondary chrome that should recede. Use the sy
 
 ---
 
+## Ask Block System
+
+This project uses a block-based UI system where Mac scripts push UI cards to the iOS app via CloudKit. When writing scripts or modifying block rendering:
+
+- All supported block types, their payloads, visual design, and lifecycle are documented in **[design.md](design.md)**.
+- Block types: `confirmation`, `alert`, `status`, `prompt`, `chat_prompt`, `info_card`, `icon_card`.
+- Script identity (name, icon) is embedded in every block record — iOS section headers derive from this, not from hardcoded mappings.
+- Script icons are transmitted as raw SVG strings (`scriptIconSVG`) and rendered on iOS via `SVGImageView` (`WKWebView`-backed). SF Symbol (`scriptIcon`) is the fallback.
+- `UIViewRepresentable` wrapping `WKWebView` is the **only** acceptable UIKit usage in this codebase — it exists solely for SVG rendering, which has no native SwiftUI equivalent.
+- When creating a new Ask script, use the `/ask-script` skill (`.claude/skills/ask-script/SKILL.md`) — it contains the complete MCP protocol, all block types, working MCPClient implementations for Python and Swift, code signing requirements, and test mode patterns.
+
+---
+
 ## Key WWDC 2025 References
 
 - **Meet Liquid Glass** — https://developer.apple.com/videos/play/wwdc2025/219
 - **Get to know the new design system** — https://developer.apple.com/videos/play/wwdc2025/356
 - **Build a SwiftUI app with the new design** — https://developer.apple.com/videos/play/wwdc2025/323
+
+---
+
+## Swift Language Version
+
+- **Always target the latest Swift language version.** Write code that compiles cleanly in Swift 6 strict concurrency mode with zero warnings.
+- Use `nonisolated` explicitly on methods and types that do not require actor isolation so the compiler does not infer incorrect isolation.
+- Avoid `FileHandle.readabilityHandler` and `FileHandle.availableData` — they are `@MainActor`-annotated and cause isolation warnings. Use `DispatchSource.makeReadSource(fileDescriptor:queue:)` with raw `Darwin.read()` for pipe I/O instead.
+- For mutable state shared across `DispatchSource` event handlers, define a local `final class … : @unchecked Sendable` inside the enclosing function so the compiler cannot infer `@MainActor` from surrounding context.
+- Use `async`/`await` and structured concurrency (`TaskGroup`, `withTaskGroup`) over callback-based APIs wherever possible.
+- Never suppress warnings with `#warning` or by downgrading the Swift language version — fix the underlying concurrency model instead.
 
 ---
 
