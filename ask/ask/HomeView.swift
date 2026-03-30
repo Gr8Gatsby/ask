@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import CloudKit
+import UserNotifications
 
 // MARK: - Script group model
 
@@ -59,6 +60,7 @@ struct HomeView: View {
     @State private var selectedScriptID: String?
     @State private var pollTask: Task<Void, Never>?
     @State private var lastHeartbeatAt: Date = .distantPast
+    @State private var notifiedActionScriptIDs: Set<String> = []
 
     private var activeMachine: AskMachine? {
         if let id = activeMachineID { return machines.first { $0.id == id } }
@@ -272,6 +274,28 @@ struct HomeView: View {
             lastHeartbeatAt = Date()
         }
         hasLoaded = true
+        notifyNewActionGroups()
+    }
+
+    private func notifyNewActionGroups() {
+        let currentActionIDs = Set(actionGroups.map { $0.scriptID })
+        let newIDs = currentActionIDs.subtracting(notifiedActionScriptIDs)
+        // Clear IDs for scripts that are no longer action-required
+        notifiedActionScriptIDs = notifiedActionScriptIDs.intersection(currentActionIDs)
+
+        for group in actionGroups where newIDs.contains(group.scriptID) {
+            notifiedActionScriptIDs.insert(group.scriptID)
+            let content = UNMutableNotificationContent()
+            content.title = group.name
+            content.body = group.actionTitle ?? "Action required"
+            content.sound = .default
+            let request = UNNotificationRequest(
+                identifier: "ask-action-\(group.scriptID)",
+                content: content,
+                trigger: nil  // deliver immediately
+            )
+            UNUserNotificationCenter.current().add(request)
+        }
     }
 
     private func startPolling() {
