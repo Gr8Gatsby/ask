@@ -8,8 +8,6 @@ struct MenuBarView: View {
 
     @Environment(\.openWindow) private var openWindow
 
-    @State private var deviceToRevoke: DeviceRecord?
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
@@ -26,24 +24,6 @@ struct MenuBarView: View {
         }
         .padding(12)
         .frame(width: 260)
-        .alert(revokeAlertTitle, isPresented: Binding(
-            get: { deviceToRevoke != nil },
-            set: { if !$0 { deviceToRevoke = nil } }
-        )) {
-            Button("Revoke", role: .destructive) {
-                if let device = deviceToRevoke {
-                    heartbeat.revokeDevice(device)
-                }
-                deviceToRevoke = nil
-            }
-            Button("Cancel", role: .cancel) { deviceToRevoke = nil }
-        } message: {
-            Text("This device will be blocked from controlling this Mac.")
-        }
-    }
-
-    private var revokeAlertTitle: String {
-        deviceToRevoke.map { "Revoke \($0.deviceName)?" } ?? "Revoke device?"
     }
 
     private var header: some View {
@@ -109,10 +89,15 @@ struct MenuBarView: View {
                             .foregroundStyle(.tertiary)
                     }
                     Spacer()
-                    Button("Revoke") { deviceToRevoke = device }
-                        .buttonStyle(.plain)
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                    Toggle("", isOn: Binding(
+                        get: { true },
+                        set: { enabled in
+                            if !enabled { heartbeat.revokeDevice(device) }
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .labelsHidden()
                 }
             }
         }
