@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import CoreText
+import WebKit
 
 // MARK: - Emoji-safe text
 
@@ -54,6 +55,41 @@ private struct EmojiText: UIViewRepresentable {
     }
 }
 
+// MARK: - SVG rendering
+
+/// Renders an inline SVG string using a transparent WKWebView.
+/// The SVG scales to fill the available frame exactly.
+struct SVGImageView: UIViewRepresentable {
+    let svgString: String
+
+    func makeUIView(context: Context) -> WKWebView {
+        let webView = WKWebView()
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.isScrollEnabled = false
+        webView.scrollView.bounces = false
+        return webView
+    }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        let html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        html,body{width:100%;height:100%;background:transparent}
+        svg{width:100%;height:100%;display:block}
+        </style>
+        </head>
+        <body>\(svgString)</body>
+        </html>
+        """
+        webView.loadHTMLString(html, baseURL: nil)
+    }
+}
+
 // MARK: - Block dispatcher
 
 private extension UIFont {
@@ -69,22 +105,25 @@ struct BlockView: View {
     let block: RKBlock
     let onRespond: (String) async -> Void
 
+    @AppStorage("showBlockDebugInfo") private var showDebugInfo: Bool = false
     @State private var showDebug = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Spacer()
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { showDebug.toggle() }
-                } label: {
-                    Image(systemName: showDebug ? "xmark.circle" : "info.circle")
-                        .foregroundStyle(.primary)
+            if showDebugInfo {
+                HStack {
+                    Spacer()
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { showDebug.toggle() }
+                    } label: {
+                        Image(systemName: showDebug ? "xmark.circle" : "info.circle")
+                            .foregroundStyle(.primary)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
 
-            if showDebug {
+            if showDebugInfo && showDebug {
                 debugView
             } else {
                 blockContent
@@ -119,6 +158,12 @@ struct BlockView: View {
             if let p = block.chatPromptPayload {
                 ChatPromptBlockView(payload: p, onRespond: onRespond)
             }
+        case .iconCard:
+            if let p = block.iconCardPayload {
+                IconCardBlockView(payload: p, svgString: block.scriptIconSVG, iconData: block.scriptIconData, icon: block.scriptIcon)
+            }
+        case .tile:
+            EmptyView() // tile blocks drive the home-screen tile; not rendered in detail view
         }
     }
 
@@ -157,6 +202,7 @@ struct ConfirmationBlockView: View {
     let onRespond: (String) async -> Void
 
     @State private var responding = false
+    @State private var responded = false
     @State private var selectedOption: String?
 
     var body: some View {
@@ -172,7 +218,18 @@ struct ConfirmationBlockView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            if payload.options.count <= 2 {
+            if responded {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("Sent")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.vertical, 2)
+            } else if payload.options.count <= 2 {
                 HStack(spacing: 8) {
                     ForEach(payload.options, id: \.self) { option in
                         optionButton(option)
@@ -193,7 +250,7 @@ struct ConfirmationBlockView: View {
             Task {
                 responding = true
                 await onRespond(option)
-                responding = false
+                responded = true
             }
         } label: {
             ZStack {
@@ -229,7 +286,7 @@ struct ConfirmationBlockView: View {
                     Task {
                         responding = true
                         await onRespond(option)
-                        responding = false
+                        responded = true
                     }
                 } label: {
                     HStack(spacing: 12) {
@@ -492,6 +549,51 @@ struct ChatPromptBlockView: View {
             responding = true
             await onRespond(answer)
             responding = false
+        }
+    }
+}
+
+// MARK: - IconCard
+
+struct IconCardBlockView: View {
+    let payload: RKIconCardPayload
+    let svgString: String?  // raw SVG markup
+    let iconData: String?   // base64 PNG fallback
+    let icon: String?       // SF Symbol final fallback
+
+    var body: some View {
+        HStack(spacing: 12) {
+            scriptIcon
+                .frame(width: 40, height: 40)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(payload.title)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                if let subtitle = payload.subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private var scriptIcon: some View {
+        if let svg = svgString {
+            SVGImageView(svgString: svg)
+        } else if let data = iconData,
+                  let imageData = Data(base64Encoded: data),
+                  let uiImage = UIImage(data: imageData) {
+            Image(uiImage: uiImage)
+                .resizable()
+                .scaledToFit()
+        } else {
+            Image(systemName: icon ?? "app.fill")
+                .font(.title2)
+                .foregroundStyle(.secondary)
         }
     }
 }

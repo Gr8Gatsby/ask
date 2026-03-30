@@ -1,5 +1,16 @@
 import Foundation
 
+// MARK: - LiveBlock
+
+/// A block currently emitted by a script, tracked locally for Mac-side preview.
+struct LiveBlock: Identifiable, Sendable {
+    let id: String          // blockId
+    let blockType: String
+    let payloadJSON: String
+}
+
+// MARK: - MCPConnection
+
 /// Manages a single MCP (JSON-RPC 2.0 over stdio) connection to one script subprocess.
 ///
 /// The script sends tool calls on its stdout; the daemon responds on the script's stdin.
@@ -9,6 +20,10 @@ final class MCPConnection: @unchecked Sendable {
 
     /// Called when the script process terminates (crash or clean exit).
     var onTerminate: (() -> Void)?
+    /// Called when the script emits a block (after CloudKit write succeeds).
+    var onBlockEmitted: (@Sendable (LiveBlock) -> Void)?
+    /// Called when the script clears a block.
+    var onBlockCleared: (@Sendable (String) -> Void)?
 
     private let entryURL: URL
     private let blockService: BlockService
@@ -16,7 +31,20 @@ final class MCPConnection: @unchecked Sendable {
     private var process: Process?
     private var stdinPipe: Pipe?
     private var stdoutPipe: Pipe?
+    private var stderrPipe: Pipe?
     private var readTask: Task<Void, Never>?
+    private var stderrTask: Task<Void, Never>?
+
+    // Rolling buffer of the last 50 stderr lines — used for crash diagnostics.
+    // nonisolated(unsafe): written from a detached stderr-reading task, read after
+    // process exit from the main actor in ScriptManager.handleCrash. The race is
+    // benign — worst case is a slightly stale error message.
+    nonisolated(unsafe) private var stderrLines: [String] = []
+
+    var lastStderrSummary: String {
+        stderrLines.last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
+            ?? "Script exited unexpectedly"
+    }
 
     init(scriptID: String, entryURL: URL, blockService: BlockService) {
         self.scriptID = scriptID
@@ -37,13 +65,17 @@ final class MCPConnection: @unchecked Sendable {
         } else {
             p.executableURL = entryURL
         }
+        let errPipe = Pipe()
         p.standardInput = inPipe
         p.standardOutput = outPipe
-        p.standardError = FileHandle.standardError
+        p.standardError = errPipe
         p.terminationHandler = { [weak self] _ in
             self?.readTask?.cancel()
+            self?.stderrTask?.cancel()
             self?.onTerminate?()
         }
+
+        stderrPipe = errPipe
 
         stdinPipe = inPipe
         stdoutPipe = outPipe
@@ -59,19 +91,26 @@ final class MCPConnection: @unchecked Sendable {
 
         readTask = Task.detached { [weak self] in
             guard let self else { return }
-            do {
-                for try await line in outPipe.fileHandleForReading.bytes.lines {
-                    guard !Task.isCancelled else { break }
-                    await self.handleLine(line)
-                }
-            } catch {
-                // EOF — process exited
+            for await line in MCPConnection.lines(from: outPipe.fileHandleForReading) {
+                guard !Task.isCancelled else { break }
+                await self.handleLine(line)
+            }
+        }
+
+        stderrTask = Task.detached { [weak self] in
+            guard let self else { return }
+            for await line in MCPConnection.lines(from: errPipe.fileHandleForReading) {
+                guard !Task.isCancelled else { break }
+                self.stderrLines.append(line)
+                if self.stderrLines.count > 50 { self.stderrLines.removeFirst() }
+                print("[MCPConnection:\(self.scriptID)] \(line)")
             }
         }
     }
 
     func stop() {
         readTask?.cancel()
+        stderrTask?.cancel()
         process?.terminate()
         process = nil
     }
@@ -107,13 +146,16 @@ final class MCPConnection: @unchecked Sendable {
 
         switch method {
         case "initialize":
-            // Purge any stale blocks from a previous run before the script starts fresh.
-            try? await blockService.clearAllBlocks()
+            // Reply immediately — never block the script's init handshake on CloudKit.
+            // Stale-block purge runs in the background; any blocks not cleared will be
+            // overwritten by the script's first emit_block (savePolicy .allKeys) or
+            // will expire via their TTL.
             reply(id: id, result: [
                 "protocolVersion": "2024-11-05",
                 "capabilities": ["tools": [String: String]()],
                 "serverInfo": ["name": "AskMac", "version": "1.0"]
             ])
+            Task { try? await blockService.clearAllBlocks() }
 
         case "notifications/initialized":
             print("[MCPConnection:\(scriptID)] Ready")
@@ -148,16 +190,21 @@ final class MCPConnection: @unchecked Sendable {
             }
             let ttl = args["ttl"] as? TimeInterval
             let expiresAt = ttl.map { Date().addingTimeInterval($0) }
-            do {
-                try await blockService.emitBlock(
-                    blockID: blockID,
-                    blockType: blockType,
-                    payload: payloadJSON,
-                    expiresAt: expiresAt
-                )
-                reply(id: id, result: ["content": [["type": "text", "text": "ok"]]])
-            } catch {
-                replyError(id: id, code: -32000, message: "emit_block failed: \(error)")
+            // Reply and update local preview immediately — don't block on CloudKit.
+            reply(id: id, result: ["content": [["type": "text", "text": "ok"]]])
+            let block = LiveBlock(id: blockID, blockType: blockType, payloadJSON: payloadJSON)
+            onBlockEmitted?(block)
+            Task {
+                do {
+                    try await blockService.emitBlock(
+                        blockID: blockID,
+                        blockType: blockType,
+                        payload: payloadJSON,
+                        expiresAt: expiresAt
+                    )
+                } catch {
+                    print("[MCPConnection:\(scriptID)] emit_block CloudKit error: \(error)")
+                }
             }
 
         case "clear_block":
@@ -165,11 +212,15 @@ final class MCPConnection: @unchecked Sendable {
                 replyError(id: id, code: -32602, message: "Missing blockId")
                 return
             }
-            do {
-                try await blockService.clearBlock(blockID: blockID)
-                reply(id: id, result: ["content": [["type": "text", "text": "ok"]]])
-            } catch {
-                replyError(id: id, code: -32000, message: "clear_block failed: \(error)")
+            // Reply and update local preview immediately — don't block on CloudKit.
+            reply(id: id, result: ["content": [["type": "text", "text": "ok"]]])
+            onBlockCleared?(blockID)
+            Task {
+                do {
+                    try await blockService.clearBlock(blockID: blockID)
+                } catch {
+                    print("[MCPConnection:\(scriptID)] clear_block CloudKit error: \(error)")
+                }
             }
 
         case "get_schema":
@@ -177,6 +228,38 @@ final class MCPConnection: @unchecked Sendable {
 
         default:
             replyError(id: id, code: -32601, message: "Unknown tool: \(name)")
+        }
+    }
+
+    // MARK: - Pipe reading
+
+    /// Reads newline-delimited text from a pipe file descriptor using DispatchSource.
+    /// `nonisolated` — safe to call from any Swift concurrency context without
+    /// hopping to the main actor (unlike `FileHandle.readabilityHandler`).
+    nonisolated private static func lines(from fh: FileHandle) -> AsyncStream<String> {
+        // Buffer box defined locally so the compiler cannot infer @MainActor on it.
+        // Accessed exclusively from the serial DispatchQueue below — @unchecked Sendable is correct.
+        final class Buffer: @unchecked Sendable { var data = Data() }
+        let fd = fh.fileDescriptor
+        return AsyncStream { continuation in
+            let buf = Buffer()
+            let queue = DispatchQueue(label: "ask.mcp.pipe-reader", qos: .utility)
+            let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+            source.setEventHandler {
+                var chunk = [UInt8](repeating: 0, count: 65_536)
+                let n = Darwin.read(fd, &chunk, chunk.count)
+                guard n > 0 else { source.cancel(); return }
+                buf.data.append(contentsOf: chunk[..<n])
+                while let range = buf.data.range(of: Data([0x0A])) {
+                    if let line = String(data: buf.data[buf.data.startIndex..<range.lowerBound], encoding: .utf8) {
+                        continuation.yield(line)
+                    }
+                    buf.data.removeSubrange(buf.data.startIndex...range.lowerBound)
+                }
+            }
+            source.setCancelHandler { continuation.finish() }
+            continuation.onTermination = { _ in source.cancel() }
+            source.resume()
         }
     }
 
@@ -249,7 +332,7 @@ final class MCPConnection: @unchecked Sendable {
                     "type": "object",
                     "properties": [
                         "blockId": ["type": "string", "description": "Unique block identifier (use UUID)"],
-                        "blockType": ["type": "string", "enum": ["confirmation", "alert", "status", "prompt", "info_card", "chat_prompt"]],
+                        "blockType": ["type": "string", "enum": ["confirmation", "alert", "status", "prompt", "info_card", "chat_prompt", "icon_card"]],
                         "payload": ["type": "object", "description": "Block-type-specific payload — see get_schema"],
                         "ttl": ["type": "number", "description": "Seconds until the block auto-expires (optional)"]
                     ],
@@ -285,6 +368,7 @@ final class MCPConnection: @unchecked Sendable {
         prompt        {"title":string, "placeholder":string?, "multiline":bool?}
         info_card     {"title":string, "pairs":[{"key":string,"value":string}]}
         chat_prompt   {"title":string, "context":string?, "placeholder":string?}
+        icon_card     {"title":string, "subtitle":string?}
 
         User responses are delivered as notifications/message with:
           data.type == "user_response", data.blockId, data.value

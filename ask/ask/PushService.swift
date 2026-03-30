@@ -26,7 +26,15 @@ final class PushService: NSObject {
     }
 
     private func saveSubscriptionsIfNeeded() async {
-        let subID = "ask-rkblock-created"
+        let subID = "ask-rkblock-changes-v2"
+        let legacyID = "ask-rkblock-created"
+
+        // Delete legacy creation-only subscription if present
+        if let existing = try? await database.subscriptions(for: [CKSubscription.ID(legacyID)]),
+           existing[legacyID] != nil {
+            _ = try? await database.modifySubscriptions(saving: [], deleting: [legacyID])
+        }
+
         let existing = (try? await database.subscriptions(for: [CKSubscription.ID(subID)])) ?? [:]
         guard existing[subID] == nil else { return }
 
@@ -34,7 +42,7 @@ final class PushService: NSObject {
             recordType: CKSchema.RecordType.rkBlock,
             predicate: NSPredicate(value: true),
             subscriptionID: subID,
-            options: [.firesOnRecordCreation]
+            options: [.firesOnRecordCreation, .firesOnRecordUpdate, .firesOnRecordDeletion]
         )
         let info = CKSubscription.NotificationInfo()
         info.shouldSendContentAvailable = true   // silent push

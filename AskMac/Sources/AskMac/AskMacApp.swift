@@ -28,11 +28,13 @@ struct AskMacApp: App {
 
         Task {
             await ck.checkAccountStatus()
-            await ck.purgeOldRecords(machineID: s.machineID)
+            // Launch scripts immediately — don't block on CloudKit cleanup.
             hb.start()
             mw.start()
             sm.start()
             rp.start(scriptManager: sm)
+            // Purge old records in the background after services are running.
+            await ck.purgeOldRecords(machineID: s.machineID)
         }
     }
 
@@ -61,6 +63,7 @@ struct AskMacApp: App {
         Window("Ask Settings", id: "settings") {
             SettingsView()
                 .environment(settings)
+                .environment(scriptManager)
         }
         .windowResizability(.contentSize)
         .defaultPosition(.center)

@@ -25,9 +25,10 @@ struct ManagedScript: Identifiable {
     let id: String          // manifest.id
     let name: String
     let icon: String?       // SF Symbol fallback
-    let iconImage: NSImage? // loaded from icon_file
+    var iconImage: NSImage? // loaded from icon_file
     var status: ScriptStatus
     var isEnabled: Bool
+    var lastError: String?  // last stderr output before most recent crash
 
     enum ScriptStatus {
         case starting, running, crashed, stopped
@@ -55,12 +56,14 @@ final class ScriptManager {
     private let settings: AppSettings
 
     private(set) var scripts: [ManagedScript] = []
+    /// Live blocks currently emitted by each script, keyed by scriptID → blockID.
+    private(set) var activeBlocks: [String: [String: LiveBlock]] = [:]
 
     // Internal — not exposed to UI
     private var connections: [String: MCPConnection] = [:]
     private var restartDelays: [String: TimeInterval] = [:]
     // Cached manifests so we can re-launch after enable
-    private var manifests: [String: (manifest: ScriptManifest, dir: URL)] = [:]
+    private var manifests: [String: (manifest: ScriptManifest, dir: URL, icon: NSImage?, svgString: String?)] = [:]
 
     init(cloudKit: CloudKitService, machineID: String, settings: AppSettings) {
         self.cloudKit = cloudKit
@@ -94,10 +97,17 @@ final class ScriptManager {
         connections[id]?.stop()
         connections.removeValue(forKey: id)
         restartDelays.removeValue(forKey: id)
+        activeBlocks.removeValue(forKey: id)
         Task {
             let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: id)
             try? await blockService.clearAllBlocks()
         }
+    }
+
+    /// Deliver a user response to a block directly from the Mac UI.
+    func respondToBlock(scriptID: String, blockID: String, value: String) {
+        connections[scriptID]?.deliverResponse(blockID: blockID, value: value)
+        activeBlocks[scriptID]?.removeValue(forKey: blockID)
     }
 
     func enableScript(id: String) {
@@ -126,12 +136,18 @@ final class ScriptManager {
             guard let data = try? Data(contentsOf: manifestURL),
                   let manifest = try? JSONDecoder().decode(ScriptManifest.self, from: data)
             else { continue }
-            manifests[manifest.id] = (manifest, dir)
+            let iconCandidate = manifest.iconFile ?? "icon.svg"
+            let iconURL = dir.appendingPathComponent(iconCandidate)
+            let iconImage: NSImage? = NSImage(contentsOf: iconURL)
+            let svgString: String? = iconURL.pathExtension.lowercased() == "svg"
+                ? try? String(contentsOf: iconURL, encoding: .utf8)
+                : nil
+            manifests[manifest.id] = (manifest, dir, iconImage, svgString)
             let isEnabled = !settings.disabledScripts.contains(manifest.id)
             if isEnabled {
                 launch(manifest: manifest, scriptDir: dir)
             } else {
-                upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: nil, status: .stopped, isEnabled: false)
+                upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .stopped, isEnabled: false)
             }
         }
     }
@@ -143,25 +159,36 @@ final class ScriptManager {
             || entryURL.pathExtension == "py"
             || entryURL.pathExtension == "sh"
 
+        // Use cached icon (already loaded in discoverAndLaunch)
+        let iconImage = manifests[manifest.id]?.icon
+
         guard canRun else {
             print("[ScriptManager] \(manifest.id): entry not runnable at \(entryURL.path)")
-            upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: nil, status: .stopped, isEnabled: true)
+            upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .stopped, isEnabled: true)
             return
         }
 
-        // Load icon image from icon_file, or try icon.svg by convention
-        let iconImage: NSImage? = {
-            let candidate = manifest.iconFile ?? "icon.svg"
-            let url = scriptDir.appendingPathComponent(candidate)
-            return NSImage(contentsOf: url)
-        }()
-
-        let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id)
+        let iconData = iconImage.flatMap { ScriptManager.iconPNGBase64($0) }
+        let svgString = manifests[manifest.id]?.svgString
+        let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData, scriptIconSVG: svgString)
         let conn = MCPConnection(scriptID: manifest.id, entryURL: entryURL, blockService: blockService)
 
         conn.onTerminate = { [weak self] in
             DispatchQueue.main.async {
                 self?.handleCrash(manifest: manifest, scriptDir: scriptDir)
+            }
+        }
+
+        // Track live blocks for Mac-side preview
+        activeBlocks.removeValue(forKey: manifest.id)
+        conn.onBlockEmitted = { [weak self] block in
+            Task { @MainActor [weak self] in
+                self?.activeBlocks[manifest.id, default: [:]][block.id] = block
+            }
+        }
+        conn.onBlockCleared = { [weak self] blockID in
+            Task { @MainActor [weak self] in
+                self?.activeBlocks[manifest.id]?.removeValue(forKey: blockID)
             }
         }
 
@@ -176,13 +203,41 @@ final class ScriptManager {
         // Don't restart if the script was disabled
         guard !settings.disabledScripts.contains(manifest.id) else { return }
 
-        upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: nil, status: .crashed, isEnabled: true)
+        // Capture last stderr before removing the connection
+        let errorSummary = connections[manifest.id]?.lastStderrSummary
+
+        let iconImage = manifests[manifest.id]?.icon
+        upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .crashed, isEnabled: true)
         connections.removeValue(forKey: manifest.id)
+        activeBlocks.removeValue(forKey: manifest.id)
+
+        // Surface the error in the Mac UI
+        if let error = errorSummary, let idx = scripts.firstIndex(where: { $0.id == manifest.id }) {
+            scripts[idx].lastError = error
+        }
 
         let delay = restartDelays[manifest.id] ?? 1.0
         restartDelays[manifest.id] = min(delay * 2, 30.0)
 
         print("[ScriptManager] \(manifest.id) crashed — restarting in \(Int(delay))s")
+
+        // Emit alert to iOS so user sees it on iPhone
+        let alertBody = errorSummary ?? "Script exited unexpectedly"
+        Task {
+            let iconData = manifests[manifest.id]?.icon.flatMap { ScriptManager.iconPNGBase64($0) }
+            let svgString = manifests[manifest.id]?.svgString
+            let bs = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData, scriptIconSVG: svgString)
+            let payload: [String: Any] = ["title": "\(manifest.name) stopped", "body": alertBody]
+            if let data = try? JSONSerialization.data(withJSONObject: payload),
+               let json = String(data: data, encoding: .utf8) {
+                try? await bs.emitBlock(
+                    blockID: "\(manifest.id)-crash",
+                    blockType: "alert",
+                    payload: json,
+                    expiresAt: Date().addingTimeInterval(3600)
+                )
+            }
+        }
 
         Task {
             try? await Task.sleep(for: .seconds(delay))
@@ -191,10 +246,29 @@ final class ScriptManager {
         }
     }
 
+    // MARK: - Icon helpers
+
+    /// Renders `image` at 32×32, encodes as PNG, returns base64 string.
+    private static func iconPNGBase64(_ image: NSImage) -> String? {
+        let size = NSSize(width: 32, height: 32)
+        let offscreen = NSImage(size: size)
+        offscreen.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .high
+        image.draw(in: NSRect(origin: .zero, size: size),
+                   from: .zero, operation: .copy, fraction: 1.0)
+        offscreen.unlockFocus()
+        guard let tiff = offscreen.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let png = bitmap.representation(using: .png, properties: [:])
+        else { return nil }
+        return png.base64EncodedString()
+    }
+
     private func upsertStatus(_ id: String, name: String, icon: String?, iconImage: NSImage?, status: ManagedScript.ScriptStatus, isEnabled: Bool) {
         if let idx = scripts.firstIndex(where: { $0.id == id }) {
             scripts[idx].status = status
             scripts[idx].isEnabled = isEnabled
+            if let img = iconImage { scripts[idx].iconImage = img }
         } else {
             scripts.append(ManagedScript(id: id, name: name, icon: icon, iconImage: iconImage, status: status, isEnabled: isEnabled))
         }

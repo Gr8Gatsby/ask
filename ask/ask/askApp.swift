@@ -25,7 +25,7 @@ struct askApp: App {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
-                // App foregrounded (tap on notification, app switch, etc.) — refresh immediately
+                // Push notification tap or app-switch — trigger a data refresh
                 push.handleRemoteNotification()
             }
         }

@@ -34,6 +34,8 @@ enum CKSchema {
         static let scriptID = "scriptID"
         static let scriptName = "scriptName"
         static let scriptIcon = "scriptIcon"
+        static let scriptIconData = "scriptIconData"
+        static let scriptIconSVG = "scriptIconSVG"
         static let blockType = "blockType"
         static let payload = "payload"
         static let createdAt = "createdAt"
@@ -334,6 +336,8 @@ struct RKBlockRecord: Sendable {
     let scriptID: String
     let scriptName: String
     let scriptIcon: String?
+    let scriptIconData: String?  // base64-encoded PNG (32×32) of the script's icon
+    let scriptIconSVG: String?   // raw SVG markup from the script's icon_file
     let blockType: String
     let payload: String     // JSON blob
     let createdAt: Date
@@ -347,6 +351,8 @@ struct RKBlockRecord: Sendable {
         record[CKSchema.RKBlock.scriptID] = scriptID
         record[CKSchema.RKBlock.scriptName] = scriptName
         record[CKSchema.RKBlock.scriptIcon] = scriptIcon as CKRecordValueProtocol?
+        record[CKSchema.RKBlock.scriptIconData] = scriptIconData as CKRecordValueProtocol?
+        record[CKSchema.RKBlock.scriptIconSVG] = scriptIconSVG as CKRecordValueProtocol?
         record[CKSchema.RKBlock.blockType] = blockType
         record[CKSchema.RKBlock.payload] = payload
         record[CKSchema.RKBlock.createdAt] = createdAt

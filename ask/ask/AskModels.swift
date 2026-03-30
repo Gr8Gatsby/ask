@@ -34,6 +34,8 @@ enum CKSchema {
         static let scriptID = "scriptID"
         static let scriptName = "scriptName"
         static let scriptIcon = "scriptIcon"
+        static let scriptIconData = "scriptIconData"
+        static let scriptIconSVG = "scriptIconSVG"
         static let blockType = "blockType"
         static let payload = "payload"
         static let createdAt = "createdAt"

@@ -252,7 +252,9 @@ final class CloudKitService {
     // MARK: - Startup cleanup
 
     /// Deletes all legacy event/session/response/job records for this machine from CloudKit.
-    /// Also clears any stale RKBlock records so the iOS app starts with a clean slate.
+    /// RKBlock records are intentionally excluded — scripts manage their own block lifecycle
+    /// via TTLs and explicit clear_block calls. Purging blocks on startup races with scripts
+    /// re-emitting after launch and causes a blank iOS UI.
     /// Safe to call on every launch — runs atomically=false so partial success is fine.
     func purgeOldRecords(machineID: String) async {
         let types: [(recordType: String, field: String)] = [
@@ -260,7 +262,6 @@ final class CloudKitService {
             (CKSchema.RecordType.session,  CKSchema.Session.machineID),
             (CKSchema.RecordType.response, CKSchema.Response.machineID),
             (CKSchema.RecordType.job,      CKSchema.Job.machineID),
-            (CKSchema.RecordType.rkBlock,  CKSchema.RKBlock.machineID),
         ]
         let predicate = NSPredicate(format: "%K == %@", "machineID", machineID)
 

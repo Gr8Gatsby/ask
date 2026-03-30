@@ -2,8 +2,52 @@ import SwiftUI
 import UIKit
 import CloudKit
 
+// MARK: - Script group model
+
+/// A view-model grouping all blocks emitted by a single script.
+struct ScriptGroup: Identifiable {
+    let scriptID: String
+    let blocks: [RKBlock]
+
+    var id: String { scriptID }
+
+    var name: String {
+        blocks.first?.scriptName ?? scriptID
+            .split(separator: "-").map { $0.capitalized }.joined(separator: " ")
+    }
+    var icon: String?     { blocks.first?.scriptIcon }
+    var iconSVG: String?  { blocks.first?.scriptIconSVG }
+    var iconData: String? { blocks.first?.scriptIconData }
+
+    /// The tile block drives home-screen tile display. Scripts emit this explicitly.
+    private var tileBlock: RKTilePayload? {
+        blocks.first(where: { $0.blockType == .tile })?.tilePayload
+    }
+
+    /// Action required only when a script explicitly sets action_required: true in its tile block.
+    var isActionRequired: Bool { tileBlock?.actionRequired == true }
+
+    /// Short status label: tile block takes priority, then first status block.
+    var tileLabel: String? { tileBlock?.label ?? blocks.first(where: { $0.blockType == .status })?.statusPayload?.label }
+
+    /// Status color: tile block takes priority, then first status block.
+    var tileStatusColor: String? { tileBlock?.statusColor ?? blocks.first(where: { $0.blockType == .status })?.statusPayload?.color }
+
+    /// Optional longer body text shown below the status line on the tile.
+    var tileBody: String? { tileBlock?.body }
+
+    /// Title for the toast banner when action is required.
+    var actionTitle: String? {
+        if let label = tileBlock?.label, isActionRequired { return label }
+        return nil
+    }
+}
+
+// MARK: - HomeView
+
 struct HomeView: View {
     @Environment(iOSCloudKitService.self) private var cloudKit
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var machines: [AskMachine] = []
     @State private var blocks: [RKBlock] = []
@@ -11,12 +55,28 @@ struct HomeView: View {
     @State private var hasLoaded = false
     @State private var activeMachineID: String?
     @State private var showSettings = false
+    @State private var showMachinePicker = false
+    @State private var selectedScriptID: String?
     @State private var pollTask: Task<Void, Never>?
     @State private var lastHeartbeatAt: Date = .distantPast
 
     private var activeMachine: AskMachine? {
         if let id = activeMachineID { return machines.first { $0.id == id } }
         return machines.sorted { $0.lastHeartbeat > $1.lastHeartbeat }.first
+    }
+
+    private var scriptGroups: [ScriptGroup] {
+        let grouped = Dictionary(grouping: blocks, by: { $0.scriptID })
+        let sorted = grouped.keys.sorted { a, b in
+            if a == "claudecode-controller" { return true }
+            if b == "claudecode-controller" { return false }
+            return a < b
+        }
+        return sorted.map { ScriptGroup(scriptID: $0, blocks: grouped[$0] ?? []) }
+    }
+
+    private var actionGroups: [ScriptGroup] {
+        scriptGroups.filter { $0.isActionRequired }
     }
 
     var body: some View {
@@ -35,6 +95,26 @@ struct HomeView: View {
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbar }
+            .confirmationDialog("Switch Machine", isPresented: $showMachinePicker, titleVisibility: .visible) {
+                ForEach(machines) { machine in
+                    Button(machine.name) {
+                        activeMachineID = machine.id
+                        Task { await load() }
+                    }
+                }
+            }
+        }
+        .fullScreenCover(
+            isPresented: Binding(
+                get: { selectedScriptID != nil },
+                set: { if !$0 { selectedScriptID = nil } }
+            )
+        ) {
+            if let id = selectedScriptID {
+                ScriptDetailView(scriptID: id, allBlocks: blocks) { block, value in
+                    await respondToBlock(block, value: value)
+                }
+            }
         }
         .sheet(isPresented: $showSettings) {
             SettingsSheetView()
@@ -46,6 +126,9 @@ struct HomeView: View {
             startPolling()
         }
         .onDisappear { pollTask?.cancel() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await load() } }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .askRefreshRequired)) { _ in
             Task { await load() }
         }
@@ -54,55 +137,47 @@ struct HomeView: View {
     // MARK: - Content
 
     private var content: some View {
-        List {
-            ForEach(groupedByScript, id: \.scriptID) { group in
-                Section {
-                    ForEach(group.blocks) { block in
-                        BlockView(block: block) { value in
-                            await respondToBlock(block, value: value)
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                // Action toasts — slide in at top when any script needs a response
+                if !actionGroups.isEmpty {
+                    VStack(spacing: 8) {
+                        ForEach(actionGroups) { group in
+                            ActionToastView(group: group) {
+                                selectedScriptID = group.scriptID
+                            }
                         }
-                        .transition(.opacity)
                     }
-                } header: {
-                    scriptSectionHeader(for: group)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 4)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
+                // Script tiles — single column, full width
+                if scriptGroups.isEmpty {
+                    ContentUnavailableView {
+                        Label("No Active Scripts", systemImage: "terminal")
+                    } description: {
+                        Text("Scripts will appear here when they emit blocks.")
+                    }
+                    .padding(.top, 40)
+                } else {
+                    LazyVStack(spacing: 8) {
+                        ForEach(scriptGroups) { group in
+                            ScriptTileView(group: group) {
+                                selectedScriptID = group.scriptID
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, 20)
                 }
             }
+            .animation(.easeOut(duration: 0.25), value: scriptGroups.map(\.scriptID))
         }
-        .listStyle(.insetGrouped)
         .refreshable { await load() }
-    }
-
-    // MARK: - Script grouping
-
-    private var groupedByScript: [(scriptID: String, blocks: [RKBlock])] {
-        let grouped = Dictionary(grouping: blocks, by: { $0.scriptID })
-        let sorted = grouped.keys.sorted { a, b in
-            if a == "claudecode-controller" { return true }
-            if b == "claudecode-controller" { return false }
-            return a < b
-        }
-        return sorted.map { (scriptID: $0, blocks: grouped[$0] ?? []) }
-    }
-
-    @ViewBuilder
-    private func scriptSectionHeader(for group: (scriptID: String, blocks: [RKBlock])) -> some View {
-        let first = group.blocks.first
-        let name = first?.scriptName ?? group.scriptID
-            .split(separator: "-")
-            .map { $0.capitalized }
-            .joined(separator: " ")
-        let icon = first?.scriptIcon ?? "terminal.fill"
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .font(.title3)
-                .frame(width: 24, height: 24)
-            Text(name)
-                .font(.subheadline)
-                .fontWeight(.semibold)
-                .foregroundStyle(.primary)
-                .textCase(nil)
-        }
-        .padding(.top, 4)
     }
 
     // MARK: - Toolbar
@@ -110,8 +185,11 @@ struct HomeView: View {
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .principal) {
-            Text(activeMachine.map { "Ask \($0.name)" } ?? "Ask")
+            Text("Ask")
                 .font(.custom("PlaywriteNGModern-Regular", size: 22))
+        }
+        ToolbarItem(placement: .bottomBar) {
+            machinePickerButton
         }
         ToolbarItem(placement: .bottomBar) {
             Spacer()
@@ -123,7 +201,30 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - iCloud sign-in required
+    @ViewBuilder
+    private var machinePickerButton: some View {
+        if let machine = activeMachine {
+            Button {
+                if machines.count > 1 { showMachinePicker = true }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "desktopcomputer")
+                        .font(.footnote)
+                    Text(machine.name)
+                        .font(.footnote)
+                    if machines.count > 1 {
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .foregroundStyle(.primary)
+            }
+            .disabled(machines.count <= 1)
+        }
+    }
+
+    // MARK: - Empty / error states
 
     private var iCloudSignInState: some View {
         ContentUnavailableView {
@@ -139,8 +240,6 @@ struct HomeView: View {
             .buttonStyle(.borderedProminent)
         }
     }
-
-    // MARK: - Empty state
 
     private var emptyState: some View {
         ContentUnavailableView {
@@ -163,10 +262,11 @@ struct HomeView: View {
         }
         if let machine = activeMachine {
             if let fresh = try? await cloudKit.fetchBlocks(machineID: machine.id) {
-                withAnimation(.easeOut(duration: 0.25)) { blocks = fresh.filter { $0.blockType != .alert } }
+                withAnimation(.easeOut(duration: 0.25)) {
+                    blocks = fresh.filter { $0.blockType != .alert }
+                }
             }
         }
-        // Write device heartbeat at most every 30 minutes
         if !machines.isEmpty && Date().timeIntervalSince(lastHeartbeatAt) > 1800 {
             await cloudKit.saveDeviceHeartbeat(machineIDs: machines.map { $0.id })
             lastHeartbeatAt = Date()
@@ -177,6 +277,9 @@ struct HomeView: View {
     private func startPolling() {
         pollTask?.cancel()
         pollTask = Task {
+            // Require two consecutive empty results before clearing blocks.
+            // Prevents a blank UI during the Mac restart window while scripts re-emit.
+            var consecutiveEmpty = 0
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
                 guard !Task.isCancelled else { break }
@@ -185,7 +288,16 @@ struct HomeView: View {
                 }
                 if let machine = activeMachine {
                     if let fresh = try? await cloudKit.fetchBlocks(machineID: machine.id) {
-                        withAnimation(.easeOut(duration: 0.25)) { blocks = fresh.filter { $0.blockType != .alert } }
+                        let filtered = fresh.filter { $0.blockType != .alert }
+                        if filtered.isEmpty {
+                            consecutiveEmpty += 1
+                            if consecutiveEmpty >= 2 {
+                                withAnimation(.easeOut(duration: 0.25)) { blocks = filtered }
+                            }
+                        } else {
+                            consecutiveEmpty = 0
+                            withAnimation(.easeOut(duration: 0.25)) { blocks = filtered }
+                        }
                     }
                 }
             }
@@ -200,10 +312,214 @@ struct HomeView: View {
                 scriptID: block.scriptID,
                 value: value
             )
-            // Don't remove the block locally — let the server clear it and the next
-            // poll will update the list. This avoids a jarring immediate redraw.
         } catch {
             print("[HomeView] Failed to post block response: \(error)")
+        }
+    }
+}
+
+// MARK: - Script tile
+
+private struct ScriptTileView: View {
+    let group: ScriptGroup
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                ScriptIconView(
+                    svgString: group.iconSVG,
+                    iconData: group.iconData,
+                    sfSymbol: group.icon ?? "terminal.fill"
+                )
+                .frame(width: 30, height: 30)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(group.name)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    if let label = group.tileLabel {
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(blockStatusColor(group.tileStatusColor))
+                                .frame(width: 7, height: 7)
+                            Text(label)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+
+                    if let body = group.tileBody, !body.isEmpty {
+                        Text(body)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .padding(.top, 1)
+                    }
+                }
+
+                Spacer()
+
+                if group.isActionRequired {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(
+                        group.isActionRequired
+                            ? Color.orange.opacity(0.5)
+                            : Color(.separator).opacity(0.3),
+                        lineWidth: 1
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Action toast banner
+
+private struct ActionToastView: View {
+    let group: ScriptGroup
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                ScriptIconView(
+                    svgString: group.iconSVG,
+                    iconData: group.iconData,
+                    sfSymbol: group.icon ?? "terminal.fill"
+                )
+                .frame(width: 32, height: 32)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(group.name)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.primary)
+                    if let title = group.actionTitle {
+                        Text(title)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(Color.orange.opacity(0.35), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.06), radius: 6, y: 3)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Script detail (full screen)
+
+private struct ScriptDetailView: View {
+    let scriptID: String
+    let allBlocks: [RKBlock]
+    let onRespond: (RKBlock, String) async -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    private var group: ScriptGroup {
+        // Exclude tile blocks — they drive home-screen tile display only
+        ScriptGroup(scriptID: scriptID, blocks: allBlocks.filter { $0.scriptID == scriptID && $0.blockType != .tile })
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(group.blocks) { block in
+                    Section {
+                        BlockView(block: block) { value in
+                            await onRespond(block, value)
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 8) {
+                        ScriptIconView(
+                            svgString: group.iconSVG,
+                            iconData: group.iconData,
+                            sfSymbol: group.icon ?? "terminal.fill"
+                        )
+                        .frame(width: 22, height: 22)
+                        Text(group.name)
+                            .font(.headline)
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Helpers
+
+private func blockStatusColor(_ colorString: String?) -> Color {
+    switch colorString {
+    case "green":  .green
+    case "blue":   .blue
+    case "orange": .orange
+    case "red":    .red
+    case "yellow": .yellow
+    default:       .secondary
+    }
+}
+
+// MARK: - Script icon
+
+/// Renders the script's icon. Priority: SVG → PNG → SF Symbol.
+private struct ScriptIconView: View {
+    let svgString: String?
+    let iconData: String?
+    let sfSymbol: String
+
+    var body: some View {
+        if let svg = svgString {
+            SVGImageView(svgString: svg)
+        } else if let data = iconData,
+                  let imageData = Data(base64Encoded: data),
+                  let uiImage = UIImage(data: imageData) {
+            Image(uiImage: uiImage)
+                .resizable()
+                .scaledToFit()
+        } else {
+            Image(systemName: sfSymbol)
+                .font(.title3)
+                .foregroundStyle(.secondary)
         }
     }
 }

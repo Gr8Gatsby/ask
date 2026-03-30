@@ -10,6 +10,8 @@ enum RKBlockType: String, Codable {
     case prompt
     case infoCard = "info_card"
     case chatPrompt = "chat_prompt"
+    case iconCard = "icon_card"
+    case tile   // drives home-screen tile display; not shown in detail view
 }
 
 // MARK: - Block payloads
@@ -45,6 +47,25 @@ struct RKChatPromptPayload: Codable {
     let placeholder: String?
 }
 
+struct RKTilePayload: Codable {
+    let label: String           // short status text, < 50 chars
+    let statusColor: String?    // green / blue / orange / red / yellow
+    let body: String?           // optional multi-line update text
+    let actionRequired: Bool?   // explicit opt-in: show toast + orange border
+
+    enum CodingKeys: String, CodingKey {
+        case label
+        case statusColor   = "status_color"
+        case body
+        case actionRequired = "action_required"
+    }
+}
+
+struct RKIconCardPayload: Codable {
+    let title: String
+    let subtitle: String?
+}
+
 struct RKInfoCardPayload: Codable {
     struct Pair: Codable {
         let key: String
@@ -60,6 +81,10 @@ struct RKBlock: Identifiable {
     let id: String          // blockID (also CKRecord name)
     let machineID: String
     let scriptID: String
+    let scriptName: String?
+    let scriptIcon: String?
+    let scriptIconData: String?  // base64-encoded 32×32 PNG of the script's icon
+    let scriptIconSVG: String?   // raw SVG markup from the script's icon_file
     let blockType: RKBlockType
     let payloadJSON: String
     let createdAt: Date
@@ -68,7 +93,7 @@ struct RKBlock: Identifiable {
     var requiresResponse: Bool {
         switch blockType {
         case .confirmation, .prompt, .chatPrompt: return true
-        case .alert, .status, .infoCard: return false
+        case .alert, .status, .infoCard, .iconCard, .tile: return false
         }
     }
 
@@ -103,6 +128,16 @@ struct RKBlock: Identifiable {
         return try? JSONDecoder().decode(RKChatPromptPayload.self, from: payloadData)
     }
 
+    var iconCardPayload: RKIconCardPayload? {
+        guard blockType == .iconCard else { return nil }
+        return try? JSONDecoder().decode(RKIconCardPayload.self, from: payloadData)
+    }
+
+    var tilePayload: RKTilePayload? {
+        guard blockType == .tile else { return nil }
+        return try? JSONDecoder().decode(RKTilePayload.self, from: payloadData)
+    }
+
     /// payloadJSON with UTF-16 surrogate pairs decoded to real Unicode scalars, as UTF-8 Data.
     /// `JSONSerialization` on macOS escapes emoji (U+10000…) as `\uD800\uDC00`-style pairs;
     /// iOS 26 `JSONDecoder` doesn't reassemble them. Pre-decoding here fixes rendering.
@@ -124,6 +159,10 @@ struct RKBlock: Identifiable {
         self.id = blockID
         self.machineID = machineID
         self.scriptID = scriptID
+        self.scriptName = record[CKSchema.RKBlock.scriptName] as? String
+        self.scriptIcon = record[CKSchema.RKBlock.scriptIcon] as? String
+        self.scriptIconData = record[CKSchema.RKBlock.scriptIconData] as? String
+        self.scriptIconSVG = record[CKSchema.RKBlock.scriptIconSVG] as? String
         self.blockType = blockType
         self.payloadJSON = payloadJSON
         self.createdAt = createdAt
