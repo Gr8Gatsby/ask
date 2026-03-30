@@ -18,12 +18,22 @@ enum CKSchema {
         static let session = "AskSession"
         static let rkBlock = "RKBlock"
         static let rkResponse = "RKResponse"
+        static let device = "AskDevice"
+    }
+
+    enum Device {
+        static let deviceID = "deviceID"
+        static let deviceName = "deviceName"
+        static let machineID = "machineID"
+        static let lastSeen = "lastSeen"
     }
 
     enum RKBlock {
         static let blockID = "blockID"
         static let machineID = "machineID"
         static let scriptID = "scriptID"
+        static let scriptName = "scriptName"
+        static let scriptIcon = "scriptIcon"
         static let blockType = "blockType"
         static let payload = "payload"
         static let createdAt = "createdAt"
@@ -322,6 +332,8 @@ struct RKBlockRecord: Sendable {
     let blockID: String
     let machineID: String
     let scriptID: String
+    let scriptName: String
+    let scriptIcon: String?
     let blockType: String
     let payload: String     // JSON blob
     let createdAt: Date
@@ -333,11 +345,37 @@ struct RKBlockRecord: Sendable {
         record[CKSchema.RKBlock.blockID] = blockID
         record[CKSchema.RKBlock.machineID] = machineID
         record[CKSchema.RKBlock.scriptID] = scriptID
+        record[CKSchema.RKBlock.scriptName] = scriptName
+        record[CKSchema.RKBlock.scriptIcon] = scriptIcon as CKRecordValueProtocol?
         record[CKSchema.RKBlock.blockType] = blockType
         record[CKSchema.RKBlock.payload] = payload
         record[CKSchema.RKBlock.createdAt] = createdAt
         record[CKSchema.RKBlock.expiresAt] = expiresAt as CKRecordValueProtocol?
         return record
+    }
+}
+
+// MARK: - Device
+
+struct DeviceRecord: Sendable {
+    let deviceID: String
+    let deviceName: String
+    let machineID: String
+    let lastSeen: Date
+
+    var recordName: String { "device-\(deviceID)-\(machineID)" }
+
+    init?(record: CKRecord) {
+        guard
+            let deviceID = record[CKSchema.Device.deviceID] as? String,
+            let deviceName = record[CKSchema.Device.deviceName] as? String,
+            let machineID = record[CKSchema.Device.machineID] as? String,
+            let lastSeen = record[CKSchema.Device.lastSeen] as? Date
+        else { return nil }
+        self.deviceID = deviceID
+        self.deviceName = deviceName
+        self.machineID = machineID
+        self.lastSeen = lastSeen
     }
 }
 

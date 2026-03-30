@@ -199,6 +199,15 @@ If the Mac is offline when a job is sent, the job remains `Queued` until the Mac
 - While the companion app is running, it reports its status to the shared data store at regular intervals (every 30 seconds)
 - When a job starts, status updates to busy; when the job ends, status returns to idle
 
+### Connected Devices
+- The Mac companion displays which iPhones have recently connected in the menu bar popover, between the status row and the scripts list
+- Each connected device shows the device name and how long ago it was last seen
+- Only devices seen within the last hour are shown; older records are hidden but not deleted
+- The user can revoke a specific device with confirmation; revoking blocks that device and deletes its presence record from CloudKit
+- Blocked devices are ignored on future check-ins — their heartbeat records are deleted automatically by the Mac when detected
+- Blocked devices are managed in Settings > General > Blocked Devices; any blocked device can be unblocked from there
+- The iOS app writes a device presence record (device ID, device name, last seen) to CloudKit for each known Mac at most every 30 minutes; the device ID is stable per app install
+
 ### Scripts Vault
 - During setup, the user selects a directory on the Mac to serve as the Scripts Vault
 - Only scripts physically located within the vault can be registered as agents
@@ -415,3 +424,5 @@ AskSession status updated to "active"; iOS view dismisses; session list refreshe
 | 2026-03-29 | Script enable/disable toggle: Mac menu bar popover shows a toggle per script; toggling off stops the script and clears its CloudKit blocks so iOS shows no UI for it; state persists across restarts. Scripts folder reorganized: ask-question.py moved into claudecode-controller/, legacy scripts removed. |
 | 2026-03-29 | iOS button fix: UITextView inside EmojiText was swallowing touches before SwiftUI button gestures; fixed by disabling user interaction on the UITextView. Alert blocks no longer shown in iOS main UI (Mac ActionHistoryService tracks them). |
 | 2026-03-29 | brew-monitor script: checks for outdated Homebrew packages (formulae + casks) every 4 hours, surfaces list as a confirmation block on iPhone, runs brew upgrade on request. claudecode-controller disconnect detection fixed to use writer transport instead of reader (reader is at EOF after SHUT_WR). |
+| 2026-03-29 | Script health & preview in Mac companion: Settings > Actions tab renders live block previews inline per script (read-only, mirrors iOS block UI). Stderr from each script is captured; crash state shows last error line in Settings. Menu bar shows a warning icon next to crashed scripts. When a script crashes, an alert block is emitted to iOS and auto-cleared on successful restart. |
+| 2026-03-30 | Connected Devices: Mac menu bar popover shows which iPhones have connected in the last hour. User can revoke a device (blocks it, deletes its presence record). Blocked devices manageable in Settings > General. iOS writes device heartbeat per Mac on app load (throttled to 30 min). |

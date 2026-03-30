@@ -1,6 +1,7 @@
 import Foundation
 import CloudKit
 import Observation
+import UIKit
 
 @Observable
 final class iOSCloudKitService {
@@ -360,6 +361,39 @@ final class iOSCloudKitService {
         record[CKSchema.RKResponse.value] = value
         record[CKSchema.RKResponse.timestamp] = Date()
         _ = try await database.save(record)
+    }
+
+    // MARK: - Device heartbeat
+
+    /// Writes or updates a device presence record for each machine so the Mac companion
+    /// can display which iPhones have recently connected.
+    func saveDeviceHeartbeat(machineIDs: [String]) async {
+        guard !machineIDs.isEmpty else { return }
+        let deviceID = Self.stableDeviceID
+        let deviceName = UIDevice.current.name
+        for machineID in machineIDs {
+            let recordName = "device-\(deviceID)-\(machineID)"
+            let recordID = CKRecord.ID(recordName: recordName)
+            let record: CKRecord
+            if let existing = try? await database.record(for: recordID) {
+                record = existing
+            } else {
+                record = CKRecord(recordType: CKSchema.RecordType.device, recordID: recordID)
+                record[CKSchema.Device.deviceID] = deviceID
+                record[CKSchema.Device.machineID] = machineID
+            }
+            record[CKSchema.Device.deviceName] = deviceName
+            record[CKSchema.Device.lastSeen] = Date()
+            _ = try? await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys)
+        }
+    }
+
+    private static var stableDeviceID: String {
+        let key = "askDeviceID"
+        if let existing = UserDefaults.standard.string(forKey: key) { return existing }
+        let id = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
+        UserDefaults.standard.set(id, forKey: key)
+        return id
     }
 
     // MARK: - Output

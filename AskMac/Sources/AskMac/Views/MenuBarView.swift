@@ -8,11 +8,17 @@ struct MenuBarView: View {
 
     @Environment(\.openWindow) private var openWindow
 
+    @State private var deviceToRevoke: DeviceRecord?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
             Divider()
             statusSection
+            if !heartbeat.connectedDevices.isEmpty {
+                Divider()
+                devicesSection
+            }
             Divider()
             scriptsSection
             Divider()
@@ -20,6 +26,24 @@ struct MenuBarView: View {
         }
         .padding(12)
         .frame(width: 260)
+        .alert(revokeAlertTitle, isPresented: Binding(
+            get: { deviceToRevoke != nil },
+            set: { if !$0 { deviceToRevoke = nil } }
+        )) {
+            Button("Revoke", role: .destructive) {
+                if let device = deviceToRevoke {
+                    heartbeat.revokeDevice(device)
+                }
+                deviceToRevoke = nil
+            }
+            Button("Cancel", role: .cancel) { deviceToRevoke = nil }
+        } message: {
+            Text("This device will be blocked from controlling this Mac.")
+        }
+    }
+
+    private var revokeAlertTitle: String {
+        deviceToRevoke.map { "Revoke \($0.deviceName)?" } ?? "Revoke device?"
     }
 
     private var header: some View {
@@ -65,6 +89,31 @@ struct MenuBarView: View {
                 Text("Last sync \(lastBeat.formatted(.relative(presentation: .named)))")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private var devicesSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(heartbeat.connectedDevices, id: \.deviceID) { device in
+                HStack(spacing: 8) {
+                    Image(systemName: "iphone")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 14)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(device.deviceName)
+                            .font(.subheadline)
+                        Text("Last seen \(device.lastSeen.formatted(.relative(presentation: .named)))")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    Spacer()
+                    Button("Revoke") { deviceToRevoke = device }
+                        .buttonStyle(.plain)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
             }
         }
     }
@@ -119,8 +168,6 @@ private struct ScriptRow: View {
     let script: ManagedScript
     let scriptManager: ScriptManager
 
-    @State private var confirmDisable = false
-
     var body: some View {
         HStack(spacing: 8) {
             if let img = script.iconImage {
@@ -140,27 +187,24 @@ private struct ScriptRow: View {
                 .font(.subheadline)
                 .foregroundStyle(script.isEnabled ? .primary : .secondary)
             Spacer()
+            if script.status == .crashed {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
             Toggle("", isOn: Binding(
                 get: { script.isEnabled },
                 set: { enabled in
                     if enabled {
                         scriptManager.enableScript(id: script.id)
                     } else {
-                        confirmDisable = true
+                        scriptManager.disableScript(id: script.id)
                     }
                 }
             ))
             .toggleStyle(.switch)
             .controlSize(.mini)
             .labelsHidden()
-        }
-        .alert("Disable \"\(script.name)\"?", isPresented: $confirmDisable) {
-            Button("Disable", role: .destructive) {
-                scriptManager.disableScript(id: script.id)
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The script will be stopped and its pending requests removed from your iPhone.")
         }
     }
 }

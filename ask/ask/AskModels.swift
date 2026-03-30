@@ -18,12 +18,22 @@ enum CKSchema {
         static let session = "AskSession"
         static let rkBlock = "RKBlock"
         static let rkResponse = "RKResponse"
+        static let device = "AskDevice"
+    }
+
+    enum Device {
+        static let deviceID = "deviceID"
+        static let deviceName = "deviceName"
+        static let machineID = "machineID"
+        static let lastSeen = "lastSeen"
     }
 
     enum RKBlock {
         static let blockID = "blockID"
         static let machineID = "machineID"
         static let scriptID = "scriptID"
+        static let scriptName = "scriptName"
+        static let scriptIcon = "scriptIcon"
         static let blockType = "blockType"
         static let payload = "payload"
         static let createdAt = "createdAt"

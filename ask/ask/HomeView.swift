@@ -12,6 +12,7 @@ struct HomeView: View {
     @State private var activeMachineID: String?
     @State private var showSettings = false
     @State private var pollTask: Task<Void, Never>?
+    @State private var lastHeartbeatAt: Date = .distantPast
 
     private var activeMachine: AskMachine? {
         if let id = activeMachineID { return machines.first { $0.id == id } }
@@ -54,26 +55,54 @@ struct HomeView: View {
 
     private var content: some View {
         List {
-            // Active blocks from scripts
-            if !blocks.isEmpty {
+            ForEach(groupedByScript, id: \.scriptID) { group in
                 Section {
-                    ForEach(blocks) { block in
+                    ForEach(group.blocks) { block in
                         BlockView(block: block) { value in
                             await respondToBlock(block, value: value)
                         }
                         .transition(.opacity)
                     }
                 } header: {
-                    Image("claudecode")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 28, height: 28)
-                        .padding(.top, 4)
+                    scriptSectionHeader(for: group)
                 }
             }
         }
         .listStyle(.insetGrouped)
         .refreshable { await load() }
+    }
+
+    // MARK: - Script grouping
+
+    private var groupedByScript: [(scriptID: String, blocks: [RKBlock])] {
+        let grouped = Dictionary(grouping: blocks, by: { $0.scriptID })
+        let sorted = grouped.keys.sorted { a, b in
+            if a == "claudecode-controller" { return true }
+            if b == "claudecode-controller" { return false }
+            return a < b
+        }
+        return sorted.map { (scriptID: $0, blocks: grouped[$0] ?? []) }
+    }
+
+    @ViewBuilder
+    private func scriptSectionHeader(for group: (scriptID: String, blocks: [RKBlock])) -> some View {
+        let first = group.blocks.first
+        let name = first?.scriptName ?? group.scriptID
+            .split(separator: "-")
+            .map { $0.capitalized }
+            .joined(separator: " ")
+        let icon = first?.scriptIcon ?? "terminal.fill"
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.title3)
+                .frame(width: 24, height: 24)
+            Text(name)
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundStyle(.primary)
+                .textCase(nil)
+        }
+        .padding(.top, 4)
     }
 
     // MARK: - Toolbar
@@ -137,6 +166,11 @@ struct HomeView: View {
                 withAnimation(.easeOut(duration: 0.25)) { blocks = fresh.filter { $0.blockType != .alert } }
             }
         }
+        // Write device heartbeat at most every 30 minutes
+        if !machines.isEmpty && Date().timeIntervalSince(lastHeartbeatAt) > 1800 {
+            await cloudKit.saveDeviceHeartbeat(machineIDs: machines.map { $0.id })
+            lastHeartbeatAt = Date()
+        }
         hasLoaded = true
     }
 
@@ -180,6 +214,7 @@ struct SettingsSheetView: View {
     @Environment(iOSCloudKitService.self) private var cloudKit
     @Environment(\.dismiss) private var dismiss
 
+    @AppStorage("showBlockDebugInfo") private var showDebugInfo: Bool = false
     @State private var machines: [AskMachine] = []
 
     var body: some View {
@@ -205,6 +240,10 @@ struct SettingsSheetView: View {
                             Label("Messages", systemImage: "message")
                         }
                     }
+                }
+
+                Section("Developer") {
+                    Toggle("Show Debug Info on Cards", isOn: $showDebugInfo)
                 }
             }
             .listStyle(.insetGrouped)

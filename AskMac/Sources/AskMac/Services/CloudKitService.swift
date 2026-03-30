@@ -274,6 +274,25 @@ final class CloudKitService {
         }
     }
 
+    // MARK: - Devices
+
+    /// Fetches all Device records for this machine.
+    func fetchDevices(machineID: String) async throws -> [DeviceRecord] {
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.Device.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.device, predicate: predicate)
+        let (results, _) = try await database.records(matching: query, resultsLimit: 50)
+        return results.compactMap { _, result in
+            guard let record = try? result.get() else { return nil }
+            return DeviceRecord(record: record)
+        }
+    }
+
+    /// Deletes a Device record by its record name.
+    func deleteDevice(recordName: String) async throws {
+        let recordID = CKRecord.ID(recordName: recordName)
+        try await database.deleteRecord(withID: recordID)
+    }
+
     // MARK: - RKBlocks
 
     /// Saves (creates or replaces) an RKBlock record. The blockID is used as the record name.

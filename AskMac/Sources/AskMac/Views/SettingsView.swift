@@ -45,6 +45,24 @@ private struct GeneralSettingsTab: View {
                 }
                 Button("Change Vault Directory…") { showVaultPicker = true }
             }
+
+            if !settings.blockedDevices.isEmpty {
+                Section("Blocked Devices") {
+                    ForEach(settings.blockedDevices) { device in
+                        HStack {
+                            Image(systemName: "iphone.slash")
+                                .foregroundStyle(.secondary)
+                            Text(device.deviceName)
+                                .font(.subheadline)
+                            Spacer()
+                            Button("Unblock") {
+                                settings.unblockDevice(id: device.deviceID)
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
         .frame(minHeight: 240)
@@ -64,178 +82,135 @@ private struct GeneralSettingsTab: View {
 
 private struct ActionsSettingsTab: View {
     @Environment(AppSettings.self) private var settings
-
-    @State private var showAddAgent = false
+    @Environment(ScriptManager.self) private var scriptManager
 
     var body: some View {
         Form {
             Section {
-                if settings.agents.isEmpty {
-                    Text("No actions configured.")
+                if scriptManager.scripts.isEmpty {
+                    Text("No scripts found in vault directory.")
                         .foregroundStyle(.secondary)
                         .padding(.vertical, 2)
                 } else {
-                    ForEach(settings.agents) { agent in
-                        AgentRow(agent: agent) {
-                            settings.removeAgent(id: agent.id)
-                        }
+                    ForEach(scriptManager.scripts) { script in
+                        ScriptSettingsRow(script: script, scriptManager: scriptManager)
                     }
                 }
-                Button("Add Action…") { showAddAgent = true }
             } footer: {
-                Text("Scripts must be located within the vault directory.")
+                Text("Scripts are auto-discovered from your vault directory. Add a folder with a manifest.json to register a new script.")
             }
         }
         .formStyle(.grouped)
         .frame(minHeight: 300)
-        .sheet(isPresented: $showAddAgent) {
-            AddAgentView()
-                .environment(settings)
-        }
     }
 }
 
-// MARK: - Agent row
+// MARK: - Script settings row
 
-private struct AgentRow: View {
-    let agent: AgentConfig
-    let onDelete: () -> Void
+private struct ScriptSettingsRow: View {
+    let script: ManagedScript
+    let scriptManager: ScriptManager
 
-    @State private var confirmDelete = false
+    @State private var previewVisible = false
+
+    private var liveBlocks: [LiveBlock] {
+        Array((scriptManager.activeBlocks[script.id] ?? [:]).values)
+    }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(agent.name).font(.body)
-                Text(agent.scriptName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                capabilityBadges
-            }
-            Spacer()
-            Button(role: .destructive) { confirmDelete = true } label: {
-                Image(systemName: "minus.circle.fill")
-                    .foregroundStyle(.red.opacity(0.8))
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.vertical, 2)
-        .alert("Remove \"\(agent.name)\"?", isPresented: $confirmDelete) {
-            Button("Remove", role: .destructive) { onDelete() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This will remove the action from Ask. The script file will not be deleted.")
-        }
-    }
-
-    private var capabilityBadges: some View {
-        HStack(spacing: 4) {
-            if agent.capabilityNetwork   { badge("Network",    color: .blue)   }
-            if agent.capabilitySubprocess { badge("Subprocess", color: .purple) }
-            if !agent.capabilityReadPaths.isEmpty  { badge("Read",  color: .green)  }
-            if !agent.capabilityWritePaths.isEmpty { badge("Write", color: .orange) }
-        }
-        .padding(.top, 2)
-    }
-
-    private func badge(_ label: String, color: Color) -> some View {
-        Text(label)
-            .font(.caption2)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.15))
-            .foregroundStyle(color)
-            .clipShape(Capsule())
-    }
-}
-
-// MARK: - Add Agent
-
-struct AddAgentView: View {
-    @Environment(AppSettings.self) private var settings
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var availableScripts: [String] = []
-    @State private var selectedScript: String? = nil
-    @State private var name = ""
-    @State private var capabilityNetwork = false
-    @State private var capabilitySubprocess = false
-    @State private var readPaths = ""
-    @State private var writePaths = ""
-    @State private var envKeys = ""
-    @State private var timeout = 60
-
-    private var isValid: Bool { selectedScript != nil && !name.isEmpty }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Action Script") {
-                    if availableScripts.isEmpty {
-                        Text("No scripts found in vault directory.")
+        VStack(alignment: .leading, spacing: 8) {
+            // Header row: icon + name/id + preview toggle + enable toggle
+            HStack(spacing: 10) {
+                scriptIcon
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(script.name).font(.body)
+                    HStack(spacing: 4) {
+                        Text(script.id)
+                            .font(.caption)
                             .foregroundStyle(.secondary)
-                    } else {
-                        Picker("Script", selection: $selectedScript) {
-                            Text("Select…").tag(Optional<String>.none)
-                            ForEach(availableScripts, id: \.self) { script in
-                                Text(script).tag(Optional(script))
-                            }
-                        }
-                        .onChange(of: selectedScript) { _, newValue in
-                            if let script = newValue, name.isEmpty {
-                                name = (script as NSString).deletingPathExtension
-                            }
+                        if script.status == .crashed {
+                            Label("Crashed", systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                                .labelStyle(.titleAndIcon)
                         }
                     }
-                    TextField("Display Name", text: $name)
                 }
+                Spacer()
+                // Eye icon — show/hide live block previews
+                Button {
+                    previewVisible.toggle()
+                } label: {
+                    Image(systemName: previewVisible ? "eye.fill" : "eye")
+                        .foregroundStyle(previewVisible ? .primary : .tertiary)
+                }
+                .buttonStyle(.plain)
+                .help(previewVisible ? "Hide preview" : "Show preview")
 
-                Section("Capabilities") {
-                    Toggle("Network access", isOn: $capabilityNetwork)
-                    Toggle("Subprocess spawning", isOn: $capabilitySubprocess)
-                    TextField("Read paths (comma-separated)", text: $readPaths)
-                    TextField("Write paths (comma-separated)", text: $writePaths)
-                    TextField("Keychain env keys (comma-separated)", text: $envKeys)
-                    Stepper("Timeout: \(timeout)s", value: $timeout, in: 10...3600, step: 30)
-                }
-            }
-            .formStyle(.grouped)
-            .navigationTitle("Add Action")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") {
-                        guard let script = selectedScript else { return }
-                        settings.addAgent(AgentConfig(
-                            name: name,
-                            scriptName: script,
-                            capabilityNetwork: capabilityNetwork,
-                            capabilitySubprocess: capabilitySubprocess,
-                            capabilityReadPaths: readPaths.splitTrimmed,
-                            capabilityWritePaths: writePaths.splitTrimmed,
-                            capabilityEnvKeys: envKeys.splitTrimmed,
-                            timeout: timeout
-                        ))
-                        dismiss()
+                Toggle("", isOn: Binding(
+                    get: { script.isEnabled },
+                    set: { enabled in
+                        if enabled {
+                            scriptManager.enableScript(id: script.id)
+                        } else {
+                            scriptManager.disableScript(id: script.id)
+                        }
                     }
-                    .disabled(!isValid)
+                ))
+                .labelsHidden()
+            }
+
+            // Error detail when crashed
+            if script.status == .crashed, let error = script.lastError {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "terminal")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 1)
+                    Text(error)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(Color.red.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+
+            // Live block previews — shown only when eye is open
+            if previewVisible && !liveBlocks.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(liveBlocks) { block in
+                        BlockPreviewView(block: block) { value in
+                            scriptManager.respondToBlock(
+                                scriptID: script.id,
+                                blockID: block.id,
+                                value: value
+                            )
+                        }
+                    }
                 }
             }
         }
-        .frame(minWidth: 400, minHeight: 400)
-        .task { loadScripts() }
+        .padding(.vertical, 4)
     }
 
-    private func loadScripts() {
-        guard let vault = settings.vaultPath else { return }
-        let fm = FileManager.default
-        guard let contents = try? fm.contentsOfDirectory(atPath: vault.path) else { return }
-        let alreadyAdded = Set(settings.agents.map(\.scriptName))
-        availableScripts = contents
-            .filter { !$0.hasPrefix(".") && !alreadyAdded.contains($0) }
-            .sorted()
+    @ViewBuilder
+    private var scriptIcon: some View {
+        if let img = script.iconImage {
+            Image(nsImage: img)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 20, height: 20)
+                .grayscale(script.isEnabled ? 0 : 1)
+                .opacity(script.isEnabled ? 1 : 0.4)
+        } else {
+            Image(systemName: script.icon ?? "terminal.fill")
+                .frame(width: 20)
+                .foregroundStyle(script.isEnabled ? .primary : .tertiary)
+        }
     }
 }
 

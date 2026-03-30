@@ -11,6 +11,7 @@ final class HeartbeatService {
     private var task: Task<Void, Never>?
     private(set) var lastHeartbeat: Date?
     private(set) var error: Error?
+    private(set) var connectedDevices: [DeviceRecord] = []
 
     static let interval: TimeInterval = 30
 
@@ -53,11 +54,35 @@ final class HeartbeatService {
         do {
             try await cloudKit.saveMachine(makeMachineRecord(status: .idle))
             try await syncAgents()
+            await refreshDevices()
             lastHeartbeat = Date()
             error = nil
         } catch {
             self.error = error
         }
+    }
+
+    func revokeDevice(_ device: DeviceRecord) {
+        settings.blockDevice(id: device.deviceID, name: device.deviceName)
+        connectedDevices.removeAll { $0.deviceID == device.deviceID }
+        Task { try? await cloudKit.deleteDevice(recordName: device.recordName) }
+    }
+
+    private func refreshDevices() async {
+        guard let devices = try? await cloudKit.fetchDevices(machineID: settings.machineID) else { return }
+        let cutoff = Date().addingTimeInterval(-3600) // 1 hour
+        let blocked = settings.blockedDeviceIDs
+        var visible: [DeviceRecord] = []
+
+        for device in devices {
+            if blocked.contains(device.deviceID) {
+                Task { try? await cloudKit.deleteDevice(recordName: device.recordName) }
+            } else if device.lastSeen > cutoff {
+                visible.append(device)
+            }
+        }
+
+        connectedDevices = visible.sorted { $0.deviceName < $1.deviceName }
     }
 
     private func makeMachineRecord(status: MachineStatus) -> MachineRecord {
