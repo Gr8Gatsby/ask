@@ -642,6 +642,9 @@ private struct ScriptDetailView: View {
     @State private var isShowingDetail = false
     @State private var pushedDetail: RKBlock? = nil
     @State private var detailSentResponse = false
+    /// ID of a detail block the user just dismissed. We ignore re-appearances of this
+    /// block (from burst polling before the script clears it) to prevent re-pushing.
+    @State private var dismissedDetailBlockID: String? = nil
 
     private var group: ScriptGroup {
         ScriptGroup(scriptID: scriptID, blocks: allBlocks.filter { $0.scriptID == scriptID && $0.blockType != .tile })
@@ -701,12 +704,9 @@ private struct ScriptDetailView: View {
                         payload: payload,
                         onClose: {
                             detailSentResponse = true
+                            dismissedDetailBlockID = block.id
                             Task { await onRespond(block, "dismissed") }
                             isShowingDetail = false
-                            Task {
-                                try? await Task.sleep(for: .milliseconds(450))
-                                if !isShowingDetail { pushedDetail = nil }
-                            }
                         },
                         onAction: { value in
                             await onRespond(block, value)
@@ -719,32 +719,44 @@ private struct ScriptDetailView: View {
             }
         }
         .onChange(of: currentDetailBlock?.id) { _, newID in
-            if let id = newID, pushedDetail?.id != id {
+            if let id = newID {
+                // Ignore re-appearances of the block we just dismissed (burst polling
+                // may fetch it again before the script clears it from CloudKit).
+                guard id != dismissedDetailBlockID else { return }
+                // Ignore if it's already the block we're showing.
+                guard pushedDetail?.id != id else { return }
                 pushedDetail = currentDetailBlock
                 detailSentResponse = false
+                dismissedDetailBlockID = nil
                 isShowingDetail = true
-            } else if newID == nil && isShowingDetail {
-                // Block cleared externally — pop without sending a duplicate response
-                detailSentResponse = true
-                isShowingDetail = false
-                Task {
-                    try? await Task.sleep(for: .milliseconds(450))
-                    pushedDetail = nil
-                    detailSentResponse = false
-                }
-            }
-        }
-        .onChange(of: isShowingDetail) { _, showing in
-            if !showing && !detailSentResponse {
-                // User swiped back via the system gesture
-                if let block = pushedDetail {
-                    Task { await onRespond(block, "dismissed") }
+            } else {
+                // Block is gone from CloudKit — safe to forget the dismissed ID.
+                dismissedDetailBlockID = nil
+                if isShowingDetail {
+                    // Cleared externally (script refreshed, etc.) — pop silently.
+                    detailSentResponse = true
+                    isShowingDetail = false
                 }
                 Task {
                     try? await Task.sleep(for: .milliseconds(450))
                     if !isShowingDetail { pushedDetail = nil }
                 }
+            }
+        }
+        .onChange(of: isShowingDetail) { _, showing in
+            if !showing && !detailSentResponse {
+                // User swiped back via the system gesture.
+                if let block = pushedDetail {
+                    dismissedDetailBlockID = block.id
+                    Task { await onRespond(block, "dismissed") }
+                }
+            }
+            if !showing {
                 detailSentResponse = false
+                Task {
+                    try? await Task.sleep(for: .milliseconds(450))
+                    if !isShowingDetail { pushedDetail = nil }
+                }
             }
         }
     }
