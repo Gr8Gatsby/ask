@@ -75,6 +75,25 @@ final class ScriptManager {
 
     func start() {
         discoverAndLaunch()
+        purgeBlocksForDisabledScripts()
+    }
+
+    /// Deletes CloudKit blocks for any scripts that are currently disabled.
+    /// Handles stale blocks left over from before the script was disabled (e.g. no-TTL blocks).
+    private func purgeBlocksForDisabledScripts() {
+        let disabled = settings.disabledScripts
+        guard !disabled.isEmpty else { return }
+        Task {
+            for scriptID in disabled {
+                let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: scriptID)
+                do {
+                    try await blockService.clearAllBlocks()
+                    print("[ScriptManager] Purged stale blocks for disabled script: \(scriptID)")
+                } catch {
+                    print("[ScriptManager] Failed to purge blocks for \(scriptID): \(error)")
+                }
+            }
+        }
     }
 
     func stop() {

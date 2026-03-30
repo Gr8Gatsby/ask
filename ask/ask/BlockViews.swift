@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import CoreText
 import WebKit
+import Combine
 
 // MARK: - Emoji-safe text
 
@@ -161,6 +162,10 @@ struct BlockView: View {
         case .iconCard:
             if let p = block.iconCardPayload {
                 IconCardBlockView(payload: p, svgString: block.scriptIconSVG, iconData: block.scriptIconData, icon: block.scriptIcon)
+            }
+        case .picker:
+            if let p = block.pickerPayload {
+                PickerBlockView(payload: p, onRespond: onRespond)
             }
         case .tile:
             EmptyView() // tile blocks drive the home-screen tile; not rendered in detail view
@@ -502,7 +507,7 @@ struct ChatPromptBlockView: View {
                             Text("Sending…")
                         } else {
                             Image(systemName: "checkmark")
-                            Text("Sent to Claude")
+                            Text("Sent")
                         }
                     }
                     .font(.caption2)
@@ -599,6 +604,77 @@ struct IconCardBlockView: View {
                 .font(.title2)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+// MARK: - Picker
+
+struct PickerBlockView: View {
+    let payload: RKPickerPayload
+    let onRespond: (String) async -> Void
+
+    @State private var selected: String
+    @State private var responding = false
+    @State private var responded = false
+
+    init(payload: RKPickerPayload, onRespond: @escaping (String) async -> Void) {
+        self.payload = payload
+        self.onRespond = onRespond
+        _selected = State(initialValue: payload.selected ?? payload.options.first ?? "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(payload.title)
+                .font(.subheadline)
+                .fontWeight(.semibold)
+
+            if responded {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(selected)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.vertical, 2)
+            } else {
+                HStack(spacing: 10) {
+                    Picker(payload.title, selection: $selected) {
+                        ForEach(payload.options, id: \.self) { option in
+                            Text(option).tag(option)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .disabled(responding)
+
+                    Spacer()
+
+                    Button {
+                        guard !responding else { return }
+                        responding = true
+                        Task {
+                            await onRespond(selected)
+                            responded = true
+                            responding = false
+                        }
+                    } label: {
+                        if responding {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text("Select")
+                                .fontWeight(.semibold)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(responding || payload.options.isEmpty)
+                }
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 

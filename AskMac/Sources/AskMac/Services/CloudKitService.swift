@@ -305,18 +305,22 @@ final class CloudKitService {
 
     /// Deletes all RKBlock records for a given script. Called on script reconnect for a clean slate.
     func clearBlocksForScript(scriptID: String, machineID: String) async throws {
-        let predicate = NSPredicate(
-            format: "%K == %@ AND %K == %@",
-            CKSchema.RKBlock.scriptID, scriptID,
-            CKSchema.RKBlock.machineID, machineID
-        )
+        // Query by machineID only — it's guaranteed queryable (iOS fetch uses it).
+        // Filter scriptID in memory to avoid compound-predicate failures if scriptID
+        // isn't indexed in the CloudKit schema.
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.RKBlock.machineID, machineID)
         let query = CKQuery(recordType: CKSchema.RecordType.rkBlock, predicate: predicate)
         let (results, _) = try await database.records(matching: query, resultsLimit: 200)
-        let ids = results.compactMap { _, result in try? result.get() }.map(\.recordID)
+        let ids = results.compactMap { _, result -> CKRecord.ID? in
+            guard let record = try? result.get(),
+                  record[CKSchema.RKBlock.scriptID] as? String == scriptID
+            else { return nil }
+            return record.recordID
+        }
         guard !ids.isEmpty else { return }
-        _ = try? await database.modifyRecords(saving: [], deleting: ids, savePolicy: .allKeys, atomically: false)
+        _ = try await database.modifyRecords(saving: [], deleting: ids, savePolicy: .allKeys, atomically: false)
         ids.forEach { cachedRecords.removeValue(forKey: $0.recordName) }
-        print("[CloudKitService] Cleared \(ids.count) stale blocks for script \(scriptID)")
+        print("[CloudKitService] Cleared \(ids.count) blocks for script \(scriptID)")
     }
 
     /// Deletes an RKBlock record by blockID.

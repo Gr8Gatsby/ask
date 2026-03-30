@@ -13,6 +13,7 @@ enum RKBlockType: String, Codable {
     case iconCard = "icon_card"
     case tile   // drives home-screen tile display; not shown in detail view
     case countdown
+    case picker
 }
 
 // MARK: - Block payloads
@@ -72,6 +73,12 @@ struct RKCountdownPayload: Codable {
     let time: String    // ISO 8601 UTC timestamp
 }
 
+struct RKPickerPayload: Codable {
+    let title: String
+    let options: [String]
+    let selected: String?   // pre-selected value, if any
+}
+
 struct RKInfoCardPayload: Codable {
     struct Pair: Codable {
         let key: String
@@ -99,7 +106,8 @@ struct RKBlock: Identifiable {
     var requiresResponse: Bool {
         switch blockType {
         case .confirmation, .prompt, .chatPrompt: return true
-        case .alert, .status, .infoCard, .iconCard, .tile: return false
+        case .alert, .status, .infoCard, .iconCard, .tile, .countdown: return false
+        case .picker: return true
         }
     }
 
@@ -147,6 +155,11 @@ struct RKBlock: Identifiable {
     var countdownPayload: RKCountdownPayload? {
         guard blockType == .countdown else { return nil }
         return try? JSONDecoder().decode(RKCountdownPayload.self, from: payloadData)
+    }
+
+    var pickerPayload: RKPickerPayload? {
+        guard blockType == .picker else { return nil }
+        return try? JSONDecoder().decode(RKPickerPayload.self, from: payloadData)
     }
 
     /// payloadJSON with UTF-16 surrogate pairs decoded to real Unicode scalars, as UTF-8 Data.

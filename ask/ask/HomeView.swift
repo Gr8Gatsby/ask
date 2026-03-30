@@ -37,6 +37,11 @@ struct ScriptGroup: Identifiable {
     /// Optional longer body text shown below the status line on the tile.
     var tileBody: String? { tileBlock?.body }
 
+    /// Countdown block payload, if the script emitted one.
+    var countdownPayload: RKCountdownPayload? {
+        blocks.first(where: { $0.blockType == .countdown })?.countdownPayload
+    }
+
     /// Title for the toast banner when action is required.
     var actionTitle: String? {
         if let label = tileBlock?.label, isActionRequired { return label }
@@ -60,7 +65,8 @@ struct HomeView: View {
     @State private var selectedScriptID: String?
     @State private var pollTask: Task<Void, Never>?
     @State private var lastHeartbeatAt: Date = .distantPast
-    @State private var notifiedActionScriptIDs: Set<String> = []
+    @State private var notifiedBlockIDs: Set<String> = []
+    @State private var dismissedToastScriptIDs: Set<String> = []
 
     private var activeMachine: AskMachine? {
         if let id = activeMachineID { return machines.first { $0.id == id } }
@@ -79,6 +85,10 @@ struct HomeView: View {
 
     private var actionGroups: [ScriptGroup] {
         scriptGroups.filter { $0.isActionRequired }
+    }
+
+    private var visibleToastGroups: [ScriptGroup] {
+        actionGroups.filter { !dismissedToastScriptIDs.contains($0.scriptID) }
     }
 
     var body: some View {
@@ -103,6 +113,29 @@ struct HomeView: View {
                         activeMachineID = machine.id
                         Task { await load() }
                     }
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if !visibleToastGroups.isEmpty {
+                    VStack(spacing: 8) {
+                        ForEach(visibleToastGroups) { group in
+                            ActionToastView(group: group, onTap: {
+                                selectedScriptID = group.scriptID
+                            }, onDismiss: {
+                                let anim = SwiftUI.Animation.spring(response: 0.3, dampingFraction: 0.8)
+                                withAnimation(anim) {
+                                    dismissedToastScriptIDs.insert(group.scriptID)
+                                }
+                            })
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .bottom).combined(with: .opacity),
+                                removal: .move(edge: .bottom).combined(with: .opacity)
+                            ))
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 20)
+                    .animation(.spring(response: 0.35, dampingFraction: 0.8), value: visibleToastGroups.map(\.scriptID))
                 }
             }
         }
@@ -132,7 +165,7 @@ struct HomeView: View {
             if phase == .active { Task { await load() } }
         }
         .onReceive(NotificationCenter.default.publisher(for: .askRefreshRequired)) { _ in
-            Task { await load() }
+            Task<Void, Never> { await load() }
         }
     }
 
@@ -141,21 +174,6 @@ struct HomeView: View {
     private var content: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                // Action toasts — slide in at top when any script needs a response
-                if !actionGroups.isEmpty {
-                    VStack(spacing: 8) {
-                        ForEach(actionGroups) { group in
-                            ActionToastView(group: group) {
-                                selectedScriptID = group.scriptID
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
-                    .padding(.bottom, 4)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                }
-
                 // Script tiles — single column, full width
                 if scriptGroups.isEmpty {
                     ContentUnavailableView {
@@ -278,24 +296,34 @@ struct HomeView: View {
     }
 
     private func notifyNewActionGroups() {
-        let currentActionIDs = Set(actionGroups.map { $0.scriptID })
-        let newIDs = currentActionIDs.subtracting(notifiedActionScriptIDs)
-        // Clear IDs for scripts that are no longer action-required
-        notifiedActionScriptIDs = notifiedActionScriptIDs.intersection(currentActionIDs)
+        let allCurrentBlockIDs = Set(blocks.map { $0.id })
 
-        for group in actionGroups where newIDs.contains(group.scriptID) {
-            notifiedActionScriptIDs.insert(group.scriptID)
-            let content = UNMutableNotificationContent()
-            content.title = group.name
-            content.body = group.actionTitle ?? "Action required"
-            content.sound = .default
+        for group in actionGroups {
+            // Find confirmation/prompt blocks that haven't triggered a notification yet
+            let actionBlocks = group.blocks.filter {
+                $0.blockType == .confirmation || $0.blockType == .prompt
+            }
+            let newBlocks = actionBlocks.filter { !notifiedBlockIDs.contains($0.id) }
+            guard !newBlocks.isEmpty else { continue }
+
+            // New action arrived for this script — clear any prior dismissal so toast reappears
+            dismissedToastScriptIDs.remove(group.scriptID)
+            for block in newBlocks { notifiedBlockIDs.insert(block.id) }
+
+            let notifContent = UNMutableNotificationContent()
+            notifContent.title = group.name
+            notifContent.body = group.actionTitle ?? "Action required"
+            notifContent.sound = .default
             let request = UNNotificationRequest(
-                identifier: "ask-action-\(group.scriptID)",
-                content: content,
-                trigger: nil  // deliver immediately
+                identifier: "ask-action-\(group.scriptID)-\(newBlocks[0].id)",
+                content: notifContent,
+                trigger: nil
             )
             UNUserNotificationCenter.current().add(request)
         }
+
+        // Purge block IDs that are no longer in CloudKit
+        notifiedBlockIDs = notifiedBlockIDs.intersection(allCurrentBlockIDs)
     }
 
     private func startPolling() {
@@ -384,6 +412,10 @@ private struct ScriptTileView: View {
                             .lineLimit(2)
                             .padding(.top, 1)
                     }
+
+                    if let countdown = group.countdownPayload {
+                        CountdownTileLine(payload: countdown)
+                    }
                 }
 
                 Spacer()
@@ -413,52 +445,107 @@ private struct ScriptTileView: View {
     }
 }
 
+// MARK: - Countdown tile line
+
+private struct CountdownTileLine: View {
+    let payload: RKCountdownPayload
+    @State private var text: String = ""
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "clock")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .onAppear { text = formatted() }
+        .task {
+            while !Task.isCancelled {
+                text = formatted()
+                try? await Task.sleep(for: .seconds(60))
+            }
+        }
+    }
+
+    private func formatted() -> String {
+        guard let target = ISO8601DateFormatter().date(from: payload.time) else {
+            return payload.label
+        }
+        let seconds = target.timeIntervalSinceNow
+        guard seconds > 0 else { return "\(payload.label) overdue" }
+        let hours = Int(seconds / 3600)
+        let mins  = Int((seconds.truncatingRemainder(dividingBy: 3600)) / 60)
+        if hours > 0 {
+            return "\(payload.label) in \(hours)h\(mins > 0 ? " \(mins)m" : "")"
+        } else {
+            return "\(payload.label) in \(mins)m"
+        }
+    }
+}
+
 // MARK: - Action toast banner
 
 private struct ActionToastView: View {
     let group: ScriptGroup
     let onTap: () -> Void
+    let onDismiss: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 12) {
-                ScriptIconView(
-                    svgString: group.iconSVG,
-                    iconData: group.iconData,
-                    sfSymbol: group.icon ?? "terminal.fill"
-                )
-                .frame(width: 32, height: 32)
+        HStack(spacing: 0) {
+            Button(action: onTap) {
+                HStack(spacing: 12) {
+                    ScriptIconView(
+                        svgString: group.iconSVG,
+                        iconData: group.iconData,
+                        sfSymbol: group.icon ?? "terminal.fill"
+                    )
+                    .frame(width: 32, height: 32)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(group.name)
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.primary)
-                    if let title = group.actionTitle {
-                        Text(title)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(group.name)
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.primary)
+                        if let title = group.actionTitle {
+                            Text(title)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                     }
+
+                    Spacer()
+
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
                 }
-
-                Spacer()
-
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                .padding(.leading, 14)
+                .padding(.trailing, 8)
+                .padding(.vertical, 12)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(.regularMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14)
-                    .strokeBorder(Color.orange.opacity(0.35), lineWidth: 1)
-            )
-            .shadow(color: Color.black.opacity(0.06), radius: 6, y: 3)
+            .buttonStyle(.plain)
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .strokeBorder(Color.orange.opacity(0.4), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.12), radius: 12, y: 4)
     }
 }
 
