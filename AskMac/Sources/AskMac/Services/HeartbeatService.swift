@@ -53,13 +53,17 @@ final class HeartbeatService {
     private func beat() async {
         do {
             try await cloudKit.saveMachine(makeMachineRecord(status: .idle))
-            try await syncAgents()
-            await refreshDevices()
+            // Machine record written — mark alive immediately.
+            // Agent sync and device refresh are non-critical; failures here
+            // must not prevent lastHeartbeat from updating.
             lastHeartbeat = Date()
             error = nil
         } catch {
             self.error = error
+            return
         }
+        try? await syncAgents()
+        await refreshDevices()
     }
 
     func setDeviceEnabled(_ device: DeviceRecord, enabled: Bool) {

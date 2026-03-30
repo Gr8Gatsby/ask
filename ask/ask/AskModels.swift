@@ -179,8 +179,11 @@ struct AskMachine: Identifiable {
 
     var connectionStatus: ConnectionStatus {
         let age = Date().timeIntervalSince(lastHeartbeat)
-        if age < 90 { return status == .busy ? .busy : .online }
-        if age < 600 { return .sleeping }
+        // 3 min: allows for 6 missed heartbeats or a post-sleep CloudKit delay.
+        // 20 min: sleeping (Mac likely closed lid or network unavailable).
+        // 20 min+: offline for our purposes (blocks can't be acted on).
+        if age < 180 { return status == .busy ? .busy : .online }
+        if age < 1200 { return .sleeping }
         return .offline
     }
 
