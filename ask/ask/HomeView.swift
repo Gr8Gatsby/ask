@@ -668,7 +668,7 @@ private struct ScriptDetailView: View {
                     List {
                         ForEach(mainBlocks) { block in
                             Section {
-                                BlockView(block: block) { value in
+                                BlockView(block: block, isWaiting: isWaiting) { value in
                                     await onRespond(block, value)
                                 }
                             }

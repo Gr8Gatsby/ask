@@ -69,6 +69,7 @@ private extension UIFont {
 struct BlockView: View {
     let block: RKBlock
     let onRespond: (String) async -> Void
+    var isWaiting: Bool = false
 
     @AppStorage("showBlockDebugInfo") private var showDebugInfo: Bool = false
     @State private var showDebug = false
@@ -139,7 +140,7 @@ struct BlockView: View {
             }
         case .list:
             if let p = block.listPayload {
-                ListBlockView(payload: p, onRespond: onRespond)
+                ListBlockView(payload: p, isWaiting: isWaiting, onRespond: onRespond)
             }
         case .detail:
             EmptyView() // detail blocks are surfaced as navigation pushes in ScriptDetailView
@@ -620,6 +621,7 @@ struct PickerBlockView: View {
 
 struct ListBlockView: View {
     let payload: RKListPayload
+    var isWaiting: Bool = false
     let onRespond: (String) async -> Void
 
     @State private var tappedID: String?
@@ -646,6 +648,10 @@ struct ListBlockView: View {
                         tappedID = item.id
                         Task {
                             await onRespond(item.id)
+                            // Keep spinner alive while burst-polling for the detail block.
+                            // isWaiting going false (detail arrived or error) clears it via
+                            // onChange below. This timeout is a safety fallback only.
+                            try? await Task.sleep(for: .seconds(10))
                             tappedID = nil
                         }
                     } label: {
@@ -733,6 +739,11 @@ struct ListBlockView: View {
         .overlay(RoundedRectangle(cornerRadius: 10)
             .stroke(Color.secondary.opacity(0.2), lineWidth: 0.5))
         .padding(.vertical, 4)
+        .onChange(of: isWaiting) { _, waiting in
+            // Clear the in-row spinner as soon as burst polling ends —
+            // either because the detail block arrived (nav pushed) or an error occurred.
+            if !waiting { tappedID = nil }
+        }
     }
 }
 
