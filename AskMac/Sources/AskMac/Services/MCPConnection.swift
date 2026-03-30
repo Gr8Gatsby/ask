@@ -146,16 +146,17 @@ final class MCPConnection: @unchecked Sendable {
 
         switch method {
         case "initialize":
-            // Reply immediately — never block the script's init handshake on CloudKit.
-            // Stale-block purge runs in the background; any blocks not cleared will be
-            // overwritten by the script's first emit_block (savePolicy .allKeys) or
-            // will expire via their TTL.
-            reply(id: id, result: [
-                "protocolVersion": "2024-11-05",
-                "capabilities": ["tools": [String: String]()],
-                "serverInfo": ["name": "AskMac", "version": "1.0"]
-            ])
-            Task { try? await blockService.clearAllBlocks() }
+            // Clear stale blocks BEFORE replying so the script can't emit new blocks
+            // until the old ones are gone. Scripts time out their initialize call at
+            // 15 seconds; a CloudKit clear takes 1–3 seconds — well within budget.
+            Task {
+                try? await blockService.clearAllBlocks()
+                reply(id: id, result: [
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": ["tools": [String: String]()],
+                    "serverInfo": ["name": "AskMac", "version": "1.0"]
+                ])
+            }
 
         case "notifications/initialized":
             print("[MCPConnection:\(scriptID)] Ready")
@@ -366,9 +367,19 @@ final class MCPConnection: @unchecked Sendable {
         alert         {"title":string, "body":string, "icon":string?}
         status        {"label":string, "detail":string?, "icon":string?, "color":"green"|"blue"|"orange"|"red"|"yellow"}
         prompt        {"title":string, "placeholder":string?, "multiline":bool?}
-        info_card     {"title":string, "pairs":[{"key":string,"value":string}]}
         chat_prompt   {"title":string, "context":string?, "placeholder":string?}
+        info_card     {"title":string, "pairs":[{"key":string,"value":string}]}
         icon_card     {"title":string, "subtitle":string?}
+        list          {"title":string?, "items":[{"id":string,"label":string,"subtitle":string?}], "actions":[string]?}
+        detail        {"title":string, "body":string, "actions":[string]?}
+        countdown     {"label":string, "time":string (ISO 8601 UTC)}
+        tile          {"label":string, "body":string?, "status_color":string?, "action_required":bool?}
+        picker        {"title":string, "options":[string], "selected":string?}
+
+        list: items respond with item.id; actions respond with the action string.
+        detail: shown as a full-screen pushed view with Markdown rendering. Close button
+          sends "dismissed". Use actions[] only for non-dismiss interactions.
+        tile: drives the home-screen tile only; not shown in script detail view.
 
         User responses are delivered as notifications/message with:
           data.type == "user_response", data.blockId, data.value

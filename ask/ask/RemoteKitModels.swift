@@ -89,6 +89,7 @@ struct RKListPayload: Codable {
     }
     let title: String?
     let items: [Item]
+    let actions: [String]?
 }
 
 struct RKDetailPayload: Codable {

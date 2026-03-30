@@ -1,7 +1,6 @@
 import SwiftUI
 import UIKit
 import CoreText
-import WebKit
 import Combine
 
 // MARK: - Emoji-safe text
@@ -53,41 +52,6 @@ private struct EmojiText: UIViewRepresentable {
             UIFontDescriptor.AttributeName(rawValue: kCTFontCascadeListAttribute as String): [emojiDescriptor]
         ])
         return UIFont(descriptor: descriptor, size: uiFont.pointSize)
-    }
-}
-
-// MARK: - SVG rendering
-
-/// Renders an inline SVG string using a transparent WKWebView.
-/// The SVG scales to fill the available frame exactly.
-struct SVGImageView: UIViewRepresentable {
-    let svgString: String
-
-    func makeUIView(context: Context) -> WKWebView {
-        let webView = WKWebView()
-        webView.isOpaque = false
-        webView.backgroundColor = .clear
-        webView.scrollView.isScrollEnabled = false
-        webView.scrollView.bounces = false
-        return webView
-    }
-
-    func updateUIView(_ webView: WKWebView, context: Context) {
-        let html = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-        <meta name="viewport" content="width=device-width,initial-scale=1">
-        <style>
-        *{margin:0;padding:0;box-sizing:border-box}
-        html,body{width:100%;height:100%;background:transparent}
-        svg{width:100%;height:100%;display:block}
-        </style>
-        </head>
-        <body>\(svgString)</body>
-        </html>
-        """
-        webView.loadHTMLString(html, baseURL: nil)
     }
 }
 
@@ -161,7 +125,7 @@ struct BlockView: View {
             }
         case .iconCard:
             if let p = block.iconCardPayload {
-                IconCardBlockView(payload: p, svgString: block.scriptIconSVG, iconData: block.scriptIconData, icon: block.scriptIcon)
+                IconCardBlockView(payload: p, iconData: block.scriptIconData, icon: block.scriptIcon)
             }
         case .picker:
             if let p = block.pickerPayload {
@@ -178,9 +142,7 @@ struct BlockView: View {
                 ListBlockView(payload: p, onRespond: onRespond)
             }
         case .detail:
-            if let p = block.detailPayload {
-                DetailBlockView(payload: p, onRespond: onRespond)
-            }
+            EmptyView() // detail blocks are surfaced as navigation pushes in ScriptDetailView
         }
     }
 
@@ -219,7 +181,6 @@ struct ConfirmationBlockView: View {
     let onRespond: (String) async -> Void
 
     @State private var responding = false
-    @State private var responded = false
     @State private var selectedOption: String?
 
     var body: some View {
@@ -235,18 +196,7 @@ struct ConfirmationBlockView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            if responded {
-                HStack(spacing: 6) {
-                    Image(systemName: "checkmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text("Sent")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .padding(.vertical, 2)
-            } else if payload.options.count <= 2 {
+            if payload.options.count <= 2 {
                 HStack(spacing: 8) {
                     ForEach(payload.options, id: \.self) { option in
                         optionButton(option)
@@ -267,7 +217,6 @@ struct ConfirmationBlockView: View {
             Task {
                 responding = true
                 await onRespond(option)
-                responded = true
             }
         } label: {
             ZStack {
@@ -303,7 +252,6 @@ struct ConfirmationBlockView: View {
                     Task {
                         responding = true
                         await onRespond(option)
-                        responded = true
                     }
                 } label: {
                     HStack(spacing: 12) {
@@ -560,6 +508,7 @@ struct ChatPromptBlockView: View {
     private func submit() {
         let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !answer.isEmpty, !responding else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         withAnimation { sentMessage = answer }
         text = ""
         Task {
@@ -574,9 +523,8 @@ struct ChatPromptBlockView: View {
 
 struct IconCardBlockView: View {
     let payload: RKIconCardPayload
-    let svgString: String?  // raw SVG markup
-    let iconData: String?   // base64 PNG fallback
-    let icon: String?       // SF Symbol final fallback
+    let iconData: String?   // base64 PNG from Mac's SVG→PNG conversion
+    let icon: String?       // SF Symbol fallback
 
     var body: some View {
         HStack(spacing: 12) {
@@ -599,11 +547,9 @@ struct IconCardBlockView: View {
 
     @ViewBuilder
     private var scriptIcon: some View {
-        if let svg = svgString {
-            SVGImageView(svgString: svg)
-        } else if let data = iconData,
-                  let imageData = Data(base64Encoded: data),
-                  let uiImage = UIImage(data: imageData) {
+        if let data = iconData,
+           let imageData = Data(base64Encoded: data),
+           let uiImage = UIImage(data: imageData) {
             Image(uiImage: uiImage)
                 .resizable()
                 .scaledToFit()
@@ -623,7 +569,6 @@ struct PickerBlockView: View {
 
     @State private var selected: String
     @State private var responding = false
-    @State private var responded = false
 
     init(payload: RKPickerPayload, onRespond: @escaping (String) async -> Void) {
         self.payload = payload
@@ -637,49 +582,34 @@ struct PickerBlockView: View {
                 .font(.subheadline)
                 .fontWeight(.semibold)
 
-            if responded {
-                HStack(spacing: 6) {
-                    Image(systemName: "checkmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(selected)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .padding(.vertical, 2)
-            } else {
-                HStack(spacing: 10) {
-                    Picker(payload.title, selection: $selected) {
-                        ForEach(payload.options, id: \.self) { option in
-                            Text(option).tag(option)
-                        }
+            HStack(spacing: 10) {
+                Picker(payload.title, selection: $selected) {
+                    ForEach(payload.options, id: \.self) { option in
+                        Text(option).tag(option)
                     }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-                    .disabled(responding)
-
-                    Spacer()
-
-                    Button {
-                        guard !responding else { return }
-                        responding = true
-                        Task {
-                            await onRespond(selected)
-                            responded = true
-                            responding = false
-                        }
-                    } label: {
-                        if responding {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Text("Select")
-                                .fontWeight(.semibold)
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(responding || payload.options.isEmpty)
                 }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .disabled(responding)
+
+                Spacer()
+
+                Button {
+                    guard !responding else { return }
+                    responding = true
+                    Task {
+                        await onRespond(selected)
+                    }
+                } label: {
+                    if responding {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Select")
+                            .fontWeight(.semibold)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(responding || payload.options.isEmpty)
             }
         }
         .padding(.vertical, 4)
@@ -693,6 +623,7 @@ struct ListBlockView: View {
     let onRespond: (String) async -> Void
 
     @State private var tappedID: String?
+    @State private var tappedAction: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -704,48 +635,97 @@ struct ListBlockView: View {
                     .padding(.top, 10)
                     .padding(.bottom, 8)
             }
-            ForEach(Array(payload.items.enumerated()), id: \.element.id) { idx, item in
-                Button {
-                    guard tappedID == nil else { return }
-                    tappedID = item.id
-                    Task {
-                        await onRespond(item.id)
-                        tappedID = nil
-                    }
-                } label: {
-                    HStack(spacing: 10) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            EmojiText(text: item.label,
-                                      uiFont: .preferredFont(forTextStyle: .subheadline))
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            if let subtitle = item.subtitle, !subtitle.isEmpty {
-                                EmojiText(text: subtitle,
-                                          uiFont: .preferredFont(forTextStyle: .caption1),
-                                          color: .secondaryLabel)
+
+            if payload.items.isEmpty && (payload.actions == nil || payload.actions!.isEmpty) {
+                // Truly empty — nothing to show
+            } else {
+                ForEach(Array(payload.items.enumerated()), id: \.element.id) { idx, item in
+                    Button {
+                        guard tappedID == nil && tappedAction == nil else { return }
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        tappedID = item.id
+                        Task {
+                            await onRespond(item.id)
+                            tappedID = nil
+                        }
+                    } label: {
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                EmojiText(text: item.label,
+                                          uiFont: .preferredFont(forTextStyle: .subheadline))
                                     .fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                if let subtitle = item.subtitle, !subtitle.isEmpty {
+                                    EmojiText(text: subtitle,
+                                              uiFont: .preferredFont(forTextStyle: .caption1),
+                                              color: .secondaryLabel)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                            if tappedID == item.id {
+                                ProgressView().scaleEffect(0.7).tint(Color.accentColor)
+                            } else {
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundStyle(Color(.tertiaryLabel))
                             }
                         }
-                        if tappedID == item.id {
-                            ProgressView().scaleEffect(0.7).tint(Color.accentColor)
-                        } else {
-                            Image(systemName: "chevron.right")
-                                .font(.caption)
-                                .foregroundStyle(Color(.tertiaryLabel))
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(tappedID == item.id
+                                    ? Color.accentColor.opacity(0.08)
+                                    : Color(.secondarySystemGroupedBackground))
+                    }
+                    .buttonStyle(.plain)
+                    .animation(.easeInOut(duration: 0.15), value: tappedID)
+                    .disabled(tappedAction != nil)
+
+                    if idx < payload.items.count - 1 {
+                        Divider().padding(.leading, 12)
+                    }
+                }
+
+                if let actions = payload.actions, !actions.isEmpty {
+                    if !payload.items.isEmpty {
+                        Divider()
+                    }
+                    VStack(spacing: 6) {
+                        ForEach(actions, id: \.self) { action in
+                            Button {
+                                guard tappedAction == nil && tappedID == nil else { return }
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                tappedAction = action
+                                Task {
+                                    await onRespond(action)
+                                    tappedAction = nil
+                                }
+                            } label: {
+                                ZStack {
+                                    if tappedAction == action {
+                                        ProgressView().scaleEffect(0.7).tint(Color.accentColor)
+                                    } else {
+                                        EmojiText(text: action,
+                                                  uiFont: .preferredFont(forTextStyle: .subheadline).withWeight(.semibold),
+                                                  color: UIColor(Color.accentColor),
+                                                  alignment: .center)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity)
+                                .frame(minHeight: 36)
+                                .padding(.vertical, 6)
+                                .background(Color.accentColor.opacity(0.1))
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(tappedAction != nil || tappedID != nil)
+                            .opacity(tappedAction != nil && tappedAction != action ? 0.4 : 1)
+                            .animation(.easeInOut(duration: 0.15), value: tappedAction)
                         }
                     }
-                    .padding(.vertical, 10)
                     .padding(.horizontal, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(tappedID == item.id
-                                ? Color.accentColor.opacity(0.08)
-                                : Color(.secondarySystemGroupedBackground))
-                }
-                .buttonStyle(.plain)
-                .animation(.easeInOut(duration: 0.15), value: tappedID)
-
-                if idx < payload.items.count - 1 {
-                    Divider().padding(.leading, 12)
+                    .padding(.vertical, 10)
                 }
             }
         }

@@ -22,8 +22,11 @@ struct BlockPreviewView: View {
             case "alert":        AlertPreview(payload: payload)
             case "prompt", "chat_prompt": PromptPreview(payload: payload, onRespond: onRespond)
             case "countdown":    CountdownPreview(payload: payload)
-            case "list":         ListPreview(payload: payload)
-            case "detail":       DetailPreview(payload: payload)
+            case "list":         ListPreview(payload: payload, onRespond: onRespond)
+            case "detail":       DetailPreview(payload: payload, onRespond: onRespond)
+            case "picker":       PickerPreview(payload: payload, onRespond: onRespond)
+            case "icon_card":    IconCardPreview(payload: payload)
+            case "tile":         EmptyView() // drives home-screen tile only
             default:             EmptyView()
             }
         }
@@ -259,6 +262,7 @@ private struct PromptPreview: View {
 
 private struct ListPreview: View {
     let payload: [String: Any]
+    var onRespond: ((String) -> Void)?
 
     private var items: [(id: String, label: String, subtitle: String?)] {
         guard let raw = payload["items"] as? [[String: Any]] else { return [] }
@@ -268,6 +272,10 @@ private struct ListPreview: View {
         }
     }
 
+    private var actions: [String] {
+        payload["actions"] as? [String] ?? []
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let title = payload["title"] as? String, !title.isEmpty {
@@ -275,17 +283,25 @@ private struct ListPreview: View {
                     .padding(.horizontal, 8).padding(.top, 7).padding(.bottom, 5)
             }
             ForEach(Array(items.prefix(5).enumerated()), id: \.element.id) { idx, item in
-                HStack {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(item.label).font(.caption).lineLimit(2)
-                        if let sub = item.subtitle {
-                            Text(sub).font(.caption2).foregroundStyle(.secondary)
+                Button {
+                    onRespond?(item.id)
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(item.label).font(.caption).lineLimit(2)
+                                .foregroundStyle(.primary)
+                            if let sub = item.subtitle {
+                                Text(sub).font(.caption2).foregroundStyle(.secondary)
+                            }
                         }
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                     }
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 8).padding(.vertical, 5)
+                .buttonStyle(.plain)
+                .disabled(onRespond == nil)
                 if idx < min(items.count, 5) - 1 {
                     Divider().padding(.leading, 8)
                 }
@@ -294,6 +310,18 @@ private struct ListPreview: View {
                 Text("+ \(items.count - 5) more")
                     .font(.caption2).foregroundStyle(.secondary)
                     .padding(.horizontal, 8).padding(.vertical, 4)
+            }
+            if !actions.isEmpty {
+                if !items.isEmpty { Divider() }
+                HStack(spacing: 6) {
+                    ForEach(actions, id: \.self) { action in
+                        Button(action) { onRespond?(action) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(onRespond == nil)
+                    }
+                }
+                .padding(.horizontal, 8).padding(.vertical, 6)
             }
         }
         .background(Color.secondary.opacity(0.07))
@@ -305,6 +333,7 @@ private struct ListPreview: View {
 
 private struct DetailPreview: View {
     let payload: [String: Any]
+    var onRespond: ((String) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -317,15 +346,108 @@ private struct DetailPreview: View {
             if let actions = payload["actions"] as? [String], !actions.isEmpty {
                 HStack(spacing: 6) {
                     ForEach(actions, id: \.self) { action in
-                        Text(action)
-                            .font(.caption2)
-                            .padding(.horizontal, 7).padding(.vertical, 3)
-                            .background(Color.accentColor.opacity(0.1))
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                        Button {
+                            onRespond?(action)
+                        } label: {
+                            Text(action)
+                                .font(.caption2)
+                                .padding(.horizontal, 7).padding(.vertical, 3)
+                                .background(Color.accentColor.opacity(0.1))
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(onRespond == nil)
                     }
                     Spacer()
                 }
             }
+        }
+        .padding(8)
+        .background(Color.secondary.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+}
+
+// MARK: - Picker
+
+private struct PickerPreview: View {
+    let payload: [String: Any]
+    var onRespond: ((String) -> Void)?
+
+    @State private var selected: String = ""
+    @State private var responded = false
+
+    private var options: [String] {
+        payload["options"] as? [String] ?? []
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let title = payload["title"] as? String, !title.isEmpty {
+                Text(title).font(.subheadline).fontWeight(.medium)
+            }
+            if responded {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(selected)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+            } else {
+                HStack(spacing: 8) {
+                    Picker("", selection: $selected) {
+                        ForEach(options, id: \.self) { Text($0).tag($0) }
+                    }
+                    .labelsHidden()
+                    .disabled(onRespond == nil)
+                    Spacer()
+                    if let respond = onRespond {
+                        Button("Select") {
+                            guard !selected.isEmpty else { return }
+                            respond(selected)
+                            responded = true
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(selected.isEmpty)
+                    }
+                }
+            }
+        }
+        .padding(8)
+        .background(Color.secondary.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .onAppear {
+            if selected.isEmpty {
+                selected = (payload["selected"] as? String) ?? options.first ?? ""
+            }
+        }
+    }
+}
+
+// MARK: - Icon Card
+
+private struct IconCardPreview: View {
+    let payload: [String: Any]
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "app.fill")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 32, height: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                if let title = payload["title"] as? String, !title.isEmpty {
+                    Text(title).font(.subheadline).fontWeight(.medium)
+                }
+                if let subtitle = payload["subtitle"] as? String, !subtitle.isEmpty {
+                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
         }
         .padding(8)
         .background(Color.secondary.opacity(0.07))

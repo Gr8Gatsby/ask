@@ -67,6 +67,9 @@ struct HomeView: View {
     @State private var lastHeartbeatAt: Date = .distantPast
     @State private var notifiedBlockIDs: Set<String> = []
     @State private var dismissedToastScriptIDs: Set<String> = []
+    @State private var burstPollingUntil: Date = .distantPast
+    @State private var responseErrorMessage: String?
+    @State private var deviceEnabled: Bool = true
 
     private var activeMachine: AskMachine? {
         if let id = activeMachineID { return machines.first { $0.id == id } }
@@ -101,6 +104,8 @@ struct HomeView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if machines.isEmpty {
                     emptyState
+                } else if !deviceEnabled {
+                    disabledState
                 } else {
                     content
                 }
@@ -116,8 +121,18 @@ struct HomeView: View {
                 }
             }
             .overlay(alignment: .bottom) {
-                if !visibleToastGroups.isEmpty {
-                    VStack(spacing: 8) {
+                VStack(spacing: 8) {
+                    if let errorMsg = responseErrorMessage {
+                        Text(errorMsg)
+                            .font(.caption)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .background(Color.red.opacity(0.85))
+                            .clipShape(Capsule())
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                    if !visibleToastGroups.isEmpty {
                         ForEach(visibleToastGroups) { group in
                             ActionToastView(group: group, onTap: {
                                 selectedScriptID = group.scriptID
@@ -133,10 +148,11 @@ struct HomeView: View {
                             ))
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 20)
-                    .animation(.spring(response: 0.35, dampingFraction: 0.8), value: visibleToastGroups.map(\.scriptID))
                 }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 20)
+                .animation(.spring(response: 0.35, dampingFraction: 0.8), value: visibleToastGroups.map(\.scriptID))
+                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: responseErrorMessage)
             }
         }
         .fullScreenCover(
@@ -146,9 +162,22 @@ struct HomeView: View {
             )
         ) {
             if let id = selectedScriptID {
-                ScriptDetailView(scriptID: id, allBlocks: blocks) { block, value in
-                    await respondToBlock(block, value: value)
-                }
+                ScriptDetailView(
+                    scriptID: id,
+                    allBlocks: blocks,
+                    isWaiting: Date() < burstPollingUntil,
+                    onRespond: { block, value in await respondToBlock(block, value: value) },
+                    toastGroups: visibleToastGroups,
+                    errorMessage: responseErrorMessage,
+                    onToastTap: { scriptID in
+                        // Switch to the tapped script's detail inside the cover
+                        selectedScriptID = scriptID
+                    },
+                    onToastDismiss: { scriptID in
+                        let anim = SwiftUI.Animation.spring(response: 0.3, dampingFraction: 0.8)
+                        withAnimation(anim) { dismissedToastScriptIDs.insert(scriptID) }
+                    }
+                )
             }
         }
         .sheet(isPresented: $showSettings) {
@@ -272,6 +301,17 @@ struct HomeView: View {
         }
     }
 
+    private var disabledState: some View {
+        ContentUnavailableView {
+            Label("Access Disabled", systemImage: "iphone.slash")
+        } description: {
+            Text("This device has been disabled from your Mac.\nToggle it back on in the Ask menu bar app.")
+        } actions: {
+            Button("Check Again") { Task { await load() } }
+                .buttonStyle(.borderedProminent)
+        }
+    }
+
     // MARK: - Data
 
     private func load() async {
@@ -281,7 +321,8 @@ struct HomeView: View {
             print("[HomeView] Failed to fetch machines: \(error)")
         }
         if let machine = activeMachine {
-            if let fresh = try? await cloudKit.fetchBlocks(machineID: machine.id) {
+            deviceEnabled = await cloudKit.checkDeviceEnabled(machineID: machine.id)
+            if deviceEnabled, let fresh = try? await cloudKit.fetchBlocks(machineID: machine.id) {
                 withAnimation(.easeOut(duration: 0.25)) {
                     blocks = fresh.filter { $0.blockType != .alert }
                 }
@@ -333,13 +374,16 @@ struct HomeView: View {
             // Prevents a blank UI during the Mac restart window while scripts re-emit.
             var consecutiveEmpty = 0
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(5))
+                let interval: Double = Date() < burstPollingUntil ? 1.0 : 3.0
+                try? await Task.sleep(for: .seconds(interval))
                 guard !Task.isCancelled else { break }
                 if let fresh = try? await cloudKit.fetchMachines(), !fresh.isEmpty {
                     machines = fresh
                 }
                 if let machine = activeMachine {
-                    if let fresh = try? await cloudKit.fetchBlocks(machineID: machine.id) {
+                    let isEnabled = await cloudKit.checkDeviceEnabled(machineID: machine.id)
+                    if deviceEnabled != isEnabled { deviceEnabled = isEnabled }
+                    if isEnabled, let fresh = try? await cloudKit.fetchBlocks(machineID: machine.id) {
                         let filtered = fresh.filter { $0.blockType != .alert }
                         if filtered.isEmpty {
                             consecutiveEmpty += 1
@@ -357,6 +401,22 @@ struct HomeView: View {
     }
 
     private func respondToBlock(_ block: RKBlock, value: String) async {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+
+        let shouldRemove: Bool
+        switch block.blockType {
+        case .confirmation, .prompt, .picker, .detail: shouldRemove = true
+        default: shouldRemove = false
+        }
+
+        if shouldRemove {
+            withAnimation(.easeOut(duration: 0.22)) {
+                blocks.removeAll { $0.id == block.id }
+            }
+        }
+
+        burstPollingUntil = Date().addingTimeInterval(10)
+
         do {
             try await cloudKit.postResponse(
                 blockID: block.id,
@@ -365,7 +425,21 @@ struct HomeView: View {
                 value: value
             )
         } catch {
-            print("[HomeView] Failed to post block response: \(error)")
+            if shouldRemove {
+                withAnimation(.easeOut(duration: 0.22)) {
+                    blocks.append(block)
+                    blocks.sort {
+                        if $0.requiresResponse != $1.requiresResponse { return $0.requiresResponse }
+                        return $0.createdAt > $1.createdAt
+                    }
+                }
+            }
+            burstPollingUntil = .distantPast
+            withAnimation { responseErrorMessage = "Couldn't send — check your connection" }
+            Task {
+                try? await Task.sleep(for: .seconds(3))
+                withAnimation { responseErrorMessage = nil }
+            }
         }
     }
 }
@@ -526,6 +600,7 @@ private struct ActionToastView: View {
                 .padding(.leading, 14)
                 .padding(.trailing, 8)
                 .padding(.vertical, 12)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
@@ -554,27 +629,54 @@ private struct ActionToastView: View {
 private struct ScriptDetailView: View {
     let scriptID: String
     let allBlocks: [RKBlock]
+    var isWaiting: Bool = false
     let onRespond: (RKBlock, String) async -> Void
+    var toastGroups: [ScriptGroup] = []
+    var errorMessage: String? = nil
+    var onToastTap: ((String) -> Void)? = nil
+    var onToastDismiss: ((String) -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
 
+    // Detail-push navigation state
+    @State private var isShowingDetail = false
+    @State private var pushedDetail: RKBlock? = nil
+    @State private var detailSentResponse = false
+
     private var group: ScriptGroup {
-        // Exclude tile blocks — they drive home-screen tile display only
         ScriptGroup(scriptID: scriptID, blocks: allBlocks.filter { $0.scriptID == scriptID && $0.blockType != .tile })
     }
 
+    /// Blocks shown in the main list — detail blocks are handled as navigation pushes.
+    private var mainBlocks: [RKBlock] { group.blocks.filter { $0.blockType != .detail } }
+
+    /// The active detail block, if any.
+    private var currentDetailBlock: RKBlock? { group.blocks.first { $0.blockType == .detail } }
+
     var body: some View {
         NavigationStack {
-            List {
-                ForEach(group.blocks) { block in
-                    Section {
-                        BlockView(block: block) { value in
-                            await onRespond(block, value)
+            Group {
+                if mainBlocks.isEmpty && isWaiting && currentDetailBlock == nil {
+                    VStack(spacing: 10) {
+                        ProgressView()
+                        Text("Waiting for response…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List {
+                        ForEach(mainBlocks) { block in
+                            Section {
+                                BlockView(block: block) { value in
+                                    await onRespond(block, value)
+                                }
+                            }
                         }
                     }
+                    .listStyle(.insetGrouped)
                 }
             }
-            .listStyle(.insetGrouped)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
@@ -593,7 +695,180 @@ private struct ScriptDetailView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .navigationDestination(isPresented: $isShowingDetail) {
+                if let block = pushedDetail, let payload = block.detailPayload {
+                    DetailFullView(
+                        payload: payload,
+                        onClose: {
+                            detailSentResponse = true
+                            Task { await onRespond(block, "dismissed") }
+                            isShowingDetail = false
+                            Task {
+                                try? await Task.sleep(for: .milliseconds(450))
+                                if !isShowingDetail { pushedDetail = nil }
+                            }
+                        },
+                        onAction: { value in
+                            await onRespond(block, value)
+                        }
+                    )
+                }
+            }
+            .overlay(alignment: .bottom) {
+                toastOverlay
+            }
         }
+        .onChange(of: currentDetailBlock?.id) { _, newID in
+            if let id = newID, pushedDetail?.id != id {
+                pushedDetail = currentDetailBlock
+                detailSentResponse = false
+                isShowingDetail = true
+            } else if newID == nil && isShowingDetail {
+                // Block cleared externally — pop without sending a duplicate response
+                detailSentResponse = true
+                isShowingDetail = false
+                Task {
+                    try? await Task.sleep(for: .milliseconds(450))
+                    pushedDetail = nil
+                    detailSentResponse = false
+                }
+            }
+        }
+        .onChange(of: isShowingDetail) { _, showing in
+            if !showing && !detailSentResponse {
+                // User swiped back via the system gesture
+                if let block = pushedDetail {
+                    Task { await onRespond(block, "dismissed") }
+                }
+                Task {
+                    try? await Task.sleep(for: .milliseconds(450))
+                    if !isShowingDetail { pushedDetail = nil }
+                }
+                detailSentResponse = false
+            }
+        }
+    }
+
+    private var toastOverlay: some View {
+        VStack(spacing: 8) {
+            if let errorMsg = errorMessage {
+                Text(errorMsg)
+                    .font(.caption)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(Color.red.opacity(0.85))
+                    .clipShape(Capsule())
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            if !toastGroups.isEmpty {
+                ForEach(toastGroups) { group in
+                    ActionToastView(group: group, onTap: {
+                        onToastTap?(group.scriptID)
+                    }, onDismiss: {
+                        onToastDismiss?(group.scriptID)
+                    })
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .bottom).combined(with: .opacity),
+                        removal: .move(edge: .bottom).combined(with: .opacity)
+                    ))
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 20)
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: toastGroups.map(\.scriptID))
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: errorMessage)
+    }
+}
+
+// MARK: - Detail full-screen view
+
+private struct DetailFullView: View {
+    let payload: RKDetailPayload
+    let onClose: () -> Void
+    var onAction: ((String) async -> Void)? = nil
+
+    @State private var responding = false
+    @State private var selectedAction: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                markdownBody
+
+                if let actions = payload.actions, !actions.isEmpty, onAction != nil {
+                    VStack(spacing: 8) {
+                        ForEach(actions, id: \.self) { action in
+                            actionButton(action)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 20)
+        }
+        .navigationTitle(payload.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Close", action: onClose)
+                    .disabled(responding)
+            }
+        }
+    }
+
+    private var markdownBody: some View {
+        Group {
+            if let attributed = try? AttributedString(
+                markdown: payload.body,
+                options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
+            ) {
+                Text(attributed)
+                    .font(.body)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            } else {
+                Text(payload.body)
+                    .font(.body)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    private func actionButton(_ action: String) -> some View {
+        let isSelected = selectedAction == action
+        return Button {
+            guard !responding, let handler = onAction else { return }
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            selectedAction = action
+            Task {
+                responding = true
+                await handler(action)
+                responding = false
+            }
+        } label: {
+            ZStack {
+                if responding && isSelected {
+                    ProgressView().tint(Color.accentColor)
+                } else {
+                    Text(action)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 44)
+            .padding(.vertical, 6)
+            .background(isSelected ? Color.accentColor.opacity(0.2) : Color.accentColor.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .disabled(responding)
+        .opacity(responding && !isSelected ? 0.4 : 1)
+        .animation(.easeInOut(duration: 0.15), value: responding)
     }
 }
 
@@ -612,16 +887,14 @@ private func blockStatusColor(_ colorString: String?) -> Color {
 
 // MARK: - Script icon
 
-/// Renders the script's icon. Priority: SVG → PNG → SF Symbol.
+/// Renders the script's icon. Priority: PNG (from Mac SVG→PNG) → SF Symbol.
 private struct ScriptIconView: View {
     let svgString: String?
     let iconData: String?
     let sfSymbol: String
 
     var body: some View {
-        if let svg = svgString {
-            SVGImageView(svgString: svg)
-        } else if let data = iconData,
+        if let data = iconData,
                   let imageData = Data(base64Encoded: data),
                   let uiImage = UIImage(data: imageData) {
             Image(uiImage: uiImage)
