@@ -10,6 +10,8 @@ struct AskMacApp: App {
     @State private var actionHistory: ActionHistoryService
     @State private var scriptManager: ScriptManager
     @State private var responsePoller: ResponsePoller
+    @State private var agentManager: AgentManager
+    @State private var jobExecutor: JobExecutor
 
     init() {
         let s = settings
@@ -19,12 +21,16 @@ struct AskMacApp: App {
         let ah = ActionHistoryService()
         let sm = ScriptManager(cloudKit: ck, machineID: s.machineID, settings: s)
         let rp = ResponsePoller(cloudKit: ck, machineID: s.machineID)
+        let am = AgentManager(cloudKit: ck, settings: s)
+        let je = JobExecutor(cloudKit: ck, agentManager: am, actionHistory: ah, settings: s)
 
         _heartbeat = State(initialValue: hb)
         _messageWatcher = State(initialValue: mw)
         _actionHistory = State(initialValue: ah)
         _scriptManager = State(initialValue: sm)
         _responsePoller = State(initialValue: rp)
+        _agentManager = State(initialValue: am)
+        _jobExecutor = State(initialValue: je)
 
         Task {
             await ck.checkAccountStatus()
@@ -33,6 +39,8 @@ struct AskMacApp: App {
             mw.start()
             sm.start()
             rp.start(scriptManager: sm)
+            await am.publishAll()
+            je.start()
             // Purge old records in the background after services are running.
             await ck.purgeOldRecords(machineID: s.machineID)
         }
@@ -64,6 +72,7 @@ struct AskMacApp: App {
             SettingsView()
                 .environment(settings)
                 .environment(scriptManager)
+                .environment(agentManager)
         }
         .windowResizability(.contentSize)
         .defaultPosition(.center)

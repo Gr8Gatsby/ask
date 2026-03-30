@@ -123,8 +123,12 @@ final class ScriptManager {
 
             let iconCandidate = manifest.iconFile ?? "icon.svg"
             let iconURL = dir.appendingPathComponent(iconCandidate)
-            let iconImage: NSImage? = NSImage(contentsOf: iconURL)
-            let svgString: String? = iconURL.pathExtension.lowercased() == "svg"
+            let resolvedIcon = iconURL.resolvingSymlinksInPath()
+            let resolvedDirForIcon = dir.resolvingSymlinksInPath()
+            let iconInBounds = resolvedIcon.path.hasPrefix(resolvedDirForIcon.path + "/")
+                            || resolvedIcon.path == resolvedDirForIcon.path
+            let iconImage: NSImage? = iconInBounds ? NSImage(contentsOf: iconURL) : nil
+            let svgString: String? = iconInBounds && iconURL.pathExtension.lowercased() == "svg"
                 ? try? String(contentsOf: iconURL, encoding: .utf8)
                 : nil
             manifests[manifest.id] = (manifest, dir, iconImage, svgString)
@@ -195,8 +199,12 @@ final class ScriptManager {
             else { continue }
             let iconCandidate = manifest.iconFile ?? "icon.svg"
             let iconURL = dir.appendingPathComponent(iconCandidate)
-            let iconImage: NSImage? = NSImage(contentsOf: iconURL)
-            let svgString: String? = iconURL.pathExtension.lowercased() == "svg"
+            let resolvedIcon = iconURL.resolvingSymlinksInPath()
+            let resolvedDirForIcon = dir.resolvingSymlinksInPath()
+            let iconInBounds = resolvedIcon.path.hasPrefix(resolvedDirForIcon.path + "/")
+                            || resolvedIcon.path == resolvedDirForIcon.path
+            let iconImage: NSImage? = iconInBounds ? NSImage(contentsOf: iconURL) : nil
+            let svgString: String? = iconInBounds && iconURL.pathExtension.lowercased() == "svg"
                 ? try? String(contentsOf: iconURL, encoding: .utf8)
                 : nil
             manifests[manifest.id] = (manifest, dir, iconImage, svgString)
@@ -212,6 +220,15 @@ final class ScriptManager {
     private func launch(manifest: ScriptManifest, scriptDir: URL) {
         let entryURL = scriptDir.appendingPathComponent(manifest.entry)
         let fm = FileManager.default
+
+        // Reject path traversal: resolved path must stay within scriptDir
+        let resolvedEntry = entryURL.resolvingSymlinksInPath()
+        let resolvedDir   = scriptDir.resolvingSymlinksInPath()
+        guard resolvedEntry.path.hasPrefix(resolvedDir.path + "/") || resolvedEntry.path == resolvedDir.path else {
+            print("[ScriptManager] \(manifest.id): path traversal rejected for entry '\(manifest.entry)'")
+            return
+        }
+
         let canRun = fm.isExecutableFile(atPath: entryURL.path)
             || entryURL.pathExtension == "py"
             || entryURL.pathExtension == "sh"

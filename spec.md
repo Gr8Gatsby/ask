@@ -114,25 +114,20 @@ If the Mac is offline when a job is sent, the job remains `Queued` until the Mac
 - If no machines are registered, the screen shows an empty state with instructions to install the Mac companion
 
 ### Machine Detail Screen
-- Shows the machine name and current status at the top
-- Lists all agents configured on that machine
+- Accessible from the iOS settings sheet (gear button on home screen)
+- Shows the machine name and current status
+- Lists all agents configured on that machine; each row shows name, icon, and a compact capability summary
+- Tapping an agent navigates to a New Job screen for that agent
 - Shows a history of recent jobs run on that machine, sorted by most recent first
-- Each job in the history shows: the prompt (truncated), agent name, status, and time
-- Tapping an agent navigates to a screen to send a new job to that agent
-- Tapping a job in the history navigates to the job detail screen
+- Each job row shows: the prompt (truncated), agent name, status indicator, and relative time
+- Tapping a job row navigates to the Job Detail screen
 - If the machine is offline, the user can still browse history and send jobs (they will queue)
 
-### Agent Detail Screen
-- Shows the agent name and which machine it belongs to
-- Displays the agent's declared capabilities as a visual summary (e.g., "Network · Read ~/code/myproject · Subprocess")
-- Read and write paths are shown explicitly so the user knows what filesystem access will be granted
-- Provides a button to send a new job to this agent
-
 ### New Job Screen
-- Shows the agent name, machine, and a compact capability summary
+- Shows the agent name and a full capability summary
 - A text input for the prompt
-- A send button that creates the job and navigates immediately to the job detail screen
-- The user can see at a glance whether the machine is online or offline before sending
+- Displays whether the target machine is online or offline
+- A send button that creates the job and navigates immediately to the Job Detail screen
 
 ### Job Detail Screen
 - Shows the job's current status prominently
@@ -215,7 +210,7 @@ If the Mac is offline when a job is sent, the job remains `Queued` until the Mac
 - The vault directory is not created or managed by the app — the user is responsible for placing scripts there
 
 ### Agent Configuration
-- A settings screen lists all configured agents for this machine
+- Settings > Actions tab has an "Agents" section, separate from the Scripts section
 - The user can add, edit, and delete agents
 - Adding an agent requires:
   - A name
@@ -224,28 +219,21 @@ If the Mac is offline when a job is sent, the job remains `Queued` until the Mac
   - Optionally referencing named Keychain items to inject as environment variables
 - The prompt is passed to the script as its first argument (`$1`). The script is responsible for using it.
 - No shell interpolation of the prompt occurs — it is passed directly as a process argument
-- A test button runs the agent with a sample prompt (`"test"`) and shows live output in a preview pane, confirming the configuration works before it is used from iOS
-- Agents that fail the test can still be saved but are shown with a warning indicator
+- Agents are published to CloudKit so the iOS app can discover and invoke them
+- An agent's script must be located within the registered Scripts Vault
 
 ### Job Execution
-- The companion app monitors for new jobs assigned to this machine
-- Before executing a job, the companion verifies the job's signature against the paired iPhone's stored public key. Jobs that fail signature verification are rejected and marked `Failed` with a security error — they are never executed.
-- When a job arrives (machine is online) or when the Mac wakes (machine was offline), the companion picks up any `Queued` jobs in order of creation time
-- Before executing, the companion verifies:
-  - The job is signed by the paired iOS device
-  - The target agent still exists and its script is still within the vault
-  - The declared capability paths exist on the filesystem
-- The companion updates the job status to `Acknowledged`, then `Running`
-- The script is launched as a child process with:
-  - The prompt passed as the first argument (`$1`)
-  - Only the declared environment variables injected (sourced from Keychain at runtime)
-  - No inheritance of the companion app's shell environment
-  - Working directory set to the vault root (scripts run relative to the vault unless read/write paths are declared)
-- Standard output and standard error are both captured separately
-- Output is written back to the shared data store in chunks as it is produced, enabling near-real-time streaming to the iOS app
-- The process is killed if it exceeds the agent's declared timeout
-- When the process exits, the companion updates the job to `Completed` (exit code 0) or `Failed` (non-zero exit code), and records the exit code
-- One job runs at a time per machine. Additional queued jobs wait until the current job finishes.
+- A background service polls CloudKit for jobs assigned to this machine with status `Queued`
+- When a queued job is found, the companion verifies the target agent exists and its script is within the vault; if not, the job is marked `Failed` immediately
+- Job lifecycle transitions: `Queued` → `Acknowledged` → `Running` → `Completed` / `Failed`; machine status updates to `busy` during execution and returns to `idle` on completion
+- The script is launched with the prompt as the first argument (`$1`); no shell interpolation
+- Only declared Keychain-referenced env vars are injected; the companion app's environment is not inherited
+- Working directory is the vault root
+- stdout and stderr are both captured; written to CloudKit as `OutputChunk` records as output is produced, enabling near-real-time streaming to the iOS app
+- The process is killed if it exceeds the agent's declared timeout; job is marked `Failed`
+- Cancellation: the executor checks the job's CloudKit status periodically during execution; if `Cancelled` is detected, the process is killed
+- On completion, the job execution is recorded in the local action history (agent name, prompt, status, duration, exit code)
+- One job runs at a time per machine; additional queued jobs wait
 
 ### Cancellation
 - When the user cancels a job from iOS, the job's status is set to `Cancelled` in the shared data store
@@ -430,3 +418,4 @@ AskSession status updated to "active"; iOS view dismisses; session list refreshe
 | 2026-03-30 | Reload Scripts button in Settings > Actions toolbar: rescans the vault directory and starts any newly discovered scripts without restarting the app. |
 | 2026-03-30 | New block types: `list` (scrollable tappable rows, responds with row id) and `detail` (scrollable body up to 320pt with action buttons). GitHub script updated to use these for issue browsing and detail view. |
 | 2026-03-30 | brew-monitor: add "Sync Now" confirmation block that triggers an immediate check without waiting for the 4-hour interval. |
+| 2026-03-31 | Job pipeline: Mac agent configuration UI, JobExecutor service (poll → execute → stream output → history), iOS Machine Detail with agents + job history, New Job screen, Job Detail screen with streaming output. |

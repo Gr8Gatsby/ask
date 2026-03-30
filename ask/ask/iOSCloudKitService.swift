@@ -108,6 +108,17 @@ final class iOSCloudKitService {
         _ = try await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys)
     }
 
+    /// Fetches all output chunks for a job, sorted by sequence number.
+    func fetchOutputChunks(jobID: String) async throws -> [AskOutputChunk] {
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.OutputChunk.jobID, jobID)
+        let query = CKQuery(recordType: CKSchema.RecordType.outputChunk, predicate: predicate)
+        let (results, _) = try await database.records(matching: query, resultsLimit: 500)
+        return results.compactMap { _, result in
+            guard let record = try? result.get() else { return nil }
+            return AskOutputChunk(record: record)
+        }.sorted { $0.sequence < $1.sequence }
+    }
+
     // MARK: - Events
 
     /// Fetches pending AskEvent records for a machine, newest first.
@@ -405,18 +416,6 @@ final class iOSCloudKitService {
         return id
     }
 
-    // MARK: - Output
-
-    /// Fetches all output chunks for a job, sorted by sequence.
-    func fetchOutputChunks(jobID: String) async throws -> [AskOutputChunk] {
-        let predicate = NSPredicate(format: "%K == %@", CKSchema.OutputChunk.jobID, jobID)
-        let query = CKQuery(recordType: CKSchema.RecordType.outputChunk, predicate: predicate)
-        let (results, _) = try await database.records(matching: query, resultsLimit: 1000)
-        return results.compactMap { _, result in
-            guard let record = try? result.get() else { return nil }
-            return AskOutputChunk(record: record)
-        }.sorted { $0.sequence < $1.sequence }
-    }
 }
 
 enum iOSCloudKitError: LocalizedError {

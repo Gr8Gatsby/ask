@@ -39,6 +39,18 @@ final class CloudKitService {
 
     // MARK: - Agents
 
+    /// Fetches all agents configured for this machine.
+    func fetchAgents(machineID: String) async throws -> [AgentRecord] {
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.Agent.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.agent, predicate: predicate)
+        let (results, _) = try await database.records(matching: query, resultsLimit: 100)
+        return results.compactMap { _, result in
+            guard let record = try? result.get() else { return nil }
+            cachedRecords[record.recordID.recordName] = record
+            return AgentRecord(record: record)
+        }
+    }
+
     /// Publishes all configured agents for this machine to CloudKit so the iOS app can discover them.
     func saveAgent(_ agent: AgentRecord) async throws {
         let record = existingRecord(named: agent.recordName, type: CKSchema.RecordType.agent)
@@ -237,6 +249,15 @@ final class CloudKitService {
         }
     }
 
+    /// Fetches the current status of a job. Used by JobExecutor to detect cancellation.
+    func fetchJobStatus(jobID: String) async throws -> JobStatus? {
+        let recordID = CKRecord.ID(recordName: jobID)
+        let record = try await database.record(for: recordID)
+        cachedRecords[jobID] = record
+        guard let raw = record[CKSchema.Job.status] as? String else { return nil }
+        return JobStatus(rawValue: raw)
+    }
+
     /// Updates a job's status fields. Fetches from cache or CloudKit, then saves.
     func updateJob(jobID: String, status: JobStatus, startedAt: Date? = nil, completedAt: Date? = nil, exitCode: Int? = nil) async throws {
         let record = try await fetchOrCachedRecord(named: jobID, type: CKSchema.RecordType.job)
@@ -257,11 +278,11 @@ final class CloudKitService {
     /// re-emitting after launch and causes a blank iOS UI.
     /// Safe to call on every launch — runs atomically=false so partial success is fine.
     func purgeOldRecords(machineID: String) async {
+        // Jobs are intentionally excluded — they persist for iOS history.
         let types: [(recordType: String, field: String)] = [
             (CKSchema.RecordType.event,    CKSchema.Event.machineID),
             (CKSchema.RecordType.session,  CKSchema.Session.machineID),
             (CKSchema.RecordType.response, CKSchema.Response.machineID),
-            (CKSchema.RecordType.job,      CKSchema.Job.machineID),
         ]
         let predicate = NSPredicate(format: "%K == %@", "machineID", machineID)
 
