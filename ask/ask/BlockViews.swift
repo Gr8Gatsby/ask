@@ -164,6 +164,10 @@ struct BlockView: View {
             }
         case .tile:
             EmptyView() // tile blocks drive the home-screen tile; not rendered in detail view
+        case .countdown:
+            if let p = block.countdownPayload {
+                CountdownBlockView(payload: p)
+            }
         }
     }
 
@@ -595,6 +599,53 @@ struct IconCardBlockView: View {
                 .font(.title2)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+// MARK: - Countdown
+
+struct CountdownBlockView: View {
+    let payload: RKCountdownPayload
+
+    @State private var displayText: String = ""
+    private let timer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "clock")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+            Text(displayText)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+            Spacer()
+        }
+        .padding(.vertical, 4)
+        .onAppear { displayText = formatted() }
+        .onReceive(timer) { _ in displayText = formatted() }
+    }
+
+    private func formatted() -> String {
+        guard let target = ISO8601DateFormatter().date(from: payload.time) else {
+            return payload.label
+        }
+        let seconds = target.timeIntervalSinceNow
+        let relative: String
+        if seconds <= 0 {
+            return "\(payload.label) overdue"
+        } else if seconds < 60 {
+            relative = "less than a minute"
+        } else if seconds < 5 * 60 {
+            let mins = Int(seconds / 60)
+            relative = "about \(mins) minute\(mins == 1 ? "" : "s")"
+        } else if seconds < 60 * 60 {
+            let mins = Int((seconds / 60).rounded())
+            relative = "about \(mins) minutes"
+        } else {
+            let hours = Int((seconds / 3600).rounded())
+            relative = "about \(hours) hour\(hours == 1 ? "" : "s")"
+        }
+        return "\(payload.label) in \(relative)"
     }
 }
 

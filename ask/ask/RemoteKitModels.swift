@@ -12,6 +12,7 @@ enum RKBlockType: String, Codable {
     case chatPrompt = "chat_prompt"
     case iconCard = "icon_card"
     case tile   // drives home-screen tile display; not shown in detail view
+    case countdown
 }
 
 // MARK: - Block payloads
@@ -64,6 +65,11 @@ struct RKTilePayload: Codable {
 struct RKIconCardPayload: Codable {
     let title: String
     let subtitle: String?
+}
+
+struct RKCountdownPayload: Codable {
+    let label: String
+    let time: String    // ISO 8601 UTC timestamp
 }
 
 struct RKInfoCardPayload: Codable {
@@ -136,6 +142,11 @@ struct RKBlock: Identifiable {
     var tilePayload: RKTilePayload? {
         guard blockType == .tile else { return nil }
         return try? JSONDecoder().decode(RKTilePayload.self, from: payloadData)
+    }
+
+    var countdownPayload: RKCountdownPayload? {
+        guard blockType == .countdown else { return nil }
+        return try? JSONDecoder().decode(RKCountdownPayload.self, from: payloadData)
     }
 
     /// payloadJSON with UTF-16 surrogate pairs decoded to real Unicode scalars, as UTF-8 Data.

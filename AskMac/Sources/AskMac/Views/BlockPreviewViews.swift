@@ -21,6 +21,7 @@ struct BlockPreviewView: View {
             case "info_card":    InfoCardPreview(payload: payload)
             case "alert":        AlertPreview(payload: payload)
             case "prompt", "chat_prompt": PromptPreview(payload: payload, onRespond: onRespond)
+            case "countdown":    CountdownPreview(payload: payload)
             default:             EmptyView()
             }
         }
@@ -172,6 +173,31 @@ private struct AlertPreview: View {
         }
         .padding(8)
         .background(Color.orange.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+}
+
+// MARK: - Countdown
+
+private struct CountdownPreview: View {
+    let payload: [String: Any]
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "clock")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                if let label = payload["label"] as? String, let time = payload["time"] as? String {
+                    Text("\(label) in …").font(.caption)
+                    Text(time).font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color.secondary.opacity(0.07))
         .clipShape(RoundedRectangle(cornerRadius: 7))
     }
 }
