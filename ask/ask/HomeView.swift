@@ -820,10 +820,13 @@ private struct DetailFullView: View {
     }
 
     private var markdownBody: some View {
+        // .inlineOnlyPreservingWhitespace: renders bold/italic/code/links inline
+        // and preserves \n line breaks. .full causes paragraph spacing to collapse
+        // in SwiftUI Text and renders --- as "——".
         Group {
             if let attributed = try? AttributedString(
                 markdown: payload.body,
-                options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
+                options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
             ) {
                 Text(attributed)
                     .font(.body)
