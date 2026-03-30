@@ -101,6 +101,44 @@ final class ScriptManager {
         connections = [:]
     }
 
+    /// Rescans the scripts directory and launches any newly discovered scripts.
+    /// Already-running scripts are left untouched.
+    func reload() {
+        let fm = FileManager.default
+        guard let subdirs = try? fm.contentsOfDirectory(
+            at: scriptsDir,
+            includingPropertiesForKeys: [.isDirectoryKey]
+        ) else { return }
+
+        for dir in subdirs {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
+            let manifestURL = dir.appendingPathComponent("manifest.json")
+            guard let data = try? Data(contentsOf: manifestURL),
+                  let manifest = try? JSONDecoder().decode(ScriptManifest.self, from: data)
+            else { continue }
+
+            // Skip scripts that are already tracked
+            guard manifests[manifest.id] == nil else { continue }
+
+            let iconCandidate = manifest.iconFile ?? "icon.svg"
+            let iconURL = dir.appendingPathComponent(iconCandidate)
+            let iconImage: NSImage? = NSImage(contentsOf: iconURL)
+            let svgString: String? = iconURL.pathExtension.lowercased() == "svg"
+                ? try? String(contentsOf: iconURL, encoding: .utf8)
+                : nil
+            manifests[manifest.id] = (manifest, dir, iconImage, svgString)
+            let isEnabled = !settings.disabledScripts.contains(manifest.id)
+            if isEnabled {
+                launch(manifest: manifest, scriptDir: dir)
+            } else {
+                upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon,
+                             iconImage: iconImage, status: .stopped, isEnabled: false)
+            }
+            print("[ScriptManager] Reloaded new script: \(manifest.id)")
+        }
+    }
+
     func connection(for scriptID: String) -> MCPConnection? {
         connections[scriptID]
     }

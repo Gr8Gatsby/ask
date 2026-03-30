@@ -102,6 +102,16 @@ private struct ActionsSettingsTab: View {
         }
         .formStyle(.grouped)
         .frame(minHeight: 300)
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    scriptManager.reload()
+                } label: {
+                    Label("Reload Scripts", systemImage: "arrow.clockwise")
+                }
+                .help("Scan for new scripts and start any that aren't running yet")
+            }
+        }
     }
 }
 
