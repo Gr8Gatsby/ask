@@ -76,7 +76,7 @@ struct HomeView: View {
 
     private var offlineQueue: OfflineQueue { .shared }
 
-    enum HomeTab { case home, feed }
+    enum HomeTab: Hashable { case home, feed }
 
     private var macIsOffline: Bool {
         activeMachine?.connectionStatus == .offline
@@ -183,11 +183,7 @@ struct HomeView: View {
         .onDisappear { pollTask?.cancel() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
-                Task {
-                    // Re-check account status only when foregrounding (throttled by CK internally)
-                    await cloudKit.checkAccountStatus()
-                    await load()
-                }
+                Task { await cloudKit.checkAccountStatus() }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .askRefreshRequired)) { _ in
@@ -246,12 +242,7 @@ struct HomeView: View {
     private var bottomBar: some View {
         HStack(spacing: 14) {
             machineMenuButton
-            Picker("", selection: $selectedTab) {
-                Text("Home").tag(HomeTab.home)
-                Text("Feed").tag(HomeTab.feed)
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 110)
+            tabSwitcher
             Button { showSettings = true } label: {
                 Image(systemName: "gearshape")
             }
@@ -263,6 +254,26 @@ struct HomeView: View {
         .padding(.horizontal, 32)
         .padding(.bottom, 16)
         .padding(.top, 4)
+    }
+
+    private var tabSwitcher: some View {
+        HStack(spacing: 2) {
+            ForEach([HomeTab.home, HomeTab.feed], id: \.self) { tab in
+                Button {
+                    selectedTab = tab
+                } label: {
+                    Text(tab == .home ? "Home" : "Feed")
+                        .font(.subheadline)
+                        .fontWeight(selectedTab == tab ? .semibold : .regular)
+                        .foregroundStyle(selectedTab == tab ? .primary : .secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(selectedTab == tab ? Color.primary.opacity(0.1) : .clear,
+                                    in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 
     @ViewBuilder
@@ -351,18 +362,29 @@ struct HomeView: View {
         let allCurrentBlockIDs = Set(blocks.map { $0.id })
 
         for group in actionGroups {
-            // Find confirmation/prompt blocks that haven't triggered a notification yet
-            let actionBlocks = group.blocks.filter {
+            // Prefer explicit confirmation/prompt blocks; fall back to the tile block
+            // itself when the script marks action_required on the tile (e.g. Claude Code).
+            let triggerBlocks: [RKBlock]
+            let explicit = group.blocks.filter {
                 $0.blockType == .confirmation || $0.blockType == .prompt
             }
-            let newBlocks = actionBlocks.filter { !notifiedBlockIDs.contains($0.id) }
+            if !explicit.isEmpty {
+                triggerBlocks = explicit
+            } else if let tile = group.blocks.first(where: { $0.blockType == .tile }) {
+                triggerBlocks = [tile]
+            } else {
+                continue
+            }
+
+            let newBlocks = triggerBlocks.filter { !notifiedBlockIDs.contains($0.id) }
             guard !newBlocks.isEmpty else { continue }
 
             for block in newBlocks { notifiedBlockIDs.insert(block.id) }
 
             let notifContent = UNMutableNotificationContent()
             notifContent.title = group.name
-            notifContent.body = group.actionTitle ?? "Action required"
+            // Use the tile body (the actual question) when available, else the label
+            notifContent.body = group.tileBody ?? group.actionTitle ?? "Action required"
             notifContent.sound = .default
             let request = UNNotificationRequest(
                 identifier: "ask-action-\(group.scriptID)-\(newBlocks[0].id)",
@@ -383,7 +405,14 @@ struct HomeView: View {
             // Prevents a blank UI during the Mac restart window while scripts re-emit.
             var consecutiveEmpty = 0
             while !Task.isCancelled {
-                let interval: Double = Date() < burstPollingUntil ? 1.0 : 30.0
+                let interval: Double
+                if Date() < burstPollingUntil {
+                    interval = 1.0   // just responded — fast burst
+                } else if !actionGroups.isEmpty {
+                    interval = 5.0   // action pending — poll quickly
+                } else {
+                    interval = 30.0  // idle
+                }
                 try? await Task.sleep(for: .seconds(interval))
                 guard !Task.isCancelled else { break }
                 if let fresh = try? await cloudKit.fetchMachines(), !fresh.isEmpty {
@@ -895,6 +924,12 @@ struct SettingsSheetView: View {
 
     private var queue: OfflineQueue { .shared }
 
+    private var appVersion: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "\(version) (\(build))"
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -969,6 +1004,10 @@ struct SettingsSheetView: View {
 
                 Section("Developer") {
                     Toggle("Show Debug Info on Cards", isOn: $showDebugInfo)
+                    LabeledContent("App Version") {
+                        Text(appVersion)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             .listStyle(.insetGrouped)
@@ -1031,9 +1070,14 @@ private struct FeedScheduleRow: View {
                     }
                 }
             } label: {
-                Text(presetLabel)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Text(presetLabel)
+                        .font(.subheadline)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .foregroundStyle(Color.accentColor)
             }
         }
     }

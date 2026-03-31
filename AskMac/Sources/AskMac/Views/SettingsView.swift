@@ -20,6 +20,12 @@ private struct GeneralSettingsTab: View {
 
     @State private var showVaultPicker = false
 
+    private var appVersion: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "\(version) (\(build))"
+    }
+
     var body: some View {
         @Bindable var settings = settings
 
@@ -44,6 +50,14 @@ private struct GeneralSettingsTab: View {
                         .truncationMode(.middle)
                 }
                 Button("Change Vault Directory…") { showVaultPicker = true }
+            }
+
+            Section("About") {
+                LabeledContent("AskMac Version") {
+                    Text(appVersion)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
             }
 
 
