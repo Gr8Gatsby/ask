@@ -77,6 +77,19 @@ repo state refreshes and the detail view updates to reflect the new state.
 
 `git fetch` runs on the Mac. On success, repo state refreshes and the detail view updates.
 
+### Commit
+
+When a repo has uncommitted changes, a **Commit** action is available in the detail view.
+
+Tapping Commit:
+1. The script gets the diff (`git diff HEAD`) and file summary (`git status --short`)
+2. If Ollama is running locally with at least one model, the diff is sent to Ollama to generate a commit message. The first available model is used.
+3. The generated message is shown in a detail block with actions **Commit** (use as-is) and **Edit** (write a custom message instead)
+4. If Ollama is unavailable, the prompt step is skipped and the user is taken directly to a text input to write their own message
+5. On confirm, `git add -A && git commit -m "<message>"` runs on the Mac
+
+The commit message prompt instructs Ollama to use imperative mood and keep the subject line under 72 characters. Only the message text is returned — no explanation or surrounding text.
+
 ### Discard Changes
 
 Requires a confirmation block before executing. The confirmation shows how many files
@@ -101,6 +114,7 @@ and no Push / Pull / Fetch actions.
 
 ## Non-Goals
 
+- Staging individual files (always stages all changes via `git add -A`)
 - Creating or deleting branches
 - Resolving merge conflicts
 - Staging individual files
@@ -114,3 +128,4 @@ and no Push / Pull / Fetch actions.
 | Date | Change |
 |---|---|
 | 2026-03-31 | Initial spec — replaces GitHub issues script |
+| 2026-03-31 | Added: Commit action with Ollama-generated commit message (falls back to manual prompt if Ollama unavailable) |
