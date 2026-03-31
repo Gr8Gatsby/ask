@@ -31,8 +31,10 @@ class MCPClient:
         self._pending_calls = {}      # rpc_id  -> asyncio.Future (tool call responses)
         self._pending_blocks = {}     # block_id -> asyncio.Queue (blocking waiters)
         self._response_callbacks = {} # block_id -> async callable(value)
-        # session_id -> {'cwd': str, 'project': str}
+        # session_id -> {'cwd': str, 'project': str, 'last_message': str}
         self._sessions: dict = {}
+        # session IDs where Claude is actively running (PostToolUse fired, Stop hasn't yet)
+        self._working_sessions: set = set()
         # (session_id, tool_name) -> [block_id, ...] — cleared when the tool runs
         self._tool_block_map = {}
         # Tile state
@@ -269,6 +271,7 @@ class MCPClient:
         if not session_id:
             return
         is_new = self._register_session(session_id, cwd)
+        self._working_sessions.add(session_id)
         if is_new:
             asyncio.create_task(self._emit_session_block(session_id))
 
@@ -284,6 +287,7 @@ class MCPClient:
                 self._sessions[session_id]['cwd'] = cwd
                 self._sessions[session_id]['project'] = self._project_label(cwd, session_id)
             self._sessions[session_id]['last_seen'] = time.time()
+        self._working_sessions.discard(session_id)
         print(f'[claudecode-controller] session stopped: {session_id}', file=sys.stderr)
         asyncio.create_task(self._emit_session_block(session_id, last_message=last_message))
 
@@ -304,6 +308,7 @@ class MCPClient:
         }
         if last_message:
             payload['last_message'] = last_message
+        payload['is_working'] = session_id in self._working_sessions
         # Register reply callback (re-registered after each use in _on_session_reply)
         self._response_callbacks[block_id] = lambda v: self._on_session_reply(session_id, v)
         try:

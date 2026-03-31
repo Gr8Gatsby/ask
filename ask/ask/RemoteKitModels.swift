@@ -27,6 +27,12 @@ struct RKConfirmationPayload: Codable {
     let title: String
     let body: String
     let options: [String]
+    let sessionId: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case title, body, options
+        case sessionId = "session_id"
+    }
 }
 
 struct RKAlertPayload: Codable {
@@ -70,6 +76,7 @@ struct RKClaudeSessionPayload: Codable {
     let cwd: String?
     let lastMessage: String?
     let placeholder: String?
+    let isWorking: Bool?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
@@ -77,6 +84,7 @@ struct RKClaudeSessionPayload: Codable {
         case cwd
         case lastMessage = "last_message"
         case placeholder
+        case isWorking = "is_working"
     }
 }
 

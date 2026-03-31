@@ -1083,7 +1083,7 @@ struct ClaudeSessionBlockView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.tail)
-                    } else if isCollapsed {
+                    } else if isCollapsed, payload.isWorking == true {
                         Text("Claude is working…")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -1102,13 +1102,17 @@ struct ClaudeSessionBlockView: View {
                 Group {
                     if let msg = payload.lastMessage, !msg.isEmpty {
                         ClaudeMarkdownView(text: msg)
-                    } else {
+                    } else if payload.isWorking == true {
                         HStack(spacing: 6) {
                             ProgressView().scaleEffect(0.7)
                             Text("Claude is working…")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
+                    } else {
+                        Text("Waiting for input…")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .padding(8)

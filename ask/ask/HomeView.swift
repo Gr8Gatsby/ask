@@ -43,6 +43,31 @@ struct ScriptGroup: Identifiable {
         blocks.first(where: { $0.blockType == .countdown })?.countdownPayload
     }
 
+    /// Brand colors for well-known scripts, keyed by scriptID.
+    var brandBackground: Color? {
+        switch scriptID {
+        case "claudecode-controller": Color(red: 250/255, green: 249/255, blue: 245/255)
+        case "github":               Color(red: 0x24/255, green: 0x29/255, blue: 0x2F/255)
+        default: nil
+        }
+    }
+
+    var brandHighlight: Color? {
+        switch scriptID {
+        case "claudecode-controller": Color(red: 202/255, green: 124/255, blue: 94/255)
+        case "github":               Color(red: 0x09/255, green: 0x69/255, blue: 0xDA/255)
+        default: nil
+        }
+    }
+
+    /// Force a specific color scheme so text and system colors render correctly on brand backgrounds.
+    var brandColorScheme: ColorScheme? {
+        switch scriptID {
+        case "github": .dark
+        default: nil
+        }
+    }
+
     /// Title for the toast banner when action is required.
     var actionTitle: String? {
         if let label = tileBlock?.label, isActionRequired { return label }
@@ -515,6 +540,22 @@ private struct ScriptTileView: View {
     let group: ScriptGroup
     let onTap: () -> Void
 
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage("useBrandColors") private var useBrandColors: Bool = true
+
+    private var effectiveBackground: Color {
+        useBrandColors ? (group.brandBackground ?? Color(.secondarySystemGroupedBackground))
+                       : Color(.secondarySystemGroupedBackground)
+    }
+
+    private var effectiveHighlight: Color? {
+        useBrandColors ? group.brandHighlight : nil
+    }
+
+    private var effectiveColorScheme: ColorScheme {
+        useBrandColors ? (group.brandColorScheme ?? colorScheme) : colorScheme
+    }
+
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 12) {
@@ -524,6 +565,7 @@ private struct ScriptTileView: View {
                     sfSymbol: group.icon ?? "terminal.fill"
                 )
                 .frame(width: 30, height: 30)
+                .colorInvert(useBrandColors && group.brandColorScheme == .dark)
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(group.name)
@@ -535,7 +577,7 @@ private struct ScriptTileView: View {
                     if let label = group.tileLabel {
                         HStack(spacing: 5) {
                             Circle()
-                                .fill(blockStatusColor(group.tileStatusColor))
+                                .fill(effectiveHighlight ?? blockStatusColor(group.tileStatusColor))
                                 .frame(width: 7, height: 7)
                             Text(label)
                                 .font(.caption)
@@ -548,7 +590,7 @@ private struct ScriptTileView: View {
                         Text(body)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                            .lineLimit(1)
                             .padding(.top, 1)
                     }
 
@@ -561,26 +603,26 @@ private struct ScriptTileView: View {
 
                 if group.isActionRequired {
                     Image(systemName: "exclamationmark.circle.fill")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(effectiveHighlight ?? .orange)
                         .font(.caption)
                 }
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.secondarySystemGroupedBackground))
+            .frame(maxWidth: .infinity, minHeight: 64, maxHeight: 64, alignment: .leading)
+            .background(effectiveBackground)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
                     .strokeBorder(
                         group.isActionRequired
-                            ? Color.orange.opacity(0.5)
+                            ? (effectiveHighlight ?? Color.orange).opacity(0.5)
                             : Color(.separator).opacity(0.3),
                         lineWidth: 1
                     )
             )
         }
         .buttonStyle(.plain)
+        .environment(\.colorScheme, effectiveColorScheme)
     }
 }
 
@@ -635,6 +677,8 @@ struct ScriptDetailView: View {
     var errorMessage: String? = nil
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage("useBrandColors") private var useBrandColors: Bool = true
 
     // Detail-push navigation state
     @State private var isShowingDetail = false
@@ -648,8 +692,54 @@ struct ScriptDetailView: View {
         ScriptGroup(scriptID: scriptID, blocks: allBlocks.filter { $0.scriptID == scriptID && $0.blockType != .tile })
     }
 
-    /// Blocks shown in the main list — detail blocks are handled as navigation pushes.
-    private var mainBlocks: [RKBlock] { group.blocks.filter { $0.blockType != .detail } }
+    /// ScriptGroup including tile block — used only for brand color lookup.
+    private var brandGroup: ScriptGroup {
+        ScriptGroup(scriptID: scriptID, blocks: allBlocks.filter { $0.scriptID == scriptID })
+    }
+
+    /// Script display name — resolved from all blocks including the tile, so we get
+    /// the real name even when only a tile block exists (group.blocks excludes tiles).
+    private var scriptDisplayName: String {
+        allBlocks.first { $0.scriptID == scriptID }?.scriptName
+            ?? scriptID.split(separator: "-").map { $0.capitalized }.joined(separator: " ")
+    }
+
+    /// Icon fields resolved from all blocks including the tile, so the icon shows
+    /// even when no non-tile blocks are present (e.g. "No active sessions" state).
+    private var scriptIconSF: String {
+        allBlocks.first(where: { $0.scriptID == scriptID && $0.scriptIcon != nil })?.scriptIcon ?? "terminal.fill"
+    }
+    private var scriptIconSVG: String? {
+        allBlocks.first(where: { $0.scriptID == scriptID && $0.scriptIconSVG != nil })?.scriptIconSVG
+    }
+    private var scriptIconData: String? {
+        allBlocks.first(where: { $0.scriptID == scriptID && $0.scriptIconData != nil })?.scriptIconData
+    }
+
+    /// Blocks shown in the main list — detail blocks are pushed; claudeMessage is inlined when chatPrompt or claudeSession blocks exist.
+    private var mainBlocks: [RKBlock] {
+        let all = group.blocks.filter { $0.blockType != .detail }
+        let hasPrompt = all.contains(where: { $0.blockType == .chatPrompt })
+        let hasSession = all.contains(where: { $0.blockType == .claudeSession })
+        guard hasPrompt || hasSession else { return all }
+        // Exclude claudeMessage (inlined) and confirmations that are linked to a session (grouped inside session section)
+        return all.filter {
+            $0.blockType != .claudeMessage &&
+            !($0.blockType == .confirmation && $0.confirmationPayload?.sessionId != nil)
+        }
+    }
+
+    /// Text from a claudeMessage block, shown above the chatPrompt input.
+    private var inlinedClaudeMessage: String? {
+        group.blocks.first { $0.blockType == .claudeMessage }?.claudeMessagePayload?.text
+    }
+
+    /// Confirmation blocks linked to a specific session_id.
+    private func sessionConfirmations(for sessionId: String) -> [RKBlock] {
+        group.blocks.filter {
+            $0.blockType == .confirmation && $0.confirmationPayload?.sessionId == sessionId
+        }
+    }
 
     /// The active detail block, if any.
     private var currentDetailBlock: RKBlock? { group.blocks.first { $0.blockType == .detail } }
@@ -659,24 +749,54 @@ struct ScriptDetailView: View {
             List {
                 ForEach(mainBlocks) { block in
                     Section {
-                        BlockView(block: block, onRespond: { value in
-                            await onRespond(block, value)
-                        }, isWaiting: isWaiting)
+                        if block.blockType == .claudeSession,
+                           let p = block.claudeSessionPayload {
+                            let confirmations = sessionConfirmations(for: p.sessionId)
+                            // Render any linked confirmations above the session reply box
+                            ForEach(confirmations) { conf in
+                                BlockView(block: conf, onRespond: { value in
+                                    await onRespond(conf, value)
+                                }, isWaiting: isWaiting)
+                            }
+                            BlockView(block: block, onRespond: { value in
+                                await onRespond(block, value)
+                            }, isWaiting: isWaiting)
+                        } else if block.blockType == .chatPrompt, let p = block.chatPromptPayload {
+                            ChatPromptBlockView(
+                                payload: p,
+                                claudeMessage: inlinedClaudeMessage,
+                                onRespond: { value in await onRespond(block, value) }
+                            )
+                        } else {
+                            BlockView(block: block, onRespond: { value in
+                                await onRespond(block, value)
+                            }, isWaiting: isWaiting)
+                        }
+                    }
+                }
+                if mainBlocks.isEmpty {
+                    Section {
+                        Text("No active sessions")
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.vertical, 8)
                     }
                 }
             }
             .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(useBrandColors ? (brandGroup.brandBackground ?? Color(.systemGroupedBackground)) : Color(.systemGroupedBackground))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     HStack(spacing: 8) {
                         ScriptIconView(
-                            svgString: group.iconSVG,
-                            iconData: group.iconData,
-                            sfSymbol: group.icon ?? "terminal.fill"
+                            svgString: scriptIconSVG,
+                            iconData: scriptIconData,
+                            sfSymbol: scriptIconSF
                         )
                         .frame(width: 22, height: 22)
-                        Text(group.name)
+                        Text(scriptDisplayName)
                             .font(.headline)
                     }
                 }
@@ -764,6 +884,7 @@ struct ScriptDetailView: View {
                 }
             }
         }
+        .environment(\.colorScheme, useBrandColors ? (brandGroup.brandColorScheme ?? colorScheme) : colorScheme)
     }
 
 }
@@ -863,6 +984,13 @@ private struct DetailFullView: View {
 
 // MARK: - Helpers
 
+private extension View {
+    @ViewBuilder
+    func colorInvert(_ active: Bool) -> some View {
+        if active { self.colorInvert() } else { self }
+    }
+}
+
 private func blockStatusColor(_ colorString: String?) -> Color {
     switch colorString {
     case "green":  .green
@@ -904,6 +1032,7 @@ struct SettingsSheetView: View {
     @Environment(\.dismiss) private var dismiss
 
     @AppStorage("showBlockDebugInfo") private var showDebugInfo: Bool = false
+    @AppStorage("useBrandColors") private var useBrandColors: Bool = true
     @State private var machines: [AskMachine] = []
     @State private var showQueueReview = false
     @State private var feedSchedules: [String: String] = [:]
@@ -1000,6 +1129,10 @@ struct SettingsSheetView: View {
                             )
                         }
                     }
+                }
+
+                Section("Appearance") {
+                    Toggle("Script Brand Colors", isOn: $useBrandColors)
                 }
 
                 Section("Developer") {
