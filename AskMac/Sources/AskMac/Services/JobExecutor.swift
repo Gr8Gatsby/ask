@@ -88,8 +88,13 @@ final class JobExecutor: @unchecked Sendable {
 
         let startedAt = Date()
         var outputSequence = 0
-        var outputBuffer = ""
-        let bufferLock = NSLock()
+
+        actor OutputBuffer {
+            private var text = ""
+            func append(_ new: String) { text += new }
+            func flush() -> String { defer { text = "" }; return text }
+        }
+        let buffer = OutputBuffer()
 
         // Build process
         let process = Process()
@@ -124,12 +129,7 @@ final class JobExecutor: @unchecked Sendable {
 
         // Flush buffer to CloudKit
         func flushBuffer() async {
-            let text: String
-            bufferLock.lock()
-            text = outputBuffer
-            outputBuffer = ""
-            bufferLock.unlock()
-
+            let text = await buffer.flush()
             guard !text.isEmpty else { return }
             let chunk = OutputChunkRecord(
                 jobID: job.jobID,
@@ -159,33 +159,19 @@ final class JobExecutor: @unchecked Sendable {
                 let data = handle.availableData
                 if data.isEmpty { break }
                 if let text = String(data: data, encoding: .utf8) {
-                    bufferLock.lock()
-                    outputBuffer += text
-                    bufferLock.unlock()
+                    await buffer.append(text)
                 }
             }
         }
 
-        // Read stderr in background (merged into output stream, marked isError)
+        // Read stderr in background (merged into stdout buffer)
         let stderrTask = Task<Void, Never> {
             let handle = stderrPipe.fileHandleForReading
             while true {
                 let data = handle.availableData
                 if data.isEmpty { break }
                 if let text = String(data: data, encoding: .utf8) {
-                    let chunk = OutputChunkRecord(
-                        jobID: job.jobID,
-                        sequence: -1, // will be set properly on next flush
-                        text: text,
-                        isError: true,
-                        timestamp: Date()
-                    )
-                    // Write stderr chunks immediately with their own sequence space
-                    // Use a negative offset convention — iOS sorts by sequence, stderr is secondary
-                    _ = chunk
-                    bufferLock.lock()
-                    outputBuffer += text
-                    bufferLock.unlock()
+                    await buffer.append(text)
                 }
             }
         }
@@ -201,7 +187,7 @@ final class JobExecutor: @unchecked Sendable {
         }
 
         // Flush loop: write accumulated output every 500ms
-        let flushLoop = Task<Void, Never> { [self] in
+        let flushLoop = Task<Void, Never> {
             while !Task.isCancelled && process.isRunning {
                 try? await Task.sleep(for: .milliseconds(500))
                 await flushBuffer()
