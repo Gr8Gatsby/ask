@@ -411,12 +411,15 @@ if not didFocus and application "iTerm2" is running then
     tell application "iTerm2"
         repeat with w in every window
             repeat with t in every tab of w
-                if name of current session of t contains projectName then
-                    tell w to select t
-                    activate
-                    set didFocus to true
-                    exit repeat
-                end if
+                repeat with s in every session of t
+                    if name of s contains projectName then
+                        tell w to select t
+                        activate
+                        set didFocus to true
+                        exit repeat
+                    end if
+                end repeat
+                if didFocus then exit repeat
             end repeat
             if didFocus then exit repeat
         end repeat

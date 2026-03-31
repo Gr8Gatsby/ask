@@ -150,6 +150,7 @@ class MCPClient:
         print('[codex-controller] MCP initialized', file=sys.stderr)
         self._load_sessions()
         self._discover_active_processes()
+        self._prune_dead_pid_sessions()
         for session_id, info in list(self._sessions.items()):
             asyncio.create_task(
                 self._emit_session_block(session_id, last_message=info.get('last_message', ''))
@@ -264,10 +265,13 @@ class MCPClient:
         return f'{path_label} [{session_id[:6]}]'
 
     def _save_sessions(self):
+        """PID-based sessions (pid-*) are transient and NOT persisted."""
         try:
             os.makedirs(os.path.dirname(SESSIONS_PATH), exist_ok=True)
+            to_save = {sid: info for sid, info in self._sessions.items()
+                       if not sid.startswith('pid-')}
             with open(SESSIONS_PATH, 'w') as f:
-                json.dump(self._sessions, f)
+                json.dump(to_save, f)
         except Exception as e:
             print(f'[codex-controller] session save failed: {e}', file=sys.stderr)
 
@@ -319,6 +323,27 @@ class MCPClient:
                     pass
         except Exception as e:
             print(f'[codex-controller] process discovery failed: {e}', file=sys.stderr)
+
+    @staticmethod
+    def _pid_session_alive(session_id: str) -> bool:
+        if not session_id.startswith('pid-'):
+            return True
+        try:
+            pid = int(session_id[4:])
+            os.kill(pid, 0)
+            return True
+        except (ValueError, ProcessLookupError):
+            return False
+        except PermissionError:
+            return True
+
+    def _prune_dead_pid_sessions(self):
+        dead = [sid for sid in list(self._sessions) if sid.startswith('pid-') and not self._pid_session_alive(sid)]
+        for sid in dead:
+            self._sessions.pop(sid, None)
+            self._working_sessions.discard(sid)
+            print(f'[codex-controller] pruned dead pid session {sid}', file=sys.stderr)
+        return dead
 
     def _register_session(self, session_id: str, cwd: str):
         if session_id in self._sessions:
@@ -435,12 +460,15 @@ if not didFocus and application "iTerm2" is running then
     tell application "iTerm2"
         repeat with w in every window
             repeat with t in every tab of w
-                if name of current session of t contains projectName then
-                    tell w to select t
-                    activate
-                    set didFocus to true
-                    exit repeat
-                end if
+                repeat with s in every session of t
+                    if name of s contains projectName then
+                        tell w to select t
+                        activate
+                        set didFocus to true
+                        exit repeat
+                    end if
+                end repeat
+                if didFocus then exit repeat
             end repeat
             if didFocus then exit repeat
         end repeat
@@ -658,6 +686,12 @@ async def _session_heartbeat(client):
         await asyncio.sleep(300)
         if not client._initialized:
             continue
+        dead = client._prune_dead_pid_sessions()
+        for session_id in dead:
+            try:
+                await client.clear_block(client._session_block_id(session_id))
+            except Exception:
+                pass
         for session_id in list(client._sessions.keys()):
             try:
                 await client._emit_session_block(session_id)
