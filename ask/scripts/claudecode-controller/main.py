@@ -312,7 +312,7 @@ class MCPClient:
                 if last_message:
                     self._sessions[session_id]['last_message'] = last_message
             self._save_sessions()
-            await self.emit_block(block_id, 'claude_session', payload, ttl=SESSION_TTL)
+            await self.emit_block(block_id, 'claude_session', payload)  # no TTL — lives until explicitly cleared
         except Exception as e:
             print(f'[claudecode-controller] claude_session emit failed: {e}', file=sys.stderr)
 
