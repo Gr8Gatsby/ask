@@ -5,9 +5,6 @@ import Observation
 
 enum HistoryEventKind: String, Codable, Sendable {
     case blockResponse   // user responded to an iOS block
-    case jobCompleted    // one-shot job completed (exit 0)
-    case jobFailed       // one-shot job failed (non-zero exit or timeout)
-    case jobCancelled    // one-shot job cancelled by user
     case scriptEnabled   // script enabled in Settings
     case scriptDisabled  // script disabled in Settings
     case scriptCrashed   // script crashed unexpectedly
@@ -61,37 +58,6 @@ final class ActionHistoryService: @unchecked Sendable {
             source: scriptName,
             summary: summary,
             detail: nil
-        ))
-    }
-
-    /// Records a job completion.
-    func recordJob(agentName: String, prompt: String, status: JobStatus, durationSeconds: Double, exitCode: Int?) {
-        let kind: HistoryEventKind
-        let summary: String
-
-        switch status {
-        case .completed:
-            kind = .jobCompleted
-            summary = "Completed in \(durationLabel(durationSeconds))"
-        case .failed:
-            kind = .jobFailed
-            let code = exitCode.map { " (exit \($0))" } ?? ""
-            summary = "Failed\(code) after \(durationLabel(durationSeconds))"
-        case .cancelled:
-            kind = .jobCancelled
-            summary = "Cancelled after \(durationLabel(durationSeconds))"
-        default:
-            kind = .jobFailed
-            summary = "Ended with status \(status.rawValue)"
-        }
-
-        record(HistoryEvent(
-            id: UUID().uuidString,
-            timestamp: Date(),
-            kind: kind,
-            source: agentName,
-            summary: summary,
-            detail: prompt
         ))
     }
 

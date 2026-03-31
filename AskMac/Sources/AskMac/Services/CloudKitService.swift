@@ -37,35 +37,6 @@ final class CloudKitService {
         cachedRecords[machine.machineID] = saved
     }
 
-    // MARK: - Agents
-
-    /// Fetches all agents configured for this machine.
-    func fetchAgents(machineID: String) async throws -> [AgentRecord] {
-        let predicate = NSPredicate(format: "%K == %@", CKSchema.Agent.machineID, machineID)
-        let query = CKQuery(recordType: CKSchema.RecordType.agent, predicate: predicate)
-        let (results, _) = try await database.records(matching: query, resultsLimit: 100)
-        return results.compactMap { _, result in
-            guard let record = try? result.get() else { return nil }
-            cachedRecords[record.recordID.recordName] = record
-            return AgentRecord(record: record)
-        }
-    }
-
-    /// Publishes all configured agents for this machine to CloudKit so the iOS app can discover them.
-    func saveAgent(_ agent: AgentRecord) async throws {
-        let record = existingRecord(named: agent.recordName, type: CKSchema.RecordType.agent)
-        let updated = agent.applying(to: record)
-        let saved = try await save(updated)
-        cachedRecords[agent.recordName] = saved
-    }
-
-    /// Removes an agent record from CloudKit.
-    func deleteAgent(recordName: String) async throws {
-        let recordID = CKRecord.ID(recordName: recordName)
-        try await database.deleteRecord(withID: recordID)
-        cachedRecords.removeValue(forKey: recordName)
-    }
-
     // MARK: - Events
 
     func saveEvent(eventID: String, machineID: String, title: String, body: String, source: String, options: [String] = [], sessionID: String? = nil) async throws {
@@ -229,47 +200,6 @@ final class CloudKitService {
         }
     }
 
-    // MARK: - Jobs
-
-    /// Fetches all jobs assigned to this machine with status "queued", oldest first.
-    func fetchQueuedJobs(machineID: String) async throws -> [JobRecord] {
-        let predicate = NSPredicate(
-            format: "%K == %@ AND %K == %@",
-            CKSchema.Job.machineID, machineID,
-            CKSchema.Job.status, JobStatus.queued.rawValue
-        )
-        let query = CKQuery(recordType: CKSchema.RecordType.job, predicate: predicate)
-        query.sortDescriptors = [NSSortDescriptor(key: CKSchema.Job.createdAt, ascending: true)]
-
-        let (results, _) = try await database.records(matching: query, resultsLimit: 10)
-        return results.compactMap { _, result in
-            guard let record = try? result.get() else { return nil }
-            cachedRecords[record.recordID.recordName] = record
-            return JobRecord(record: record)
-        }
-    }
-
-    /// Fetches the current status of a job. Used by JobExecutor to detect cancellation.
-    func fetchJobStatus(jobID: String) async throws -> JobStatus? {
-        let recordID = CKRecord.ID(recordName: jobID)
-        let record = try await database.record(for: recordID)
-        cachedRecords[jobID] = record
-        guard let raw = record[CKSchema.Job.status] as? String else { return nil }
-        return JobStatus(rawValue: raw)
-    }
-
-    /// Updates a job's status fields. Fetches from cache or CloudKit, then saves.
-    func updateJob(jobID: String, status: JobStatus, startedAt: Date? = nil, completedAt: Date? = nil, exitCode: Int? = nil) async throws {
-        let record = try await fetchOrCachedRecord(named: jobID, type: CKSchema.RecordType.job)
-        record[CKSchema.Job.status] = status.rawValue
-        if let startedAt { record[CKSchema.Job.startedAt] = startedAt }
-        if let completedAt { record[CKSchema.Job.completedAt] = completedAt }
-        if let exitCode { record[CKSchema.Job.exitCode] = Int64(exitCode) }
-
-        let saved = try await save(record)
-        cachedRecords[jobID] = saved
-    }
-
     // MARK: - Startup cleanup
 
     /// Deletes all legacy event/session/response/job records for this machine from CloudKit.
@@ -382,14 +312,6 @@ final class CloudKitService {
             _ = try? await database.modifyRecords(saving: [], deleting: toDelete, savePolicy: .allKeys, atomically: false)
         }
         return found
-    }
-
-    // MARK: - Output chunks
-
-    /// Saves a single output chunk. Fire-and-forget friendly — caller can use Task { try? await }.
-    func saveOutputChunk(_ chunk: OutputChunkRecord) async throws {
-        let record = chunk.toCKRecord()
-        _ = try await save(record)
     }
 
     // MARK: - Private helpers

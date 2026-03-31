@@ -37,9 +37,8 @@ final class HeartbeatService {
         task = nil
     }
 
-    func markBusy(jobID: String) async {
-        var machine = makeMachineRecord(status: .busy)
-        machine.activeJobID = jobID
+    func markBusy() async {
+        let machine = makeMachineRecord(status: .busy)
         try? await cloudKit.saveMachine(machine)
     }
 
@@ -54,15 +53,13 @@ final class HeartbeatService {
         do {
             try await cloudKit.saveMachine(makeMachineRecord(status: .idle))
             // Machine record written — mark alive immediately.
-            // Agent sync and device refresh are non-critical; failures here
-            // must not prevent lastHeartbeat from updating.
+            // Device refresh is non-critical; failures must not block the heartbeat.
             lastHeartbeat = Date()
             error = nil
         } catch {
             self.error = error
             return
         }
-        try? await syncAgents()
         await refreshDevices()
     }
 
@@ -89,13 +86,6 @@ final class HeartbeatService {
         )
     }
 
-    /// Publishes all locally configured agents to CloudKit.
-    private func syncAgents() async throws {
-        for agentConfig in settings.agents {
-            let record = agentConfig.toAgentRecord(machineID: settings.machineID)
-            try await cloudKit.saveAgent(record)
-        }
-    }
 }
 
 // MARK: - Simple async timer

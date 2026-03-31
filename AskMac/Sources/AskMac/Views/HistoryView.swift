@@ -52,12 +52,6 @@ private struct DashboardTab: View {
                 color: .purple
             )
             StatCard(
-                title: "Jobs Run",
-                value: "\(history.events.filter { [.jobCompleted, .jobFailed, .jobCancelled].contains($0.kind) }.count)",
-                systemImage: "terminal.fill",
-                color: .green
-            )
-            StatCard(
                 title: "Crashes",
                 value: "\(history.events.filter { $0.kind == .scriptCrashed }.count)",
                 systemImage: "exclamationmark.triangle.fill",
@@ -168,7 +162,6 @@ private struct LogTab: View {
     private let filterOptions: [(label: String, tag: String)] = [
         ("All", "all"),
         ("Responses", "response"),
-        ("Jobs", "job"),
         ("System", "system"),
     ]
 
@@ -233,7 +226,6 @@ private struct LogTab: View {
             let matchesKind: Bool
             switch kindFilter {
             case "response": matchesKind = event.kind == .blockResponse
-            case "job":      matchesKind = [.jobCompleted, .jobFailed, .jobCancelled].contains(event.kind)
             case "system":   matchesKind = [.scriptEnabled, .scriptDisabled, .scriptCrashed].contains(event.kind)
             default:         matchesKind = true
             }
@@ -320,9 +312,6 @@ extension HistoryEventKind {
     var systemImage: String {
         switch self {
         case .blockResponse:  "hand.tap.fill"
-        case .jobCompleted:   "checkmark.circle.fill"
-        case .jobFailed:      "xmark.circle.fill"
-        case .jobCancelled:   "minus.circle.fill"
         case .scriptEnabled:  "play.circle.fill"
         case .scriptDisabled: "stop.circle.fill"
         case .scriptCrashed:  "exclamationmark.triangle.fill"
@@ -332,9 +321,6 @@ extension HistoryEventKind {
     var color: Color {
         switch self {
         case .blockResponse:  .purple
-        case .jobCompleted:   .green
-        case .jobFailed:      .red
-        case .jobCancelled:   .secondary
         case .scriptEnabled:  .green
         case .scriptDisabled: .secondary
         case .scriptCrashed:  .red
@@ -344,9 +330,6 @@ extension HistoryEventKind {
     var displayName: String {
         switch self {
         case .blockResponse:  "Block Response"
-        case .jobCompleted:   "Job Completed"
-        case .jobFailed:      "Job Failed"
-        case .jobCancelled:   "Job Cancelled"
         case .scriptEnabled:  "Script Enabled"
         case .scriptDisabled: "Script Disabled"
         case .scriptCrashed:  "Script Crashed"

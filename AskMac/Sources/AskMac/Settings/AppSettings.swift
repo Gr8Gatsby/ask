@@ -1,68 +1,12 @@
 import Foundation
 import Observation
 
-// MARK: - Agent configuration (stored locally in UserDefaults)
-
-struct AgentConfig: Codable, Sendable, Identifiable {
-    var id: String
-    var name: String
-    var scriptName: String           // filename within vault directory
-    var capabilityNetwork: Bool
-    var capabilitySubprocess: Bool
-    var capabilityReadPaths: [String]
-    var capabilityWritePaths: [String]
-    var capabilityEnvKeys: [String]  // Keychain item names
-    var timeout: Int                 // seconds
-
-    init(
-        id: String = UUID().uuidString,
-        name: String,
-        scriptName: String,
-        capabilityNetwork: Bool = false,
-        capabilitySubprocess: Bool = false,
-        capabilityReadPaths: [String] = [],
-        capabilityWritePaths: [String] = [],
-        capabilityEnvKeys: [String] = [],
-        timeout: Int = 60
-    ) {
-        self.id = id
-        self.name = name
-        self.scriptName = scriptName
-        self.capabilityNetwork = capabilityNetwork
-        self.capabilitySubprocess = capabilitySubprocess
-        self.capabilityReadPaths = capabilityReadPaths
-        self.capabilityWritePaths = capabilityWritePaths
-        self.capabilityEnvKeys = capabilityEnvKeys
-        self.timeout = timeout
-    }
-
-    func toAgentRecord(machineID: String) -> AgentRecord {
-        AgentRecord(
-            agentID: id,
-            machineID: machineID,
-            name: name,
-            scriptName: scriptName,
-            capabilities: AgentCapabilities(
-                network: capabilityNetwork,
-                subprocess: capabilitySubprocess,
-                readPaths: capabilityReadPaths,
-                writePaths: capabilityWritePaths,
-                envKeys: capabilityEnvKeys,
-                timeout: timeout
-            )
-        )
-    }
-}
-
-// MARK: - AppSettings
-
 @Observable
 final class AppSettings {
     private enum Key {
         static let machineID = "machineID"
         static let machineName = "machineName"
         static let vaultPath = "vaultPath"
-        static let agents = "agents"
         static let disabledScripts = "disabledScripts"
     }
 
@@ -79,10 +23,6 @@ final class AppSettings {
         didSet {
             defaults.set(vaultPath?.path, forKey: Key.vaultPath)
         }
-    }
-
-    var agents: [AgentConfig] {
-        didSet { saveAgents() }
     }
 
     var disabledScripts: Set<String> {
@@ -123,8 +63,6 @@ final class AppSettings {
             defaults.set(defaultVault.path, forKey: Key.vaultPath)
         }
 
-        self.agents = Self.loadAgents(from: defaults)
-
         let storedDisabled = defaults.stringArray(forKey: Key.disabledScripts) ?? []
         self.disabledScripts = Set(storedDisabled)
     }
@@ -136,40 +74,4 @@ final class AppSettings {
             disabledScripts.insert(id)
         }
     }
-
-    func scriptURL(for agent: AgentConfig) -> URL? {
-        guard let vault = vaultPath else { return nil }
-        let url = vault.appendingPathComponent(agent.scriptName)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return url
-    }
-
-    func addAgent(_ agent: AgentConfig) {
-        agents.append(agent)
-    }
-
-    func removeAgent(id: String) {
-        agents.removeAll { $0.id == id }
-    }
-
-    func updateAgent(_ updated: AgentConfig) {
-        guard let index = agents.firstIndex(where: { $0.id == updated.id }) else { return }
-        agents[index] = updated
-    }
-
-    // MARK: - Private
-
-    private func saveAgents() {
-        guard let data = try? JSONEncoder().encode(agents) else { return }
-        defaults.set(data, forKey: Key.agents)
-    }
-
-    private static func loadAgents(from defaults: UserDefaults) -> [AgentConfig] {
-        guard
-            let data = defaults.data(forKey: Key.agents),
-            let decoded = try? JSONDecoder().decode([AgentConfig].self, from: data)
-        else { return [] }
-        return decoded
-    }
-
 }
