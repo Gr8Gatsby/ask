@@ -13,38 +13,25 @@ struct BrewPackage {
 private let blockUpdates  = "brew-monitor-updates"
 private let blockStatus   = "brew-monitor-status"
 private let blockUpToDate = "brew-monitor-uptodate"
-private let blockNextSync = "brew-monitor-next-sync"
-private let blockSyncNow  = "brew-monitor-sync-now"
 
 // MARK: - BrewMonitor
 
+/// One-shot feed script: checks for outdated Homebrew packages once, emits results,
+/// optionally waits for an "Upgrade All" response, then exits.
 actor BrewMonitor {
     private let mcp: MCPClient
-    private let checkInterval: TimeInterval = 4 * 60 * 60
-    private var sleepTask: Task<Void, Error>?
 
     init(mcp: MCPClient) {
         self.mcp = mcp
     }
 
-    // MARK: - Run loop
+    // MARK: - Run (one-shot)
 
     func run() async {
-        while true {
-            do {
-                try await check()
-            } catch is CancellationError {
-                return
-            } catch {
-                fputs("[brew-monitor] check error: \(error)\n", stderr)
-            }
-            sleepTask = Task {
-                try await Task.sleep(nanoseconds: UInt64(checkInterval * 1_000_000_000))
-            }
-            // Await the sleep; CancellationError means Sync Now was tapped — that's fine.
-            try? await sleepTask?.value
-            sleepTask = nil
-            fputs("[brew-monitor] starting next check\n", stderr)
+        do {
+            try await check()
+        } catch {
+            fputs("[brew-monitor] check error: \(error)\n", stderr)
         }
     }
 
@@ -52,9 +39,6 @@ actor BrewMonitor {
 
     private func check() async throws {
         fputs("[brew-monitor] checking for outdated packages…\n", stderr)
-
-        // Clear countdown while checking so the status block takes its place.
-        await mcp.clearBlock(blockNextSync)
 
         try await mcp.emitBlock(blockStatus, type: "status", payload: [
             "label": "Checking for Homebrew updates…",
@@ -68,71 +52,52 @@ actor BrewMonitor {
         if outdated.isEmpty {
             fputs("[brew-monitor] all packages up to date\n", stderr)
             await mcp.clearBlock(blockUpdates)
-            let nextSyncHours = Int(checkInterval / 3600)
             try await mcp.emitBlock(blockUpToDate, type: "status", payload: [
-                "label": "Up to date, next sync in \(nextSyncHours) hours",
+                "label": "Homebrew up to date",
                 "icon":  "checkmark.circle",
                 "color": "green"
-            ], ttl: checkInterval)
-        } else {
-            await mcp.clearBlock(blockUpToDate)
-
-            let count = outdated.count
-            let title = "\(count) Homebrew \(count == 1 ? "update" : "updates") available"
-            let body  = outdated.map { "\($0.name)  \($0.installed) → \($0.available)" }.joined(separator: "\n")
-
-            fputs("[brew-monitor] \(title)\n", stderr)
-
-            // Register callback BEFORE emitting so a slow CloudKit write can't orphan it.
-            await mcp.setCallback(blockID: blockUpdates) { [self] value in
-                await onResponse(value)
-            }
-
-            try await mcp.emitBlock(blockUpdates, type: "confirmation", payload: [
-                "title":   title,
-                "body":    body,
-                "options": ["Upgrade All", "Later"]
             ], ttl: 86400)
+            return
         }
 
-        // Emit countdown to next scheduled check.
-        let nextSync = Date(timeIntervalSinceNow: checkInterval)
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime]
-        let nextSyncStr = iso.string(from: nextSync)
-        try await mcp.emitBlock(blockNextSync, type: "countdown", payload: [
-            "label": "Next sync",
-            "time":  nextSyncStr
-        ], ttl: checkInterval + 300)
-        fputs("[brew-monitor] next sync at \(nextSyncStr)\n", stderr)
+        await mcp.clearBlock(blockUpToDate)
 
-        // Emit persistent Sync Now button.
-        await emitSyncNow()
-    }
+        let count = outdated.count
+        let title = "\(count) Homebrew \(count == 1 ? "update" : "updates") available"
+        let body  = outdated.map { "\($0.name)  \($0.installed) → \($0.available)" }.joined(separator: "\n")
 
-    // MARK: - Sync Now
+        fputs("[brew-monitor] \(title)\n", stderr)
 
-    private func emitSyncNow() async {
-        await mcp.setCallback(blockID: blockSyncNow) { [self] _ in
-            await onSyncNow()
+        // Register response stream BEFORE emitting so a fast response isn't missed.
+        let stream = await mcp.responseStream(blockID: blockUpdates)
+
+        try await mcp.emitBlock(blockUpdates, type: "confirmation", payload: [
+            "title":   title,
+            "body":    body,
+            "options": ["Upgrade All", "Later"]
+        ], ttl: 86400)
+
+        // Wait up to 1 hour for a user response; nil means "Later" or timeout.
+        let response = await withTaskGroup(of: String?.self) { group -> String? in
+            group.addTask {
+                for await value in stream { return value }
+                return nil
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(3600))
+                return nil
+            }
+            guard let first = await group.next() else { return nil }
+            group.cancelAll()
+            return first
         }
-        try? await mcp.emitBlock(blockSyncNow, type: "confirmation", payload: [
-            "title":   "Homebrew",
-            "body":    "Trigger an immediate package check.",
-            "options": ["Sync Now"]
-        ], ttl: checkInterval + 300)
-    }
 
-    private func onSyncNow() async {
-        fputs("[brew-monitor] manual sync triggered\n", stderr)
-        sleepTask?.cancel()
-    }
+        guard response == "Upgrade All" else {
+            fputs("[brew-monitor] response: \(response ?? "timeout") — exiting\n", stderr)
+            return
+        }
 
-    // MARK: - Response handler
-
-    private func onResponse(_ value: String) async {
         await mcp.clearBlock(blockUpdates)
-        guard value == "Upgrade All" else { return }
 
         do {
             try await upgrade()
@@ -140,11 +105,24 @@ actor BrewMonitor {
             fputs("[brew-monitor] upgrade error: \(error)\n", stderr)
         }
 
-        // Re-check after upgrade so UI shows new state immediately.
-        do {
-            try await check()
-        } catch {
-            fputs("[brew-monitor] post-upgrade check error: \(error)\n", stderr)
+        // Emit fresh result after upgrade.
+        let remaining = getOutdated()
+        await mcp.clearBlock(blockUpToDate)
+
+        if remaining.isEmpty {
+            try await mcp.emitBlock(blockUpToDate, type: "status", payload: [
+                "label": "Homebrew up to date",
+                "icon":  "checkmark.circle",
+                "color": "green"
+            ], ttl: 86400)
+        } else {
+            let remCount = remaining.count
+            try await mcp.emitBlock(blockUpToDate, type: "status", payload: [
+                "label":  "\(remCount) packages still need attention",
+                "detail": "Some upgrades may require manual intervention",
+                "icon":   "exclamationmark.triangle",
+                "color":  "orange"
+            ], ttl: 86400)
         }
     }
 
@@ -153,7 +131,6 @@ actor BrewMonitor {
     private func upgrade() async throws {
         fputs("[brew-monitor] running brew upgrade…\n", stderr)
 
-        // TTL covers even the longest possible upgrade (3 h).
         try await mcp.emitBlock(blockStatus, type: "status", payload: [
             "label":  "Upgrading Homebrew packages…",
             "detail": "Starting…",
@@ -175,9 +152,9 @@ actor BrewMonitor {
         proc.arguments = ["upgrade"]
 
         let pipe = Pipe()
-        proc.standardInput  = Pipe()  // prevent brew from reading the MCP stdin pipe
+        proc.standardInput  = Pipe()
         proc.standardOutput = pipe
-        proc.standardError  = pipe   // merge so we capture all output
+        proc.standardError  = pipe
 
         try proc.run()
 
@@ -198,7 +175,6 @@ actor BrewMonitor {
             let now = Date()
             guard !currentPkg.isEmpty, now.timeIntervalSince(lastUpdate) >= 3 else { continue }
             lastUpdate = now
-            // Best-effort status update — ignore CloudKit errors mid-stream.
             try? await mcp.emitBlock(blockStatus, type: "status", payload: [
                 "label":  "Upgrading Homebrew packages…",
                 "detail": "Installing \(currentPkg)",
@@ -227,10 +203,8 @@ actor BrewMonitor {
         }
     }
 
-    // MARK: - Pipe helpers
+    // MARK: - Pipe helper
 
-    /// Reads newline-delimited lines from a FileHandle using GCD readabilityHandler
-    /// so cooperative threads are never blocked waiting for subprocess output.
     private static func pipeLines(_ fh: FileHandle) -> AsyncStream<String> {
         final class State: @unchecked Sendable { var buffer = Data() }
         let state = State()
@@ -265,7 +239,7 @@ actor BrewMonitor {
 
         let outPipe = Pipe()
         let errPipe = Pipe()
-        proc.standardInput  = Pipe()  // prevent brew from reading the MCP stdin pipe
+        proc.standardInput  = Pipe()
         proc.standardOutput = outPipe
         proc.standardError  = errPipe
 
@@ -305,7 +279,6 @@ actor BrewMonitor {
         } else {
             raw = String(describing: value ?? "?")
         }
-        // Strip cask build suffixes like ",1"
         return String(raw.split(separator: ",", maxSplits: 1).first ?? Substring(raw))
     }
 

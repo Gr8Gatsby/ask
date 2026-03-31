@@ -7,15 +7,16 @@ signal(SIGPIPE, SIG_IGN)
 let mcp     = MCPClient()
 let monitor = BrewMonitor(mcp: mcp)
 
-await withTaskGroup(of: Void.self) { group in
-    group.addTask { await mcp.readLoop() }
-    group.addTask {
-        do {
-            try await mcp.initialize()
-        } catch {
-            fputs("[brew-monitor] init failed: \(error)\n", stderr)
-            return
-        }
-        await monitor.run()
-    }
+// Read stdin in the background so MCP responses can be delivered while
+// monitor.run() is awaiting user input. The task is abandoned on exit.
+Task { await mcp.readLoop() }
+
+do {
+    try await mcp.initialize()
+} catch {
+    fputs("[brew-monitor] init failed: \(error)\n", stderr)
+    exit(1)
 }
+
+await monitor.run()
+// Script exits here — one-shot complete.

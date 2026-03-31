@@ -123,6 +123,18 @@ actor MCPClient {
         responseCbs[blockID] = cb
     }
 
+    /// Returns a single-value stream that yields the user's response for `blockID`,
+    /// then finishes. The callback is registered synchronously on the actor before
+    /// the stream is returned, so no response can be missed after emitting the block.
+    func responseStream(blockID: String) -> AsyncStream<String> {
+        let (stream, continuation) = AsyncStream.makeStream(of: String.self)
+        responseCbs[blockID] = { value in
+            continuation.yield(value)
+            continuation.finish()
+        }
+        return stream
+    }
+
     // MARK: - Inbound
 
     /// Reads stdin line-by-line and dispatches each JSON-RPC message.
