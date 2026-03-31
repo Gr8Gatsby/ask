@@ -173,8 +173,8 @@ Reserve `.ultraThinMaterial` for secondary chrome that should recede. Use the sy
 
 This project uses a block-based UI system where Mac scripts push UI cards to the iOS app via CloudKit. When writing scripts or modifying block rendering:
 
-- All supported block types, their payloads, visual design, and lifecycle are documented in **[design.md](design.md)**.
-- Block types: `confirmation`, `alert`, `status`, `prompt`, `chat_prompt`, `info_card`, `icon_card`.
+- All supported block types, their payloads, ASCII renderings, and implementation links are in **[docs/blocks.md](docs/blocks.md)**. **This file must be kept up to date whenever a block type is added, removed, or modified.**
+- Block types: `confirmation`, `alert`, `status`, `prompt`, `chat_prompt`, `info_card`, `icon_card`, `tile`, `countdown`, `picker`, `list`, `detail`.
 - Script identity (name, icon) is embedded in every block record — iOS section headers derive from this, not from hardcoded mappings.
 - Script icons are transmitted as raw SVG strings (`scriptIconSVG`) and rendered on iOS via `SVGImageView` (`WKWebView`-backed). SF Symbol (`scriptIcon`) is the fallback.
 - `UIViewRepresentable` wrapping `WKWebView` is the **only** acceptable UIKit usage in this codebase — it exists solely for SVG rendering, which has no native SwiftUI equivalent.

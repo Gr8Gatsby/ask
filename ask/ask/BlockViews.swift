@@ -55,6 +55,29 @@ private struct EmojiText: UIViewRepresentable {
     }
 }
 
+// MARK: - Design tokens
+
+private enum BlockStyle {
+    static let blockVerticalPadding: CGFloat = 2
+    static let innerSpacing: CGFloat = 4
+    static let buttonVerticalPadding: CGFloat = 4
+    static let buttonMinHeight: CGFloat = 28
+    static let listRowVerticalPadding: CGFloat = 6
+    static let listRowHorizontalPadding: CGFloat = 10
+    static let buttonCornerRadius: CGFloat = 6
+    static let listCornerRadius: CGFloat = 8
+
+    static let titleFont = UIFont.preferredFont(forTextStyle: .footnote).withWeight(.semibold)
+    static let detailFont = UIFont.preferredFont(forTextStyle: .caption2)
+    static let buttonFont = UIFont.preferredFont(forTextStyle: .subheadline).withWeight(.semibold)
+    static let listItemFont = UIFont.preferredFont(forTextStyle: .subheadline)
+    static let listSubtitleFont = UIFont.preferredFont(forTextStyle: .caption2)
+    static let monoFont: UIFont = {
+        let size = UIFont.preferredFont(forTextStyle: .caption2).pointSize
+        return .monospacedSystemFont(ofSize: size, weight: .regular)
+    }()
+}
+
 // MARK: - Block dispatcher
 
 private extension UIFont {
@@ -185,15 +208,12 @@ struct ConfirmationBlockView: View {
     @State private var selectedOption: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: BlockStyle.innerSpacing) {
             VStack(alignment: .leading, spacing: 2) {
-                EmojiText(text: payload.title,
-                          uiFont: .preferredFont(forTextStyle: .subheadline).withWeight(.semibold))
+                EmojiText(text: payload.title, uiFont: BlockStyle.titleFont)
                     .fixedSize(horizontal: false, vertical: true)
                 if !payload.body.isEmpty {
-                    EmojiText(text: payload.body,
-                              uiFont: .monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .caption1).pointSize, weight: .regular),
-                              color: .secondaryLabel)
+                    EmojiText(text: payload.body, uiFont: BlockStyle.monoFont, color: .secondaryLabel)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -207,7 +227,7 @@ struct ConfirmationBlockView: View {
                 optionList
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, BlockStyle.blockVerticalPadding)
     }
 
     private func optionButton(_ option: String) -> some View {
@@ -224,18 +244,16 @@ struct ConfirmationBlockView: View {
                 if responding && isSelected {
                     ProgressView().tint(Color.accentColor)
                 } else {
-                    EmojiText(text: option,
-                              uiFont: .preferredFont(forTextStyle: .body).withWeight(.semibold),
-                              color: UIColor(Color.accentColor),
-                              alignment: .center)
+                    EmojiText(text: option, uiFont: BlockStyle.buttonFont,
+                              color: UIColor(Color.accentColor), alignment: .center)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(minHeight: 36)
-            .padding(.vertical, 8)
+            .frame(minHeight: BlockStyle.buttonMinHeight)
+            .padding(.vertical, BlockStyle.buttonVerticalPadding)
             .background(isSelected ? Color.accentColor.opacity(0.2) : Color.accentColor.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: BlockStyle.buttonCornerRadius))
         }
         .buttonStyle(.plain)
         .disabled(responding)
@@ -255,27 +273,26 @@ struct ConfirmationBlockView: View {
                         await onRespond(option)
                     }
                 } label: {
-                    HStack(spacing: 12) {
+                    HStack(spacing: 10) {
                         ZStack {
                             Circle()
                                 .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.4),
                                         lineWidth: 1.5)
-                                .frame(width: 20, height: 20)
+                                .frame(width: 16, height: 16)
                             if responding && isSelected {
-                                ProgressView().scaleEffect(0.55).tint(Color.accentColor)
+                                ProgressView().scaleEffect(0.5).tint(Color.accentColor)
                             } else if isSelected {
                                 Circle()
                                     .fill(Color.accentColor)
-                                    .frame(width: 11, height: 11)
+                                    .frame(width: 9, height: 9)
                             }
                         }
-                        EmojiText(text: option,
-                                  uiFont: .preferredFont(forTextStyle: .body))
+                        EmojiText(text: option, uiFont: BlockStyle.listItemFont)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 11)
+                    .padding(.horizontal, BlockStyle.listRowHorizontalPadding)
+                    .padding(.vertical, BlockStyle.listRowVerticalPadding)
                     .background(isSelected ? Color.accentColor.opacity(0.08) : Color(.secondarySystemGroupedBackground))
                 }
                 .buttonStyle(.plain)
@@ -284,13 +301,13 @@ struct ConfirmationBlockView: View {
                 .animation(.easeInOut(duration: 0.15), value: responding)
 
                 if idx < payload.options.count - 1 {
-                    Divider().padding(.leading, 44)
+                    Divider().padding(.leading, 36)
                 }
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: BlockStyle.listCornerRadius))
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: BlockStyle.listCornerRadius)
                 .stroke(Color.secondary.opacity(0.2), lineWidth: 0.5)
         )
     }
@@ -302,22 +319,22 @@ struct AlertBlockView: View {
     let payload: RKAlertPayload
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             Image(systemName: payload.icon ?? "bell.fill")
                 .foregroundStyle(.orange)
-                .font(.title3)
+                .font(.callout)
             VStack(alignment: .leading, spacing: 2) {
                 Text(payload.title)
-                    .font(.subheadline)
+                    .font(.footnote)
                     .fontWeight(.medium)
                 if !payload.body.isEmpty {
                     Text(payload.body)
-                        .font(.caption)
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, BlockStyle.blockVerticalPadding)
     }
 }
 
@@ -327,16 +344,16 @@ struct StatusBlockView: View {
     let payload: RKStatusPayload
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Circle()
                 .fill(statusColor)
-                .frame(width: 8, height: 8)
+                .frame(width: 6, height: 6)
             VStack(alignment: .leading, spacing: 2) {
                 Text(payload.label)
-                    .font(.subheadline)
+                    .font(.footnote)
                 if let detail = payload.detail {
                     Text(detail)
-                        .font(.caption)
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -344,10 +361,10 @@ struct StatusBlockView: View {
             if let icon = payload.icon {
                 Image(systemName: icon)
                     .foregroundStyle(statusColor)
-                    .font(.caption)
+                    .font(.caption2)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, BlockStyle.blockVerticalPadding)
     }
 
     private var statusColor: Color {
@@ -372,19 +389,21 @@ struct PromptBlockView: View {
     @State private var responding = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: BlockStyle.innerSpacing) {
             Text(payload.title)
-                .font(.subheadline)
+                .font(.footnote)
                 .fontWeight(.medium)
             HStack(spacing: 8) {
                 if payload.multiline == true {
                     TextField(payload.placeholder ?? "Enter response…", text: $text, axis: .vertical)
                         .textFieldStyle(.roundedBorder)
+                        .font(.subheadline)
                         .lineLimit(1...4)
                         .disabled(responding)
                 } else {
                     TextField(payload.placeholder ?? "Enter response…", text: $text)
                         .textFieldStyle(.roundedBorder)
+                        .font(.subheadline)
                         .disabled(responding)
                 }
                 Button {
@@ -397,7 +416,7 @@ struct PromptBlockView: View {
                     }
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
+                        .font(.title3)
                         .foregroundStyle(
                             text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                                 ? Color.secondary : Color.accentColor
@@ -406,7 +425,7 @@ struct PromptBlockView: View {
                 .disabled(responding || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, BlockStyle.blockVerticalPadding)
     }
 }
 
@@ -421,46 +440,46 @@ struct ChatPromptBlockView: View {
     @State private var sentMessage = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: BlockStyle.innerSpacing + 2) {
             // Claude's last message shown as context
             if let context = payload.context, !context.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: BlockStyle.innerSpacing) {
+                    HStack(spacing: 4) {
                         Image("claudecode")
                             .resizable()
                             .scaledToFit()
-                            .frame(width: 16, height: 16)
+                            .frame(width: 12, height: 12)
                         Text("Claude Code")
-                            .font(.caption)
+                            .font(.caption2)
                             .fontWeight(.medium)
                             .foregroundStyle(.secondary)
                     }
                     Text(context)
-                        .font(.subheadline)
-                        .padding(10)
+                        .font(.caption)
+                        .padding(8)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(Color(.systemGray6))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
             }
 
             // Sent message bubble — visible from submit until Claude replies with new context
             if !sentMessage.isEmpty {
-                VStack(alignment: .trailing, spacing: 4) {
+                VStack(alignment: .trailing, spacing: 2) {
                     HStack {
                         Spacer(minLength: 40)
                         Text(sentMessage)
-                            .font(.subheadline)
+                            .font(.caption)
                             .foregroundStyle(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
                             .background(Color.accentColor)
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
                     HStack(spacing: 4) {
                         Spacer()
                         if responding {
-                            ProgressView().scaleEffect(0.6)
+                            ProgressView().scaleEffect(0.5)
                             Text("Sending…")
                         } else {
                             Image(systemName: "checkmark")
@@ -474,22 +493,23 @@ struct ChatPromptBlockView: View {
             }
 
             // Input area
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: BlockStyle.innerSpacing) {
                 Text(payload.title)
-                    .font(.caption)
+                    .font(.caption2)
                     .fontWeight(.medium)
                     .foregroundStyle(.secondary)
 
                 HStack(alignment: .bottom, spacing: 8) {
                     TextField(payload.placeholder ?? "Reply to Claude…", text: $text, axis: .vertical)
                         .textFieldStyle(.roundedBorder)
+                        .font(.subheadline)
                         .lineLimit(1...6)
                         .disabled(responding)
                         .onSubmit { submit() }
 
                     Button { submit() } label: {
                         Image(systemName: "arrow.up.circle.fill")
-                            .font(.title2)
+                            .font(.title3)
                             .foregroundStyle(
                                 text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                                     ? Color.secondary : Color.accentColor
@@ -499,7 +519,7 @@ struct ChatPromptBlockView: View {
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, BlockStyle.blockVerticalPadding)
         .onChange(of: payload.context) { _, _ in
             // Claude responded with new context — clear the sent bubble
             withAnimation(.default) { sentMessage = "" }
@@ -528,22 +548,22 @@ struct IconCardBlockView: View {
     let icon: String?       // SF Symbol fallback
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             scriptIcon
-                .frame(width: 40, height: 40)
+                .frame(width: 32, height: 32)
             VStack(alignment: .leading, spacing: 2) {
                 Text(payload.title)
-                    .font(.subheadline)
+                    .font(.footnote)
                     .fontWeight(.medium)
                 if let subtitle = payload.subtitle, !subtitle.isEmpty {
                     Text(subtitle)
-                        .font(.caption)
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             }
             Spacer()
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, BlockStyle.blockVerticalPadding)
     }
 
     @ViewBuilder
@@ -578,15 +598,15 @@ struct PickerBlockView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: BlockStyle.innerSpacing) {
             Text(payload.title)
-                .font(.subheadline)
+                .font(.footnote)
                 .fontWeight(.semibold)
 
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Picker(payload.title, selection: $selected) {
                     ForEach(payload.options, id: \.self) { option in
-                        Text(option).tag(option)
+                        Text(option).font(.subheadline).tag(option)
                     }
                 }
                 .pickerStyle(.menu)
@@ -606,14 +626,16 @@ struct PickerBlockView: View {
                         ProgressView().controlSize(.small)
                     } else {
                         Text("Select")
+                            .font(.subheadline)
                             .fontWeight(.semibold)
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .controlSize(.small)
                 .disabled(responding || payload.options.isEmpty)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, BlockStyle.blockVerticalPadding)
     }
 }
 
@@ -630,12 +652,11 @@ struct ListBlockView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let title = payload.title, !title.isEmpty {
-                EmojiText(text: title,
-                          uiFont: .preferredFont(forTextStyle: .subheadline).withWeight(.semibold))
+                EmojiText(text: title, uiFont: BlockStyle.titleFont)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 10)
-                    .padding(.bottom, 8)
+                    .padding(.horizontal, BlockStyle.listRowHorizontalPadding)
+                    .padding(.top, 8)
+                    .padding(.bottom, 6)
             }
 
             if payload.items.isEmpty && (payload.actions == nil || payload.actions!.isEmpty) {
@@ -657,27 +678,25 @@ struct ListBlockView: View {
                     } label: {
                         HStack(spacing: 10) {
                             VStack(alignment: .leading, spacing: 2) {
-                                EmojiText(text: item.label,
-                                          uiFont: .preferredFont(forTextStyle: .subheadline))
+                                EmojiText(text: item.label, uiFont: BlockStyle.listItemFont)
                                     .fixedSize(horizontal: false, vertical: true)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 if let subtitle = item.subtitle, !subtitle.isEmpty {
-                                    EmojiText(text: subtitle,
-                                              uiFont: .preferredFont(forTextStyle: .caption1),
+                                    EmojiText(text: subtitle, uiFont: BlockStyle.listSubtitleFont,
                                               color: .secondaryLabel)
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
                             }
                             if tappedID == item.id {
-                                ProgressView().scaleEffect(0.7).tint(Color.accentColor)
+                                ProgressView().scaleEffect(0.6).tint(Color.accentColor)
                             } else {
                                 Image(systemName: "chevron.right")
-                                    .font(.caption)
+                                    .font(.caption2)
                                     .foregroundStyle(Color(.tertiaryLabel))
                             }
                         }
-                        .padding(.vertical, 10)
-                        .padding(.horizontal, 12)
+                        .padding(.vertical, BlockStyle.listRowVerticalPadding)
+                        .padding(.horizontal, BlockStyle.listRowHorizontalPadding)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(tappedID == item.id
                                     ? Color.accentColor.opacity(0.08)
@@ -688,7 +707,7 @@ struct ListBlockView: View {
                     .disabled(tappedAction != nil)
 
                     if idx < payload.items.count - 1 {
-                        Divider().padding(.leading, 12)
+                        Divider().padding(.leading, BlockStyle.listRowHorizontalPadding)
                     }
                 }
 
@@ -696,7 +715,7 @@ struct ListBlockView: View {
                     if !payload.items.isEmpty {
                         Divider()
                     }
-                    VStack(spacing: 6) {
+                    VStack(spacing: BlockStyle.innerSpacing) {
                         ForEach(actions, id: \.self) { action in
                             Button {
                                 guard tappedAction == nil && tappedID == nil else { return }
@@ -709,20 +728,18 @@ struct ListBlockView: View {
                             } label: {
                                 ZStack {
                                     if tappedAction == action {
-                                        ProgressView().scaleEffect(0.7).tint(Color.accentColor)
+                                        ProgressView().scaleEffect(0.6).tint(Color.accentColor)
                                     } else {
-                                        EmojiText(text: action,
-                                                  uiFont: .preferredFont(forTextStyle: .subheadline).withWeight(.semibold),
-                                                  color: UIColor(Color.accentColor),
-                                                  alignment: .center)
+                                        EmojiText(text: action, uiFont: BlockStyle.buttonFont,
+                                                  color: UIColor(Color.accentColor), alignment: .center)
                                             .fixedSize(horizontal: false, vertical: true)
                                     }
                                 }
                                 .frame(maxWidth: .infinity)
-                                .frame(minHeight: 36)
-                                .padding(.vertical, 6)
+                                .frame(minHeight: BlockStyle.buttonMinHeight)
+                                .padding(.vertical, BlockStyle.buttonVerticalPadding)
                                 .background(Color.accentColor.opacity(0.1))
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .clipShape(RoundedRectangle(cornerRadius: BlockStyle.buttonCornerRadius))
                             }
                             .buttonStyle(.plain)
                             .disabled(tappedAction != nil || tappedID != nil)
@@ -730,15 +747,15 @@ struct ListBlockView: View {
                             .animation(.easeInOut(duration: 0.15), value: tappedAction)
                         }
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
+                    .padding(.horizontal, BlockStyle.listRowHorizontalPadding)
+                    .padding(.vertical, BlockStyle.listRowVerticalPadding)
                 }
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10)
+        .clipShape(RoundedRectangle(cornerRadius: BlockStyle.listCornerRadius))
+        .overlay(RoundedRectangle(cornerRadius: BlockStyle.listCornerRadius)
             .stroke(Color.secondary.opacity(0.2), lineWidth: 0.5))
-        .padding(.vertical, 4)
+        .padding(.vertical, BlockStyle.blockVerticalPadding)
         .onChange(of: isWaiting) { _, waiting in
             // Clear the in-row spinner as soon as burst polling ends —
             // either because the detail block arrived (nav pushed) or an error occurred.
@@ -757,20 +774,19 @@ struct DetailBlockView: View {
     @State private var selectedAction: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            EmojiText(text: payload.title,
-                      uiFont: .preferredFont(forTextStyle: .subheadline).withWeight(.semibold))
+        VStack(alignment: .leading, spacing: BlockStyle.innerSpacing) {
+            EmojiText(text: payload.title, uiFont: BlockStyle.titleFont)
                 .fixedSize(horizontal: false, vertical: true)
 
             ScrollView {
                 Text(payload.body)
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
                     .padding(.bottom, 2)
             }
-            .frame(maxHeight: 320)
+            .frame(maxHeight: 280)
 
             if let actions = payload.actions, !actions.isEmpty {
                 HStack(spacing: 8) {
@@ -780,7 +796,7 @@ struct DetailBlockView: View {
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, BlockStyle.blockVerticalPadding)
     }
 
     private func actionButton(_ action: String) -> some View {
@@ -798,18 +814,16 @@ struct DetailBlockView: View {
                 if responding && isSelected {
                     ProgressView().tint(Color.accentColor)
                 } else {
-                    EmojiText(text: action,
-                              uiFont: .preferredFont(forTextStyle: .body).withWeight(.semibold),
-                              color: UIColor(Color.accentColor),
-                              alignment: .center)
+                    EmojiText(text: action, uiFont: BlockStyle.buttonFont,
+                              color: UIColor(Color.accentColor), alignment: .center)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(minHeight: 36)
-            .padding(.vertical, 8)
+            .frame(minHeight: BlockStyle.buttonMinHeight)
+            .padding(.vertical, BlockStyle.buttonVerticalPadding)
             .background(isSelected ? Color.accentColor.opacity(0.2) : Color.accentColor.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: BlockStyle.buttonCornerRadius))
         }
         .buttonStyle(.plain)
         .disabled(responding)
@@ -827,16 +841,16 @@ struct CountdownBlockView: View {
     private let timer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Image(systemName: "clock")
                 .foregroundStyle(.secondary)
-                .font(.caption)
+                .font(.caption2)
             Text(displayText)
-                .font(.subheadline)
+                .font(.footnote)
                 .foregroundStyle(.primary)
             Spacer()
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, BlockStyle.blockVerticalPadding)
         .onAppear { displayText = formatted() }
         .onReceive(timer) { _ in displayText = formatted() }
     }
@@ -871,22 +885,22 @@ struct InfoCardBlockView: View {
     let payload: RKInfoCardPayload
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: BlockStyle.innerSpacing) {
             Text(payload.title)
-                .font(.subheadline)
+                .font(.footnote)
                 .fontWeight(.medium)
             ForEach(payload.pairs, id: \.key) { pair in
                 HStack {
                     Text(pair.key)
-                        .font(.caption)
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                     Spacer()
                     Text(pair.value)
-                        .font(.caption)
+                        .font(.caption2)
                         .fontWeight(.medium)
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, BlockStyle.blockVerticalPadding)
     }
 }
