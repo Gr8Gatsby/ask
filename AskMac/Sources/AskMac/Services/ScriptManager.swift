@@ -65,10 +65,13 @@ final class ScriptManager {
     // Cached manifests so we can re-launch after enable
     private var manifests: [String: (manifest: ScriptManifest, dir: URL, icon: NSImage?, svgString: String?)] = [:]
 
-    init(cloudKit: CloudKitService, machineID: String, settings: AppSettings) {
+    private let actionHistory: ActionHistoryService
+
+    init(cloudKit: CloudKitService, machineID: String, settings: AppSettings, actionHistory: ActionHistoryService) {
         self.cloudKit = cloudKit
         self.machineID = machineID
         self.settings = settings
+        self.actionHistory = actionHistory
         self.scriptsDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".ask/scripts")
     }
@@ -150,11 +153,13 @@ final class ScriptManager {
     // MARK: - Private
 
     func disableScript(id: String) {
+        let name = scripts.first(where: { $0.id == id })?.name ?? id
         settings.setScriptEnabled(id, enabled: false)
         if let idx = scripts.firstIndex(where: { $0.id == id }) {
             scripts[idx].isEnabled = false
             scripts[idx].status = .stopped
         }
+        actionHistory.recordScriptToggle(scriptName: name, enabled: false)
         connections[id]?.stop()
         connections.removeValue(forKey: id)
         restartDelays.removeValue(forKey: id)
@@ -172,10 +177,12 @@ final class ScriptManager {
     }
 
     func enableScript(id: String) {
+        let name = scripts.first(where: { $0.id == id })?.name ?? id
         settings.setScriptEnabled(id, enabled: true)
         if let idx = scripts.firstIndex(where: { $0.id == id }) {
             scripts[idx].isEnabled = true
         }
+        actionHistory.recordScriptToggle(scriptName: name, enabled: true)
         if let cached = manifests[id] {
             launch(manifest: cached.manifest, scriptDir: cached.dir)
         }
@@ -289,6 +296,8 @@ final class ScriptManager {
         if let error = errorSummary, let idx = scripts.firstIndex(where: { $0.id == manifest.id }) {
             scripts[idx].lastError = error
         }
+
+        actionHistory.recordScriptCrash(scriptName: manifest.name, lastStderr: errorSummary)
 
         let delay = restartDelays[manifest.id] ?? 1.0
         restartDelays[manifest.id] = min(delay * 2, 30.0)

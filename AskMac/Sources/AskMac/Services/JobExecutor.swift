@@ -261,11 +261,10 @@ final class JobExecutor: @unchecked Sendable {
         }
 
         // Record in local history
-        actionHistory.record(
-            jobID: job.jobID,
-            actionName: agentConfig.name,
+        actionHistory.recordJob(
+            agentName: agentConfig.name,
             prompt: job.prompt,
-            status: finalStatus.rawValue,
+            status: finalStatus,
             durationSeconds: duration,
             exitCode: exitCode
         )

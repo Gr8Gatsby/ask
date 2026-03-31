@@ -29,7 +29,7 @@ private struct DashboardTab: View {
             VStack(alignment: .leading, spacing: 24) {
                 summaryCards
                 dailyChart
-                topActions
+                topSources
             }
             .padding(24)
         }
@@ -40,47 +40,40 @@ private struct DashboardTab: View {
     private var summaryCards: some View {
         HStack(spacing: 16) {
             StatCard(
-                title: "Total Runs",
-                value: "\(history.entries.count)",
+                title: "Total Events",
+                value: "\(history.events.count)",
                 systemImage: "bolt.fill",
                 color: .blue
             )
             StatCard(
-                title: "Completed",
-                value: "\(history.entries.filter { $0.status == "completed" }.count)",
-                systemImage: "checkmark.circle.fill",
+                title: "Responses",
+                value: "\(history.events.filter { $0.kind == .blockResponse }.count)",
+                systemImage: "hand.tap.fill",
+                color: .purple
+            )
+            StatCard(
+                title: "Jobs Run",
+                value: "\(history.events.filter { [.jobCompleted, .jobFailed, .jobCancelled].contains($0.kind) }.count)",
+                systemImage: "terminal.fill",
                 color: .green
             )
             StatCard(
-                title: "Failed",
-                value: "\(history.entries.filter { $0.status == "failed" }.count)",
-                systemImage: "xmark.circle.fill",
+                title: "Crashes",
+                value: "\(history.events.filter { $0.kind == .scriptCrashed }.count)",
+                systemImage: "exclamationmark.triangle.fill",
                 color: .red
             )
-            StatCard(
-                title: "Success Rate",
-                value: successRate,
-                systemImage: "percent",
-                color: .purple
-            )
         }
-    }
-
-    private var successRate: String {
-        let total = history.entries.count
-        guard total > 0 else { return "—" }
-        let completed = history.entries.filter { $0.status == "completed" }.count
-        return "\(Int(Double(completed) / Double(total) * 100))%"
     }
 
     // MARK: Daily chart
 
     private var dailyChart: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Runs per Day")
+            Text("Activity (30 Days)")
                 .font(.headline)
 
-            if history.entries.isEmpty {
+            if history.events.isEmpty {
                 Text("No activity yet.")
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
@@ -88,7 +81,7 @@ private struct DashboardTab: View {
                 Chart(dailyCounts) { day in
                     BarMark(
                         x: .value("Date", day.date, unit: .day),
-                        y: .value("Runs", day.count)
+                        y: .value("Events", day.count)
                     )
                     .foregroundStyle(Color.accentColor.gradient)
                     .cornerRadius(3)
@@ -113,11 +106,9 @@ private struct DashboardTab: View {
         guard let start = calendar.date(byAdding: .day, value: -29, to: today) else { return [] }
 
         var countsByDay: [Date: Int] = [:]
-        for entry in history.entries {
-            let day = calendar.startOfDay(for: entry.timestamp)
-            if day >= start {
-                countsByDay[day, default: 0] += 1
-            }
+        for event in history.events {
+            let day = calendar.startOfDay(for: event.timestamp)
+            if day >= start { countsByDay[day, default: 0] += 1 }
         }
 
         return (0..<30).compactMap { offset in
@@ -126,22 +117,22 @@ private struct DashboardTab: View {
         }
     }
 
-    // MARK: Top actions
+    // MARK: Top sources
 
-    private var topActions: some View {
+    private var topSources: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Top Actions")
+            Text("Top Sources")
                 .font(.headline)
 
-            if actionStats.isEmpty {
+            if sourceStats.isEmpty {
                 Text("No activity yet.")
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 8)
             } else {
                 VStack(spacing: 0) {
-                    ForEach(Array(actionStats.prefix(8).enumerated()), id: \.element.id) { idx, stat in
+                    ForEach(Array(sourceStats.prefix(8).enumerated()), id: \.element.id) { idx, stat in
                         if idx > 0 { Divider() }
-                        ActionStatRow(stat: stat, maxCount: actionStats[0].count)
+                        SourceStatRow(stat: stat, maxCount: sourceStats[0].count)
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -156,22 +147,13 @@ private struct DashboardTab: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
-    private var actionStats: [ActionStat] {
-        var counts: [String: (total: Int, completed: Int)] = [:]
-        for entry in history.entries {
-            var pair = counts[entry.actionName] ?? (0, 0)
-            pair.total += 1
-            if entry.status == "completed" { pair.completed += 1 }
-            counts[entry.actionName] = pair
+    private var sourceStats: [SourceStat] {
+        var counts: [String: Int] = [:]
+        for event in history.events {
+            counts[event.source, default: 0] += 1
         }
-        return counts.map { name, pair in
-            ActionStat(
-                actionName: name,
-                count: pair.total,
-                successRate: pair.total > 0 ? Double(pair.completed) / Double(pair.total) : 0
-            )
-        }
-        .sorted { $0.count > $1.count }
+        return counts.map { SourceStat(name: $0.key, count: $0.value) }
+            .sorted { $0.count > $1.count }
     }
 }
 
@@ -180,33 +162,38 @@ private struct DashboardTab: View {
 private struct LogTab: View {
     @Environment(ActionHistoryService.self) private var history
     @State private var search = ""
-    @State private var statusFilter = "all"
-    @State private var selectedEntry: ActionHistoryEntry?
+    @State private var kindFilter = "all"
+    @State private var selectedEvent: HistoryEvent?
 
-    private let statusOptions = ["all", "completed", "failed", "cancelled"]
+    private let filterOptions: [(label: String, tag: String)] = [
+        ("All", "all"),
+        ("Responses", "response"),
+        ("Jobs", "job"),
+        ("System", "system"),
+    ]
 
     var body: some View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            if filteredEntries.isEmpty {
+            if filteredEvents.isEmpty {
                 ContentUnavailableView(
                     search.isEmpty ? "No history yet" : "No results",
                     systemImage: "clock.arrow.circlepath",
                     description: Text(search.isEmpty
-                        ? "Action runs will appear here."
+                        ? "Script interactions will appear here."
                         : "Try a different search or filter.")
                 )
             } else {
-                List(filteredEntries, selection: $selectedEntry) { entry in
-                    HistoryEntryRow(entry: entry)
-                        .tag(entry)
+                List(filteredEvents, selection: $selectedEvent) { event in
+                    HistoryEventRow(event: event)
+                        .tag(event)
                 }
                 .listStyle(.inset(alternatesRowBackgrounds: true))
             }
         }
-        .sheet(item: $selectedEntry) { entry in
-            HistoryDetailView(entry: entry)
+        .sheet(item: $selectedEvent) { event in
+            HistoryDetailView(event: event)
         }
     }
 
@@ -215,7 +202,7 @@ private struct LogTab: View {
             HStack {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("Search actions or prompts…", text: $search)
+                TextField("Search sources or details…", text: $search)
                     .textFieldStyle(.plain)
                 if !search.isEmpty {
                     Button { search = "" } label: {
@@ -230,9 +217,9 @@ private struct LogTab: View {
             .background(.background.secondary)
             .clipShape(RoundedRectangle(cornerRadius: 7))
 
-            Picker("Status", selection: $statusFilter) {
-                ForEach(statusOptions, id: \.self) { opt in
-                    Text(opt.capitalized).tag(opt)
+            Picker("Filter", selection: $kindFilter) {
+                ForEach(filterOptions, id: \.tag) { opt in
+                    Text(opt.label).tag(opt.tag)
                 }
             }
             .pickerStyle(.segmented)
@@ -241,89 +228,65 @@ private struct LogTab: View {
         .padding(12)
     }
 
-    private var filteredEntries: [ActionHistoryEntry] {
-        history.entries.filter { entry in
-            let matchesStatus = statusFilter == "all" || entry.status == statusFilter
+    private var filteredEvents: [HistoryEvent] {
+        history.events.filter { event in
+            let matchesKind: Bool
+            switch kindFilter {
+            case "response": matchesKind = event.kind == .blockResponse
+            case "job":      matchesKind = [.jobCompleted, .jobFailed, .jobCancelled].contains(event.kind)
+            case "system":   matchesKind = [.scriptEnabled, .scriptDisabled, .scriptCrashed].contains(event.kind)
+            default:         matchesKind = true
+            }
             let matchesSearch = search.isEmpty
-                || entry.actionName.localizedCaseInsensitiveContains(search)
-                || entry.prompt.localizedCaseInsensitiveContains(search)
-            return matchesStatus && matchesSearch
+                || event.source.localizedCaseInsensitiveContains(search)
+                || event.summary.localizedCaseInsensitiveContains(search)
+                || (event.detail ?? "").localizedCaseInsensitiveContains(search)
+            return matchesKind && matchesSearch
         }
     }
 }
 
-// MARK: - Entry row
+// MARK: - Event row
 
-private struct HistoryEntryRow: View {
-    let entry: ActionHistoryEntry
+private struct HistoryEventRow: View {
+    let event: HistoryEvent
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: statusIcon)
-                .foregroundStyle(statusColor)
+            Image(systemName: event.kind.systemImage)
+                .foregroundStyle(event.kind.color)
                 .frame(width: 16)
             VStack(alignment: .leading, spacing: 2) {
-                Text(entry.actionName)
+                Text(event.source)
                     .font(.subheadline)
                     .fontWeight(.medium)
-                Text(entry.prompt)
+                Text(event.summary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer()
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(entry.timestamp, style: .relative)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                Text(durationLabel)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fontDesign(.monospaced)
-            }
+            Text(event.timestamp, style: .relative)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
         .padding(.vertical, 2)
-    }
-
-    private var statusIcon: String {
-        switch entry.status {
-        case "completed": "checkmark.circle.fill"
-        case "failed":    "xmark.circle.fill"
-        case "cancelled": "minus.circle.fill"
-        case "timeout":   "clock.badge.xmark"
-        default:          "circle"
-        }
-    }
-
-    private var statusColor: Color {
-        switch entry.status {
-        case "completed": .green
-        case "failed":    .red
-        case "cancelled": .secondary
-        case "timeout":   .orange
-        default:          .secondary
-        }
-    }
-
-    private var durationLabel: String {
-        let s = entry.durationSeconds
-        if s < 60 { return String(format: "%.1fs", s) }
-        return String(format: "%dm %ds", Int(s) / 60, Int(s) % 60)
     }
 }
 
 // MARK: - Detail sheet
 
 private struct HistoryDetailView: View {
-    let entry: ActionHistoryEntry
+    let event: HistoryEvent
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(entry.actionName)
+                Label(event.source, systemImage: event.kind.systemImage)
                     .font(.title3)
                     .fontWeight(.semibold)
+                    .foregroundStyle(event.kind.color)
                 Spacer()
                 Button("Done") { dismiss() }
             }
@@ -332,38 +295,62 @@ private struct HistoryDetailView: View {
             Divider()
 
             Form {
-                LabeledContent("Status") {
-                    Text(entry.status.capitalized)
-                        .foregroundStyle(entry.status == "completed" ? .green : .red)
+                LabeledContent("Event") { Text(event.kind.displayName) }
+                LabeledContent("Summary") { Text(event.summary) }
+                LabeledContent("Time") {
+                    Text(event.timestamp.formatted(date: .abbreviated, time: .standard))
                 }
-                LabeledContent("Started") {
-                    Text(entry.timestamp.formatted(date: .abbreviated, time: .standard))
-                }
-                LabeledContent("Duration") {
-                    Text(durationLabel)
-                        .fontDesign(.monospaced)
-                }
-                if let code = entry.exitCode {
-                    LabeledContent("Exit Code") {
-                        Text("\(code)")
-                            .fontDesign(.monospaced)
+                if let detail = event.detail {
+                    LabeledContent("Detail") {
+                        Text(detail)
+                            .textSelection(.enabled)
+                            .multilineTextAlignment(.trailing)
                     }
-                }
-                LabeledContent("Prompt") {
-                    Text(entry.prompt)
-                        .textSelection(.enabled)
-                        .multilineTextAlignment(.trailing)
                 }
             }
             .formStyle(.grouped)
         }
-        .frame(width: 420, height: 320)
+        .frame(width: 420, height: 280)
+    }
+}
+
+// MARK: - HistoryEventKind display helpers
+
+extension HistoryEventKind {
+    var systemImage: String {
+        switch self {
+        case .blockResponse:  "hand.tap.fill"
+        case .jobCompleted:   "checkmark.circle.fill"
+        case .jobFailed:      "xmark.circle.fill"
+        case .jobCancelled:   "minus.circle.fill"
+        case .scriptEnabled:  "play.circle.fill"
+        case .scriptDisabled: "stop.circle.fill"
+        case .scriptCrashed:  "exclamationmark.triangle.fill"
+        }
     }
 
-    private var durationLabel: String {
-        let s = entry.durationSeconds
-        if s < 60 { return String(format: "%.1f seconds", s) }
-        return String(format: "%d min %d sec", Int(s) / 60, Int(s) % 60)
+    var color: Color {
+        switch self {
+        case .blockResponse:  .purple
+        case .jobCompleted:   .green
+        case .jobFailed:      .red
+        case .jobCancelled:   .secondary
+        case .scriptEnabled:  .green
+        case .scriptDisabled: .secondary
+        case .scriptCrashed:  .red
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .blockResponse:  "Block Response"
+        case .jobCompleted:   "Job Completed"
+        case .jobFailed:      "Job Failed"
+        case .jobCancelled:   "Job Cancelled"
+        case .scriptEnabled:  "Script Enabled"
+        case .scriptDisabled: "Script Disabled"
+        case .scriptCrashed:  "Script Crashed"
+        }
     }
 }
 
@@ -375,20 +362,19 @@ private struct DailyCount: Identifiable {
     var id: Date { date }
 }
 
-private struct ActionStat: Identifiable {
-    let actionName: String
+private struct SourceStat: Identifiable {
+    let name: String
     let count: Int
-    let successRate: Double
-    var id: String { actionName }
+    var id: String { name }
 }
 
-private struct ActionStatRow: View {
-    let stat: ActionStat
+private struct SourceStatRow: View {
+    let stat: SourceStat
     let maxCount: Int
 
     var body: some View {
         HStack(spacing: 10) {
-            Text(stat.actionName)
+            Text(stat.name)
                 .font(.subheadline)
                 .lineLimit(1)
             Spacer()
@@ -406,10 +392,6 @@ private struct ActionStatRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(width: 28, alignment: .trailing)
-            Text("\(Int(stat.successRate * 100))%")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .frame(width: 32, alignment: .trailing)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

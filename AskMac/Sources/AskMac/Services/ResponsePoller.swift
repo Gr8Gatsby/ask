@@ -7,11 +7,13 @@ import Observation
 final class ResponsePoller {
     private let cloudKit: CloudKitService
     private let machineID: String
+    private let actionHistory: ActionHistoryService
     private var pollTask: Task<Void, Never>?
 
-    init(cloudKit: CloudKitService, machineID: String) {
+    init(cloudKit: CloudKitService, machineID: String, actionHistory: ActionHistoryService) {
         self.cloudKit = cloudKit
         self.machineID = machineID
+        self.actionHistory = actionHistory
     }
 
     func start(scriptManager: ScriptManager) {
@@ -34,6 +36,13 @@ final class ResponsePoller {
         guard let responses = try? await cloudKit.drainRKResponses(machineID: machineID) else { return }
         for response in responses {
             print("[ResponsePoller] blockID=\(response.blockID) scriptID=\(response.scriptID) value=\(response.value)")
+
+            // Look up the script name for history logging
+            let scriptName = scriptManager.scripts.first(where: { $0.id == response.scriptID })?.name
+                ?? response.scriptID
+
+            actionHistory.recordBlockResponse(scriptName: scriptName, value: response.value)
+
             guard let conn = scriptManager.connection(for: response.scriptID) else {
                 print("[ResponsePoller] No connection for scriptID=\(response.scriptID)")
                 continue

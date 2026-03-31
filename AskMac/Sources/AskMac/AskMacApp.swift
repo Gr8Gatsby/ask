@@ -19,8 +19,8 @@ struct AskMacApp: App {
         let hb = HeartbeatService(cloudKit: ck, settings: s)
         let mw = MessageWatcherService(cloudKit: ck, machineID: s.machineID)
         let ah = ActionHistoryService()
-        let sm = ScriptManager(cloudKit: ck, machineID: s.machineID, settings: s)
-        let rp = ResponsePoller(cloudKit: ck, machineID: s.machineID)
+        let sm = ScriptManager(cloudKit: ck, machineID: s.machineID, settings: s, actionHistory: ah)
+        let rp = ResponsePoller(cloudKit: ck, machineID: s.machineID, actionHistory: ah)
         let am = AgentManager(cloudKit: ck, settings: s)
         let je = JobExecutor(cloudKit: ck, agentManager: am, actionHistory: ah, settings: s)
 
