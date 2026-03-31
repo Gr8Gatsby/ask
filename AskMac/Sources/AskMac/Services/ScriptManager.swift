@@ -28,6 +28,8 @@ struct ScriptManifest: Codable {
 struct ManagedScript: Identifiable {
     let id: String          // manifest.id
     let name: String
+    let version: String?    // manifest.version
+    let description: String? // manifest.description
     let icon: String?       // SF Symbol fallback
     var iconImage: NSImage? // loaded from icon_file
     var status: ScriptStatus
@@ -398,10 +400,10 @@ final class ScriptManager {
             let reason = bySignal ? "signal \(exitCode)" : "exit \(exitCode)"
             print("[ScriptManager] \(manifest.id): feed run failed (\(reason)) — last stderr: \(stderr)")
             upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: manifests[manifest.id]?.icon, status: .crashed, isEnabled: true)
+            let feedIconData  = manifests[manifest.id]?.icon.flatMap { ScriptManager.iconPNGBase64($0) }
+            let feedSvgString = manifests[manifest.id]?.svgString
             Task {
-                let iconData  = manifests[manifest.id]?.icon.flatMap { ScriptManager.iconPNGBase64($0) }
-                let svgString = manifests[manifest.id]?.svgString
-                let bs = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData, scriptIconSVG: svgString, scriptType: "feed")
+                let bs = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: feedIconData, scriptIconSVG: feedSvgString, scriptType: "feed")
                 let payload: [String: Any] = ["title": "\(manifest.name) failed", "body": "Feed script exited with code \(exitCode)"]
                 if let data = try? JSONSerialization.data(withJSONObject: payload),
                    let json = String(data: data, encoding: .utf8) {
@@ -437,9 +439,9 @@ final class ScriptManager {
 
         // Emit alert to iOS so user sees it on iPhone
         let alertBody = errorSummary ?? "Script exited unexpectedly"
+        let iconData = manifests[manifest.id]?.icon.flatMap { ScriptManager.iconPNGBase64($0) }
+        let svgString = manifests[manifest.id]?.svgString
         Task {
-            let iconData = manifests[manifest.id]?.icon.flatMap { ScriptManager.iconPNGBase64($0) }
-            let svgString = manifests[manifest.id]?.svgString
             let bs = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData, scriptIconSVG: svgString)
             let payload: [String: Any] = ["title": "\(manifest.name) stopped", "body": alertBody]
             if let data = try? JSONSerialization.data(withJSONObject: payload),
@@ -453,10 +455,10 @@ final class ScriptManager {
             }
         }
 
-        Task {
+        Task { @MainActor in
             try? await Task.sleep(for: .seconds(delay))
             guard !self.settings.disabledScripts.contains(manifest.id) else { return }
-            launch(manifest: manifest, scriptDir: scriptDir)
+            self.launch(manifest: manifest, scriptDir: scriptDir)
         }
     }
 
@@ -479,12 +481,13 @@ final class ScriptManager {
     }
 
     private func upsertStatus(_ id: String, name: String, icon: String?, iconImage: NSImage?, status: ManagedScript.ScriptStatus, isEnabled: Bool) {
+        let manifest = manifests[id]?.manifest
         if let idx = scripts.firstIndex(where: { $0.id == id }) {
             scripts[idx].status = status
             scripts[idx].isEnabled = isEnabled
             if let img = iconImage { scripts[idx].iconImage = img }
         } else {
-            scripts.append(ManagedScript(id: id, name: name, icon: icon, iconImage: iconImage, status: status, isEnabled: isEnabled))
+            scripts.append(ManagedScript(id: id, name: name, version: manifest?.version, description: manifest?.description, icon: icon, iconImage: iconImage, status: status, isEnabled: isEnabled))
         }
     }
 }

@@ -121,12 +121,23 @@ private struct ScriptSettingsRow: View {
                         Text(script.id)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        if let version = script.version {
+                            Text("v\(version)")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
                         if script.status == .crashed {
                             Label("Crashed", systemImage: "exclamationmark.triangle.fill")
                                 .font(.caption)
                                 .foregroundStyle(.red)
                                 .labelStyle(.titleAndIcon)
                         }
+                    }
+                    if let desc = script.description {
+                        Text(desc)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
                     }
                 }
                 Spacer()
