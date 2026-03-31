@@ -16,6 +16,7 @@ enum CKSchema {
         static let rkBlock = "RKBlock"
         static let rkResponse = "RKResponse"
         static let device = "AskDevice"
+        static let feedSchedule = "FeedSchedule"
     }
 
     enum Device {
@@ -38,6 +39,14 @@ enum CKSchema {
         static let payload = "payload"
         static let createdAt = "createdAt"
         static let expiresAt = "expiresAt"
+        static let scriptType = "scriptType"  // "tile" (default) or "feed"
+    }
+
+    enum FeedSchedule {
+        static let machineID = "machineID"
+        static let scriptID = "scriptID"
+        static let schedule = "schedule"
+        static let updatedAt = "updatedAt"
     }
 
     enum RKResponse {
@@ -159,6 +168,7 @@ struct RKBlockRecord: Sendable {
     let payload: String     // JSON blob
     let createdAt: Date
     let expiresAt: Date?
+    let scriptType: String  // "tile" (default) or "feed"
 
     func toCKRecord() -> CKRecord {
         let record = CKRecord(recordType: CKSchema.RecordType.rkBlock,
@@ -174,6 +184,41 @@ struct RKBlockRecord: Sendable {
         record[CKSchema.RKBlock.payload] = payload
         record[CKSchema.RKBlock.createdAt] = createdAt
         record[CKSchema.RKBlock.expiresAt] = expiresAt as CKRecordValueProtocol?
+        record[CKSchema.RKBlock.scriptType] = scriptType
+        return record
+    }
+}
+
+// MARK: - FeedSchedule
+
+struct FeedScheduleRecord: Sendable {
+    let machineID: String
+    let scriptID: String
+    let schedule: String   // cron expression override
+    let updatedAt: Date
+
+    var recordName: String { "feedschedule-\(machineID)-\(scriptID)" }
+
+    init?(record: CKRecord) {
+        guard
+            let machineID = record[CKSchema.FeedSchedule.machineID] as? String,
+            let scriptID  = record[CKSchema.FeedSchedule.scriptID]  as? String,
+            let schedule  = record[CKSchema.FeedSchedule.schedule]  as? String,
+            let updatedAt = record[CKSchema.FeedSchedule.updatedAt] as? Date
+        else { return nil }
+        self.machineID = machineID
+        self.scriptID  = scriptID
+        self.schedule  = schedule
+        self.updatedAt = updatedAt
+    }
+
+    func toCKRecord() -> CKRecord {
+        let record = CKRecord(recordType: CKSchema.RecordType.feedSchedule,
+                              recordID: CKRecord.ID(recordName: recordName))
+        record[CKSchema.FeedSchedule.machineID] = machineID
+        record[CKSchema.FeedSchedule.scriptID]  = scriptID
+        record[CKSchema.FeedSchedule.schedule]  = schedule
+        record[CKSchema.FeedSchedule.updatedAt] = updatedAt
         return record
     }
 }

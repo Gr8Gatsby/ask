@@ -19,6 +19,7 @@ enum CKSchema {
         static let rkBlock = "RKBlock"
         static let rkResponse = "RKResponse"
         static let device = "AskDevice"
+        static let feedSchedule = "FeedSchedule"
     }
 
     enum Device {
@@ -41,6 +42,14 @@ enum CKSchema {
         static let payload = "payload"
         static let createdAt = "createdAt"
         static let expiresAt = "expiresAt"
+        static let scriptType = "scriptType"
+    }
+
+    enum FeedSchedule {
+        static let machineID = "machineID"
+        static let scriptID = "scriptID"
+        static let schedule = "schedule"
+        static let updatedAt = "updatedAt"
     }
 
     enum RKResponse {

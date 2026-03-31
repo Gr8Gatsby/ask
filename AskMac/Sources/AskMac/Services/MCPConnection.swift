@@ -46,6 +46,9 @@ final class MCPConnection: @unchecked Sendable {
             ?? "Script exited unexpectedly"
     }
 
+    /// Exit code of the process after it terminates (0 = clean exit).
+    var terminationStatus: Int32 { process?.terminationStatus ?? 0 }
+
     init(scriptID: String, entryURL: URL, blockService: BlockService) {
         self.scriptID = scriptID
         self.entryURL = entryURL

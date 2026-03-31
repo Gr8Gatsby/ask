@@ -121,6 +121,9 @@ struct RKBlock: Identifiable {
     let payloadJSON: String
     let createdAt: Date
     let expiresAt: Date?
+    let scriptType: String      // "tile" (default) or "feed"
+
+    var isFeedBlock: Bool { scriptType == "feed" }
 
     var requiresResponse: Bool {
         switch blockType {
@@ -219,6 +222,7 @@ struct RKBlock: Identifiable {
         self.payloadJSON = payloadJSON
         self.createdAt = createdAt
         self.expiresAt = record[CKSchema.RKBlock.expiresAt] as? Date
+        self.scriptType = record[CKSchema.RKBlock.scriptType] as? String ?? "tile"
     }
 }
 

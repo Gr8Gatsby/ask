@@ -11,8 +11,9 @@ final class BlockService: @unchecked Sendable {
     private let scriptIcon: String?
     private let scriptIconData: String?
     private let scriptIconSVG: String?
+    private let scriptType: String   // "tile" or "feed"
 
-    init(cloudKit: CloudKitService, machineID: String, scriptID: String, scriptName: String = "", scriptIcon: String? = nil, scriptIconData: String? = nil, scriptIconSVG: String? = nil) {
+    init(cloudKit: CloudKitService, machineID: String, scriptID: String, scriptName: String = "", scriptIcon: String? = nil, scriptIconData: String? = nil, scriptIconSVG: String? = nil, scriptType: String = "tile") {
         self.cloudKit = cloudKit
         self.machineID = machineID
         self.scriptID = scriptID
@@ -20,6 +21,7 @@ final class BlockService: @unchecked Sendable {
         self.scriptIcon = scriptIcon
         self.scriptIconData = scriptIconData
         self.scriptIconSVG = scriptIconSVG
+        self.scriptType = scriptType
     }
 
     func emitBlock(blockID: String, blockType: String, payload: String, expiresAt: Date?) async throws {
@@ -34,7 +36,8 @@ final class BlockService: @unchecked Sendable {
             blockType: blockType,
             payload: payload,
             createdAt: Date(),
-            expiresAt: expiresAt
+            expiresAt: expiresAt,
+            scriptType: scriptType
         )
         try await withRetry(label: "emitBlock(\(blockID))") {
             try await self.cloudKit.saveBlock(record)

@@ -349,7 +349,8 @@ struct HomeView: View {
             deviceEnabled = await cloudKit.checkDeviceEnabled(machineID: machine.id)
             if deviceEnabled, let fresh = try? await cloudKit.fetchBlocks(machineID: machine.id) {
                 withAnimation(.easeOut(duration: 0.25)) {
-                    blocks = fresh.filter { $0.blockType != .alert }
+                    blocks = fresh.filter { !$0.isFeedBlock || $0.requiresResponse }
+                        .filter { $0.blockType != .alert }
                 }
             }
         }
@@ -417,7 +418,8 @@ struct HomeView: View {
                     let isEnabled = await cloudKit.checkDeviceEnabled(machineID: machine.id)
                     if deviceEnabled != isEnabled { deviceEnabled = isEnabled }
                     if isEnabled, let fresh = try? await cloudKit.fetchBlocks(machineID: machine.id) {
-                        let filtered = fresh.filter { $0.blockType != .alert }
+                        let filtered = fresh.filter { !$0.isFeedBlock || $0.requiresResponse }
+                            .filter { $0.blockType != .alert }
                         if filtered.isEmpty {
                             consecutiveEmpty += 1
                             if consecutiveEmpty >= 2 {
@@ -677,7 +679,7 @@ private struct ActionToastView: View {
 
 // MARK: - Script detail (full screen)
 
-private struct ScriptDetailView: View {
+struct ScriptDetailView: View {
     let scriptID: String
     let allBlocks: [RKBlock]
     var isWaiting: Bool = false

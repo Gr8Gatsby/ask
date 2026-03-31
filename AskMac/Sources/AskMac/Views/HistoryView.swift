@@ -21,14 +21,19 @@ struct HistoryView: View {
 
 // MARK: - Dashboard
 
+private enum ChartMode {
+    case day, thirtyDays
+}
+
 private struct DashboardTab: View {
     @Environment(ActionHistoryService.self) private var history
+    @State private var chartMode: ChartMode = .day
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 summaryCards
-                dailyChart
+                activityChart
                 topSources
             }
             .padding(24)
@@ -60,38 +65,102 @@ private struct DashboardTab: View {
         }
     }
 
-    // MARK: Daily chart
+    // MARK: Activity chart
 
-    private var dailyChart: some View {
+    private var activityChart: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Activity (30 Days)")
-                .font(.headline)
+            HStack {
+                Text(chartMode == .day ? "Activity (Today)" : "Activity (30 Days)")
+                    .font(.headline)
+                Spacer()
+                Picker("", selection: $chartMode) {
+                    Text("Today").tag(ChartMode.day)
+                    Text("30 Days").tag(ChartMode.thirtyDays)
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+            }
 
-            if history.events.isEmpty {
-                Text("No activity yet.")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
-            } else {
-                Chart(dailyCounts) { day in
-                    BarMark(
-                        x: .value("Date", day.date, unit: .day),
-                        y: .value("Events", day.count)
-                    )
-                    .foregroundStyle(Color.accentColor.gradient)
-                    .cornerRadius(3)
-                }
-                .chartXAxis {
-                    AxisMarks(values: .stride(by: .day, count: dailyCounts.count > 14 ? 7 : 1)) { value in
-                        AxisGridLine()
-                        AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+            if chartMode == .day {
+                let data = hourlySourceCounts
+                if data.isEmpty {
+                    Text("No activity today.")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
+                } else {
+                    Chart(data) { item in
+                        BarMark(
+                            x: .value("Hour", item.hour),
+                            y: .value("Events", item.count)
+                        )
+                        .foregroundStyle(by: .value("Source", item.source))
+                        .cornerRadius(2)
                     }
+                    .chartXScale(domain: 0...23)
+                    .chartXAxis {
+                        AxisMarks(values: Array(stride(from: 0, through: 23, by: 6))) { value in
+                            AxisGridLine()
+                            AxisValueLabel {
+                                if let h = value.as(Int.self) {
+                                    Text(hourLabel(h))
+                                }
+                            }
+                        }
+                    }
+                    .frame(height: 160)
                 }
-                .frame(height: 160)
+            } else {
+                if history.events.isEmpty {
+                    Text("No activity yet.")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
+                } else {
+                    Chart(dailyCounts) { day in
+                        BarMark(
+                            x: .value("Date", day.date, unit: .day),
+                            y: .value("Events", day.count)
+                        )
+                        .foregroundStyle(Color.accentColor.gradient)
+                        .cornerRadius(3)
+                    }
+                    .chartXAxis {
+                        AxisMarks(values: .stride(by: .day, count: dailyCounts.count > 14 ? 7 : 1)) { value in
+                            AxisGridLine()
+                            AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+                        }
+                    }
+                    .frame(height: 160)
+                }
             }
         }
         .padding(16)
         .background(.background.secondary)
         .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func hourLabel(_ hour: Int) -> String {
+        switch hour {
+        case 0:  return "12am"
+        case 12: return "12pm"
+        default: return hour < 12 ? "\(hour)am" : "\(hour - 12)pm"
+        }
+    }
+
+    private var hourlySourceCounts: [HourlySourceCount] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        guard let tomorrow = calendar.date(byAdding: .day, value: 1, to: today) else { return [] }
+
+        var counts: [Int: [String: Int]] = [:]
+        for event in history.events {
+            guard event.timestamp >= today && event.timestamp < tomorrow else { continue }
+            let hour = calendar.component(.hour, from: event.timestamp)
+            counts[hour, default: [:]][event.source, default: 0] += 1
+        }
+
+        return counts.flatMap { hour, sourceCounts in
+            sourceCounts.map { HourlySourceCount(hour: hour, source: $0.key, count: $0.value) }
+        }.sorted { $0.hour < $1.hour }
     }
 
     private var dailyCounts: [DailyCount] {
@@ -343,6 +412,13 @@ private struct DailyCount: Identifiable {
     let date: Date
     let count: Int
     var id: Date { date }
+}
+
+private struct HourlySourceCount: Identifiable {
+    let hour: Int
+    let source: String
+    let count: Int
+    var id: String { "\(hour)-\(source)" }
 }
 
 private struct SourceStat: Identifiable {

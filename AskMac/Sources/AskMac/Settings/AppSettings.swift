@@ -8,6 +8,7 @@ final class AppSettings {
         static let machineName = "machineName"
         static let vaultPath = "vaultPath"
         static let disabledScripts = "disabledScripts"
+        static let feedScheduleOverrides = "feedScheduleOverrides"
     }
 
     private let defaults: UserDefaults
@@ -28,6 +29,9 @@ final class AppSettings {
     var disabledScripts: Set<String> {
         didSet { defaults.set(Array(disabledScripts), forKey: Key.disabledScripts) }
     }
+
+    /// Schedule overrides from iOS, keyed by scriptID → cron expression.
+    private(set) var feedScheduleOverrides: [String: String] = [:]
 
     var isConfigured: Bool {
         !machineName.isEmpty
@@ -65,6 +69,8 @@ final class AppSettings {
 
         let storedDisabled = defaults.stringArray(forKey: Key.disabledScripts) ?? []
         self.disabledScripts = Set(storedDisabled)
+
+        self.feedScheduleOverrides = (defaults.dictionary(forKey: Key.feedScheduleOverrides) as? [String: String]) ?? [:]
     }
 
     func setScriptEnabled(_ id: String, enabled: Bool) {
@@ -73,5 +79,18 @@ final class AppSettings {
         } else {
             disabledScripts.insert(id)
         }
+    }
+
+    func feedScheduleOverride(for scriptID: String) -> String? {
+        feedScheduleOverrides[scriptID]
+    }
+
+    func setFeedScheduleOverride(scriptID: String, schedule: String?) {
+        if let schedule {
+            feedScheduleOverrides[scriptID] = schedule
+        } else {
+            feedScheduleOverrides.removeValue(forKey: scriptID)
+        }
+        defaults.set(feedScheduleOverrides, forKey: Key.feedScheduleOverrides)
     }
 }

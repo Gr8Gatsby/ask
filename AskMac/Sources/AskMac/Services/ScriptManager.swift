@@ -12,9 +12,13 @@ struct ScriptManifest: Codable {
     let entry: String       // relative path to the executable entry point
     let icon: String?
     let iconFile: String?   // relative path to an image file (SVG/PNG)
+    let type: String?       // "tile" (default) or "feed"
+    let schedule: String?   // cron expression, e.g. "0 9 * * *" (feed scripts only)
+
+    var isFeed: Bool { type == "feed" }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, version, description, entry, icon
+        case id, name, version, description, entry, icon, type, schedule
         case iconFile = "icon_file"
     }
 }
@@ -66,12 +70,14 @@ final class ScriptManager {
     private var manifests: [String: (manifest: ScriptManifest, dir: URL, icon: NSImage?, svgString: String?)] = [:]
 
     private let actionHistory: ActionHistoryService
+    private let feedScheduler: FeedScheduler
 
     init(cloudKit: CloudKitService, machineID: String, settings: AppSettings, actionHistory: ActionHistoryService) {
         self.cloudKit = cloudKit
         self.machineID = machineID
         self.settings = settings
         self.actionHistory = actionHistory
+        self.feedScheduler = FeedScheduler()
         self.scriptsDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".ask/scripts")
     }
@@ -102,6 +108,7 @@ final class ScriptManager {
     func stop() {
         for (_, conn) in connections { conn.stop() }
         connections = [:]
+        feedScheduler.cancelAll()
     }
 
     /// Rescans the scripts directory and launches any newly discovered scripts.
@@ -137,7 +144,14 @@ final class ScriptManager {
             manifests[manifest.id] = (manifest, dir, iconImage, svgString)
             let isEnabled = !settings.disabledScripts.contains(manifest.id)
             if isEnabled {
-                launch(manifest: manifest, scriptDir: dir)
+                if manifest.isFeed {
+                    feedScheduler.schedule(manifest: manifest, scriptDir: dir, settings: settings) { [weak self] m, d in
+                        self?.launchFeedRun(manifest: m, scriptDir: d)
+                    }
+                    launchFeedRun(manifest: manifest, scriptDir: dir)
+                } else {
+                    launch(manifest: manifest, scriptDir: dir)
+                }
             } else {
                 upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon,
                              iconImage: iconImage, status: .stopped, isEnabled: false)
@@ -164,6 +178,7 @@ final class ScriptManager {
         connections.removeValue(forKey: id)
         restartDelays.removeValue(forKey: id)
         activeBlocks.removeValue(forKey: id)
+        feedScheduler.cancel(scriptID: id)
         Task {
             let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: id)
             try? await blockService.clearAllBlocks()
@@ -184,7 +199,14 @@ final class ScriptManager {
         }
         actionHistory.recordScriptToggle(scriptName: name, enabled: true)
         if let cached = manifests[id] {
-            launch(manifest: cached.manifest, scriptDir: cached.dir)
+            if cached.manifest.isFeed {
+                feedScheduler.schedule(manifest: cached.manifest, scriptDir: cached.dir, settings: settings) { [weak self] m, d in
+                    self?.launchFeedRun(manifest: m, scriptDir: d)
+                }
+                launchFeedRun(manifest: cached.manifest, scriptDir: cached.dir)
+            } else {
+                launch(manifest: cached.manifest, scriptDir: cached.dir)
+            }
         }
     }
 
@@ -217,7 +239,14 @@ final class ScriptManager {
             manifests[manifest.id] = (manifest, dir, iconImage, svgString)
             let isEnabled = !settings.disabledScripts.contains(manifest.id)
             if isEnabled {
-                launch(manifest: manifest, scriptDir: dir)
+                if manifest.isFeed {
+                    feedScheduler.schedule(manifest: manifest, scriptDir: dir, settings: settings) { [weak self] m, d in
+                        self?.launchFeedRun(manifest: m, scriptDir: d)
+                    }
+                    launchFeedRun(manifest: manifest, scriptDir: dir)
+                } else {
+                    launch(manifest: manifest, scriptDir: dir)
+                }
             } else {
                 upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .stopped, isEnabled: false)
             }
@@ -251,7 +280,7 @@ final class ScriptManager {
 
         let iconData = iconImage.flatMap { ScriptManager.iconPNGBase64($0) }
         let svgString = manifests[manifest.id]?.svgString
-        let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData, scriptIconSVG: svgString)
+        let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData, scriptIconSVG: svgString, scriptType: "tile")
         let conn = MCPConnection(scriptID: manifest.id, entryURL: entryURL, blockService: blockService)
 
         conn.onTerminate = { [weak self] in
@@ -278,6 +307,83 @@ final class ScriptManager {
 
         conn.start()
         upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .running, isEnabled: true)
+    }
+
+    // MARK: - Feed script lifecycle
+
+    private func launchFeedRun(manifest: ScriptManifest, scriptDir: URL) {
+        let entryURL = scriptDir.appendingPathComponent(manifest.entry)
+        let fm = FileManager.default
+
+        let resolvedEntry = entryURL.resolvingSymlinksInPath()
+        let resolvedDir   = scriptDir.resolvingSymlinksInPath()
+        guard resolvedEntry.path.hasPrefix(resolvedDir.path + "/") || resolvedEntry.path == resolvedDir.path else {
+            print("[ScriptManager] \(manifest.id): path traversal rejected")
+            return
+        }
+
+        let canRun = fm.isExecutableFile(atPath: entryURL.path)
+            || entryURL.pathExtension == "py"
+            || entryURL.pathExtension == "sh"
+        guard canRun else {
+            print("[ScriptManager] \(manifest.id): entry not runnable")
+            return
+        }
+
+        let iconImage = manifests[manifest.id]?.icon
+        let iconData  = iconImage.flatMap { ScriptManager.iconPNGBase64($0) }
+        let svgString = manifests[manifest.id]?.svgString
+        let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData, scriptIconSVG: svgString, scriptType: "feed")
+        let conn = MCPConnection(scriptID: manifest.id, entryURL: entryURL, blockService: blockService)
+
+        conn.onTerminate = { [weak self] in
+            DispatchQueue.main.async {
+                self?.handleFeedExit(manifest: manifest, scriptDir: scriptDir)
+            }
+        }
+
+        activeBlocks.removeValue(forKey: manifest.id)
+        conn.onBlockEmitted = { [weak self] block in
+            Task { @MainActor [weak self] in
+                self?.activeBlocks[manifest.id, default: [:]][block.id] = block
+            }
+        }
+        conn.onBlockCleared = { [weak self] blockID in
+            Task { @MainActor [weak self] in
+                self?.activeBlocks[manifest.id]?.removeValue(forKey: blockID)
+            }
+        }
+
+        connections[manifest.id] = conn
+        upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .running, isEnabled: true)
+        conn.start()
+        print("[ScriptManager] \(manifest.id): feed run started")
+    }
+
+    private func handleFeedExit(manifest: ScriptManifest, scriptDir: URL) {
+        guard !settings.disabledScripts.contains(manifest.id) else { return }
+
+        let exitCode = connections[manifest.id]?.terminationStatus ?? 0
+        connections.removeValue(forKey: manifest.id)
+        activeBlocks.removeValue(forKey: manifest.id)
+
+        if exitCode == 0 {
+            print("[ScriptManager] \(manifest.id): feed run completed cleanly")
+            upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: manifests[manifest.id]?.icon, status: .stopped, isEnabled: true)
+        } else {
+            print("[ScriptManager] \(manifest.id): feed run failed (exit \(exitCode)) — not restarting")
+            upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: manifests[manifest.id]?.icon, status: .crashed, isEnabled: true)
+            Task {
+                let iconData  = manifests[manifest.id]?.icon.flatMap { ScriptManager.iconPNGBase64($0) }
+                let svgString = manifests[manifest.id]?.svgString
+                let bs = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData, scriptIconSVG: svgString, scriptType: "feed")
+                let payload: [String: Any] = ["title": "\(manifest.name) failed", "body": "Feed script exited with code \(exitCode)"]
+                if let data = try? JSONSerialization.data(withJSONObject: payload),
+                   let json = String(data: data, encoding: .utf8) {
+                    try? await bs.emitBlock(blockID: "\(manifest.id)-error", blockType: "alert", payload: json, expiresAt: Date().addingTimeInterval(3600))
+                }
+            }
+        }
     }
 
     private func handleCrash(manifest: ScriptManifest, scriptDir: URL) {
