@@ -420,3 +420,4 @@ AskSession status updated to "active"; iOS view dismisses; session list refreshe
 | 2026-03-30 | brew-monitor: add "Sync Now" confirmation block that triggers an immediate check without waiting for the 4-hour interval. |
 | 2026-03-31 | Job pipeline: Mac agent configuration UI, JobExecutor service (poll → execute → stream output → history), iOS Machine Detail with agents + job history, New Job screen, Job Detail screen with streaming output. |
 | 2026-03-31 | History generalized to HistoryEvent model (blockResponse, job*, scriptEnabled/Disabled/Crashed). ResponsePoller logs all block responses; ScriptManager logs enable/disable/crash; JobExecutor logs job completions. |
+| 2026-03-31 | Loading states (issue #5): removed full-screen waiting spinner after block responses; MessagesView send button now shows inline spinner and is disabled while send is in flight. All loading feedback is component-level. |

@@ -39,6 +39,7 @@ struct MessagesView: View {
 
     @State private var messages: [DisplayMessage] = []
     @State private var draft = ""
+    @State private var isSending = false
     @State private var isOtherTyping = false
     @State private var pollTask: Task<Void, Never>?
     @State private var typingUpdateTask: Task<Void, Never>?
@@ -105,18 +106,27 @@ struct MessagesView: View {
                 .lineLimit(1...5)
                 .font(.body)
                 .submitLabel(.send)
-                .onSubmit { Task { await send() } }
+                .onSubmit { if !isSending { Task { await send() } } }
 
-            if hasText {
+            if hasText || isSending {
                 Button { Task { await send() } } label: {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 30, height: 30)
-                        .background(Color.blue)
-                        .clipShape(Circle())
+                    ZStack {
+                        if isSending {
+                            ProgressView()
+                                .tint(.white)
+                                .scaleEffect(0.7)
+                        } else {
+                            Image(systemName: "arrow.up")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    .frame(width: 30, height: 30)
+                    .background(isSending ? Color.blue.opacity(0.6) : Color.blue)
+                    .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .disabled(isSending)
                 .padding(.trailing, 8)
                 .transition(.scale(scale: 0.5).combined(with: .opacity))
             }
@@ -172,8 +182,10 @@ struct MessagesView: View {
     }
 
     private func send() async {
+        guard !isSending else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        isSending = true
         draft = ""
         typingUpdateTask?.cancel()
         Task { await cloudKit.clearTyping(machineID: machine.id) }
@@ -198,6 +210,7 @@ struct MessagesView: View {
                 }
             }
         }
+        isSending = false
     }
 
     // MARK: - Typing

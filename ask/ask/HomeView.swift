@@ -709,28 +709,16 @@ private struct ScriptDetailView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if mainBlocks.isEmpty && isWaiting && currentDetailBlock == nil {
-                    VStack(spacing: 10) {
-                        ProgressView()
-                        Text("Waiting for response…")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+            List {
+                ForEach(mainBlocks) { block in
+                    Section {
+                        BlockView(block: block, onRespond: { value in
+                            await onRespond(block, value)
+                        }, isWaiting: isWaiting)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    List {
-                        ForEach(mainBlocks) { block in
-                            Section {
-                                BlockView(block: block, onRespond: { value in
-                                    await onRespond(block, value)
-                                }, isWaiting: isWaiting)
-                            }
-                        }
-                    }
-                    .listStyle(.insetGrouped)
                 }
             }
+            .listStyle(.insetGrouped)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
