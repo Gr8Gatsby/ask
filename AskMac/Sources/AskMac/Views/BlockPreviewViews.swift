@@ -27,7 +27,7 @@ struct BlockPreviewView: View {
             case "picker":       PickerPreview(payload: payload, onRespond: onRespond)
             case "icon_card":    IconCardPreview(payload: payload)
             case "claude_message": ClaudeMessagePreview(payload: payload)
-            case "claude_session": ClaudeSessionPreview(payload: payload)
+            case "agent_session": AgentSessionPreview(payload: payload)
             case "tile":         EmptyView() // drives home-screen tile only
             default:             EmptyView()
             }
@@ -457,10 +457,12 @@ private struct IconCardPreview: View {
     }
 }
 
-// MARK: - ClaudeSession
+// MARK: - AgentSession
 
-private struct ClaudeSessionPreview: View {
+private struct AgentSessionPreview: View {
     let payload: [String: Any]
+
+    private var agentName: String { payload["agent_name"] as? String ?? "Claude" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -468,7 +470,7 @@ private struct ClaudeSessionPreview: View {
                 Image(systemName: "sparkles")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                Text(payload["project"] as? String ?? "Claude Code")
+                Text(payload["project"] as? String ?? agentName)
                     .font(.caption)
                     .fontWeight(.semibold)
                 Spacer()
@@ -479,12 +481,12 @@ private struct ClaudeSessionPreview: View {
                     .foregroundStyle(.primary)
                     .lineLimit(4)
             } else {
-                Text("Waiting for Claude…")
+                Text("Waiting for \(agentName)…")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .italic()
             }
-            Text(payload["placeholder"] as? String ?? "Reply to Claude…")
+            Text(payload["placeholder"] as? String ?? "Reply to \(agentName)…")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .italic()

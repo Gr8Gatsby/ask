@@ -716,11 +716,11 @@ struct ScriptDetailView: View {
         allBlocks.first(where: { $0.scriptID == scriptID && $0.scriptIconData != nil })?.scriptIconData
     }
 
-    /// Blocks shown in the main list — detail blocks are pushed; claudeMessage is inlined when chatPrompt or claudeSession blocks exist.
+    /// Blocks shown in the main list — detail blocks are pushed; claudeMessage is inlined when chatPrompt or agentSession blocks exist.
     private var mainBlocks: [RKBlock] {
         let all = group.blocks.filter { $0.blockType != .detail }
         let hasPrompt = all.contains(where: { $0.blockType == .chatPrompt })
-        let hasSession = all.contains(where: { $0.blockType == .claudeSession })
+        let hasSession = all.contains(where: { $0.blockType == .agentSession })
         guard hasPrompt || hasSession else { return all }
         // Exclude claudeMessage (inlined) and confirmations that are linked to a session (grouped inside session section)
         return all.filter {
@@ -749,8 +749,8 @@ struct ScriptDetailView: View {
             List {
                 ForEach(mainBlocks) { block in
                     Section {
-                        if block.blockType == .claudeSession,
-                           let p = block.claudeSessionPayload {
+                        if block.blockType == .agentSession,
+                           let p = block.agentSessionPayload {
                             let confirmations = sessionConfirmations(for: p.sessionId)
                             // Render any linked confirmations above the session reply box
                             ForEach(confirmations) { conf in

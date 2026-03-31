@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-claudecode-controller — MCP client bridging Claude Code hooks to the Ask iOS app.
+codex-controller — MCP client bridging Codex CLI hooks to the Ask iOS app.
 
 Protocol:
   - Reads JSON-RPC 2.0 from stdin  (daemon → script)
   - Writes JSON-RPC 2.0 to stdout  (script → daemon)
   - Listens on a Unix socket for hook scripts
+  - Auto-installs hooks into ~/.codex/hooks.json on first run
 """
 
 import sys
@@ -19,10 +20,84 @@ from typing import Optional
 # Force UTF-8 on stdout so emoji pass through cleanly to the Mac daemon
 sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)
 
-SOCKET_PATH    = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/sockets/claudecode-controller.sock'))
-BLOCK_TILE     = 'claudecode-controller-tile'
-SESSIONS_PATH  = os.environ.get('ASK_SESSIONS_PATH', os.path.expanduser('~/.ask/claudecode_sessions.json'))
+SCRIPT_DIR     = os.path.dirname(os.path.abspath(__file__))
+SOCKET_PATH    = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/sockets/codex-controller.sock'))
+BLOCK_TILE     = 'codex-controller-tile'
 SESSION_TTL    = 3600  # seconds — block TTL and session load cutoff
+
+CODEX_CONFIG_PATH = os.path.expanduser('~/.codex/config.toml')
+CODEX_HOOKS_PATH  = os.path.expanduser('~/.codex/hooks.json')
+SESSIONS_PATH     = os.environ.get('ASK_SESSIONS_PATH', os.path.expanduser('~/.ask/codex_sessions.json'))
+
+
+# ------------------------------------------------------------------
+# Hook installer — runs once at startup
+# ------------------------------------------------------------------
+
+def _install_hooks():
+    """Ensure ~/.codex/config.toml has codex_hooks=true and
+    ~/.codex/hooks.json points to this script's hook files."""
+    hooks_dir = os.path.join(SCRIPT_DIR, 'hooks')
+    _ensure_config_flag()
+    _write_hooks_json(hooks_dir)
+
+
+def _ensure_config_flag():
+    """Add [features] codex_hooks = true to ~/.codex/config.toml if missing."""
+    os.makedirs(os.path.dirname(CODEX_CONFIG_PATH), exist_ok=True)
+    try:
+        content = open(CODEX_CONFIG_PATH).read() if os.path.exists(CODEX_CONFIG_PATH) else ''
+    except Exception:
+        content = ''
+
+    if 'codex_hooks' in content:
+        return  # already set
+
+    addition = '\n[features]\ncodex_hooks = true\n'
+    try:
+        with open(CODEX_CONFIG_PATH, 'a') as f:
+            f.write(addition)
+        print('[codex-controller] enabled codex_hooks in ~/.codex/config.toml', file=sys.stderr)
+    except Exception as e:
+        print(f'[codex-controller] could not update config.toml: {e}', file=sys.stderr)
+
+
+def _write_hooks_json(hooks_dir: str):
+    """Write ~/.codex/hooks.json with absolute paths to our hook scripts."""
+    pre  = os.path.join(hooks_dir, 'pre_tool_use.py')
+    post = os.path.join(hooks_dir, 'post_tool_use.py')
+    start = os.path.join(hooks_dir, 'session_start.py')
+    stop = os.path.join(hooks_dir, 'session_stop.py')
+
+    hooks = {
+        'hooks': {
+            'SessionStart': [
+                {'hooks': [{'type': 'command', 'command': start}]}
+            ],
+            'PreToolUse': [
+                {
+                    'matcher': 'tool == "Bash"',
+                    'hooks': [{'type': 'command', 'command': pre}]
+                }
+            ],
+            'PostToolUse': [
+                {
+                    'matcher': 'tool == "Bash"',
+                    'hooks': [{'type': 'command', 'command': post}]
+                }
+            ],
+            'Stop': [
+                {'hooks': [{'type': 'command', 'command': stop}]}
+            ],
+        }
+    }
+    os.makedirs(os.path.dirname(CODEX_HOOKS_PATH), exist_ok=True)
+    try:
+        with open(CODEX_HOOKS_PATH, 'w') as f:
+            json.dump(hooks, f, indent=2)
+        print(f'[codex-controller] wrote hooks to {CODEX_HOOKS_PATH}', file=sys.stderr)
+    except Exception as e:
+        print(f'[codex-controller] could not write hooks.json: {e}', file=sys.stderr)
 
 
 class MCPClient:
@@ -33,7 +108,7 @@ class MCPClient:
         self._response_callbacks = {} # block_id -> async callable(value)
         # session_id -> {'cwd': str, 'project': str, 'last_message': str}
         self._sessions: dict = {}
-        # session IDs where Claude is actively running (PostToolUse fired, Stop hasn't yet)
+        # session IDs where Codex is actively running (PreToolUse → PostToolUse)
         self._working_sessions: set = set()
         # (session_id, tool_name) -> [block_id, ...] — cleared when the tool runs
         self._tool_block_map = {}
@@ -68,12 +143,11 @@ class MCPClient:
         await self._rpc('initialize', {
             'protocolVersion': '2024-11-05',
             'capabilities': {},
-            'clientInfo': {'name': 'claudecode-controller', 'version': '1.0'}
+            'clientInfo': {'name': 'codex-controller', 'version': '1.0'}
         })
         self._write({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         self._initialized = True
-        print('[claudecode-controller] MCP initialized', file=sys.stderr)
-        # Restore sessions from disk, then scan for live claude processes
+        print('[codex-controller] MCP initialized', file=sys.stderr)
         self._load_sessions()
         self._discover_active_processes()
         for session_id, info in list(self._sessions.items()):
@@ -91,7 +165,6 @@ class MCPClient:
         return await self._rpc('tools/call', {'name': 'clear_block', 'arguments': {'blockId': block_id}})
 
     async def _update_tile(self):
-        """Re-emit the tile block reflecting current state."""
         if self._active_confirmations > 0:
             payload = {
                 'label': 'Approval needed',
@@ -109,7 +182,7 @@ class MCPClient:
         try:
             await self.emit_block(BLOCK_TILE, 'tile', payload, ttl=600)
         except Exception as e:
-            print(f'[claudecode-controller] tile update failed: {e}', file=sys.stderr)
+            print(f'[codex-controller] tile update failed: {e}', file=sys.stderr)
 
     # ------------------------------------------------------------------
     # Stdin reader (daemon → script)
@@ -123,7 +196,7 @@ class MCPClient:
                 raw = await loop.run_in_executor(None, stdin_buf.readline)
             except Exception:
                 break
-            if not raw:  # EOF
+            if not raw:
                 break
             line = raw.decode('utf-8', errors='replace').strip()
             if not line:
@@ -137,7 +210,6 @@ class MCPClient:
     async def _dispatch_inbound(self, msg):
         rpc_id = msg.get('id')
 
-        # Tool-call response
         if rpc_id is not None and 'result' in msg:
             fut = self._pending_calls.pop(rpc_id, None)
             if fut and not fut.done():
@@ -150,7 +222,6 @@ class MCPClient:
                 fut.set_exception(Exception(str(msg['error'])))
             return
 
-        # Daemon notification — check for user_response
         method = msg.get('method', '')
         if method == 'notifications/message':
             data = msg.get('params', {}).get('data', {})
@@ -158,55 +229,49 @@ class MCPClient:
                 block_id = data.get('blockId', '')
                 value = data.get('value', '')
 
-                # Async callback (non-blocking chat replies)
                 callback = self._response_callbacks.pop(block_id, None)
                 if callback:
                     asyncio.create_task(callback(value))
                     return
 
-                # Blocking waiter (permission_request, question)
                 q = self._pending_blocks.get(block_id)
                 if q:
                     await q.put(value)
 
-    async def wait_for_block_response(self, block_id, timeout=300):
+    async def wait_for_block_response(self, block_id):
+        """Wait indefinitely for the user to respond via iOS."""
         q = asyncio.Queue()
         self._pending_blocks[block_id] = q
         try:
-            return await asyncio.wait_for(q.get(), timeout=timeout)
-        except asyncio.TimeoutError:
-            return None
+            return await q.get()
         finally:
             self._pending_blocks.pop(block_id, None)
 
     # ------------------------------------------------------------------
-    # Per-session blocks — one agent_session block per active Claude session
+    # Per-session blocks — one agent_session block per active Codex session
     # ------------------------------------------------------------------
 
     def _session_block_id(self, session_id: str) -> str:
-        return f'claudecode-session-{session_id[:8]}'
+        return f'codex-session-{session_id[:8]}'
 
     @staticmethod
     def _project_label(cwd: str, session_id: str) -> str:
-        """Human-readable label: last 2 path parts + short session ID."""
         if cwd:
             parts = cwd.rstrip('/').split('/')
             path_label = '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
         else:
-            path_label = 'Claude Code'
+            path_label = 'Codex'
         return f'{path_label} [{session_id[:6]}]'
 
     def _save_sessions(self):
-        """Persist _sessions to disk so restarts can re-emit known sessions."""
         try:
             os.makedirs(os.path.dirname(SESSIONS_PATH), exist_ok=True)
             with open(SESSIONS_PATH, 'w') as f:
                 json.dump(self._sessions, f)
         except Exception as e:
-            print(f'[claudecode-controller] session save failed: {e}', file=sys.stderr)
+            print(f'[codex-controller] session save failed: {e}', file=sys.stderr)
 
     def _load_sessions(self):
-        """Load persisted sessions, discarding any older than SESSION_TTL."""
         try:
             with open(SESSIONS_PATH) as f:
                 data = json.load(f)
@@ -215,23 +280,22 @@ class MCPClient:
                 sid: info for sid, info in data.items()
                 if isinstance(info, dict) and info.get('last_seen', 0) >= cutoff
             }
-            print(f'[claudecode-controller] restored {len(self._sessions)} session(s)', file=sys.stderr)
+            print(f'[codex-controller] restored {len(self._sessions)} session(s)', file=sys.stderr)
         except FileNotFoundError:
             pass
         except Exception as e:
-            print(f'[claudecode-controller] session load failed: {e}', file=sys.stderr)
+            print(f'[codex-controller] session load failed: {e}', file=sys.stderr)
 
     def _discover_active_processes(self):
         if os.environ.get('ASK_SKIP_DISCOVERY'):
             return
-        """Scan for running 'claude' processes and register their cwds as sessions.
-        Uses lsof to find the working directory of each claude process."""
+        """Scan for running codex processes and register their cwds as sessions."""
         import subprocess
         try:
-            # Match the claude CLI binary — avoid matching other node processes
-            # that happen to have 'claude' elsewhere in their command line
+            # Match the codex binary directly — avoid matching other node processes
+            # that may reference 'codex' in their module paths (e.g. Claude Code)
             ps = subprocess.run(
-                ['pgrep', '-f', r'(^|/)claude(\s|$)'],
+                ['pgrep', '-f', r'(^|/)codex(\s|$)'],
                 capture_output=True, text=True, timeout=3
             )
             pids = [p.strip() for p in ps.stdout.splitlines() if p.strip()]
@@ -243,23 +307,20 @@ class MCPClient:
                         ['lsof', '-a', '-p', pid, '-d', 'cwd', '-Fn'],
                         capture_output=True, text=True, timeout=3
                     )
-                    # lsof -Fn output: lines starting with 'n' are the name (path)
                     cwd = next(
                         (line[1:] for line in lsof.stdout.splitlines() if line.startswith('n')),
                         ''
                     )
                     if cwd and cwd not in ('/', '/private'):
-                        # Use pid as a stable-enough stand-in for session_id when unknown
                         synthetic_id = f'pid-{pid}'
                         if self._register_session(synthetic_id, cwd):
-                            print(f'[claudecode-controller] discovered claude process pid={pid} cwd={cwd}', file=sys.stderr)
+                            print(f'[codex-controller] discovered codex process pid={pid} cwd={cwd}', file=sys.stderr)
                 except Exception:
                     pass
         except Exception as e:
-            print(f'[claudecode-controller] process discovery failed: {e}', file=sys.stderr)
+            print(f'[codex-controller] process discovery failed: {e}', file=sys.stderr)
 
     def _register_session(self, session_id: str, cwd: str):
-        """Register a session if new; return True if it was new."""
         if session_id in self._sessions:
             return False
         project = self._project_label(cwd, session_id)
@@ -268,7 +329,6 @@ class MCPClient:
         return True
 
     def _handle_session_active(self, msg):
-        """Called by PostToolUse — registers the session and emits an initial block."""
         session_id = msg.get('session_id', '')
         cwd = msg.get('cwd', '') or msg.get('tool_cwd', '')
         if not session_id:
@@ -291,30 +351,28 @@ class MCPClient:
                 self._sessions[session_id]['project'] = self._project_label(cwd, session_id)
             self._sessions[session_id]['last_seen'] = time.time()
         self._working_sessions.discard(session_id)
-        print(f'[claudecode-controller] session stopped: {session_id}', file=sys.stderr)
+        print(f'[codex-controller] session stopped: {session_id}', file=sys.stderr)
         asyncio.create_task(self._emit_session_block(session_id, last_message=last_message))
 
     async def _emit_session_block(self, session_id: str, last_message: str = ''):
-        """Emit (or re-emit) the claude_session block for this session."""
         if not self._initialized:
-            print(f'[claudecode-controller] skipping session block — not yet initialized', file=sys.stderr)
+            print(f'[codex-controller] skipping session block — not yet initialized', file=sys.stderr)
             return
         session = self._sessions.get(session_id, {})
-        project = session.get('project', 'Claude Code')
+        project = session.get('project', 'Codex')
         cwd = session.get('cwd', '')
         block_id = self._session_block_id(session_id)
         payload: dict = {
             'session_id': session_id,
             'project': project,
             'cwd': cwd,
-            'agent_name': 'Claude',
-            'brand_color': '#D97757',
-            'placeholder': 'Reply to Claude…',
+            'agent_name': 'Codex',
+            'brand_color': '#74AA9C',
+            'placeholder': 'Reply to Codex…',
         }
         if last_message:
             payload['last_message'] = last_message
         payload['is_working'] = session_id in self._working_sessions
-        # Register reply callback (re-registered after each use in _on_session_reply)
         self._response_callbacks[block_id] = lambda v: self._on_session_reply(session_id, v)
         try:
             if session_id in self._sessions:
@@ -326,12 +384,10 @@ class MCPClient:
             self._save_sessions()
             await self.emit_block(block_id, 'agent_session', payload, ttl=SESSION_TTL)
         except Exception as e:
-            print(f'[claudecode-controller] agent_session emit failed: {e}', file=sys.stderr)
+            print(f'[codex-controller] agent_session emit failed: {e}', file=sys.stderr)
 
     async def _on_session_reply(self, session_id: str, value: str):
-        """Called when the user sends a reply from iOS for a specific session."""
         block_id = self._session_block_id(session_id)
-        # Re-register immediately so the user can reply again
         self._response_callbacks[block_id] = lambda v: self._on_session_reply(session_id, v)
         if value:
             await self._route_to_terminal(session_id, value)
@@ -347,15 +403,13 @@ class MCPClient:
             )
             await pbcopy.communicate(input=text.encode('utf-8'))
         except Exception as e:
-            print(f'[claudecode-controller] pbcopy failed: {e}', file=sys.stderr)
+            print(f'[codex-controller] pbcopy failed: {e}', file=sys.stderr)
             return
 
         session = self._sessions.get(session_id, {})
         project = session.get('project', '')
         safe_project = project.replace('\\', '\\\\').replace('"', '\\"')
 
-        # Try to focus the Terminal/iTerm2 window whose title contains the project name,
-        # then paste. Falls back to whatever window is frontmost.
         script = f'''
 set projectName to "{safe_project}"
 set didFocus to false
@@ -408,9 +462,9 @@ end tell
             )
             _, err = await asyncio.wait_for(proc.communicate(), timeout=8.0)
             if err:
-                print(f'[claudecode-controller] osascript: {err.decode().strip()}', file=sys.stderr)
+                print(f'[codex-controller] osascript: {err.decode().strip()}', file=sys.stderr)
         except Exception as e:
-            print(f'[claudecode-controller] _route_to_terminal failed: {e}', file=sys.stderr)
+            print(f'[codex-controller] _route_to_terminal failed: {e}', file=sys.stderr)
 
     # ------------------------------------------------------------------
     # Unix socket server (hook scripts → main.py)
@@ -434,16 +488,6 @@ end tell
                     writer.write(json.dumps(response, ensure_ascii=False).encode())
                     await writer.drain()
 
-            elif msg_type == 'question':
-                response = await self._handle_blocking(
-                    writer,
-                    self._build_question_block(msg),
-                    default='',
-                )
-                if not writer.is_closing():
-                    writer.write(json.dumps(response, ensure_ascii=False).encode())
-                    await writer.drain()
-
             elif msg_type == 'session_active':
                 self._handle_session_active(msg)
                 writer.write(json.dumps({'status': 'ok'}, ensure_ascii=False).encode())
@@ -459,7 +503,7 @@ end tell
                 self._handle_session_stop(msg)
 
         except Exception as e:
-            print(f'[claudecode-controller] socket client error: {e}', file=sys.stderr)
+            print(f'[codex-controller] socket client error: {e}', file=sys.stderr)
         finally:
             try:
                 writer.close()
@@ -469,13 +513,8 @@ end tell
     async def _handle_blocking(self, writer, block_coro, default):
         """
         Emit a block, then race waiting for an iOS response against the hook
-        process exiting (user answered in the terminal). When the hook process
-        dies its socket fully closes — the writer transport transitions to
-        closing, which we detect by polling. Clears the block in both cases.
-
-        Note: we cannot use reader.read() for disconnect detection because
-        hooks call socket.SHUT_WR after sending, leaving the reader at EOF
-        before we even start waiting.
+        process exiting (user answered in the terminal). Waits indefinitely for
+        iOS response — no automatic timeout.
         """
         block_id, _ = await block_coro
         if block_id is None:
@@ -501,9 +540,7 @@ end tell
                 except Exception:
                     return
 
-        response_task = asyncio.create_task(
-            self.wait_for_block_response(block_id, timeout=300)
-        )
+        response_task = asyncio.create_task(self.wait_for_block_response(block_id))
         disconnect_task = asyncio.create_task(wait_writer_closed())
 
         done, pending = await asyncio.wait(
@@ -519,7 +556,7 @@ end tell
                 pass
 
         if disconnect_task in done and response_task not in done:
-            print(f'[claudecode-controller] hook exited — clearing block {block_id}', file=sys.stderr)
+            print(f'[codex-controller] hook exited — clearing block {block_id}', file=sys.stderr)
             try:
                 await self.clear_block(block_id)
             except Exception:
@@ -543,7 +580,7 @@ end tell
 
     async def _build_permission_block(self, msg):
         if not self._initialized:
-            print(f'[claudecode-controller] skipping permission block — not yet initialized', file=sys.stderr)
+            print(f'[codex-controller] skipping permission block — not yet initialized', file=sys.stderr)
             return None, None
         block_id = str(uuid.uuid4())
         tool = msg.get('tool', 'Unknown')
@@ -554,8 +591,7 @@ end tell
         if session_id:
             payload['session_id'] = session_id
         try:
-            await self.emit_block(block_id, 'confirmation', payload, ttl=300)
-            # Track so PostToolUse can wake this block if the user accepts in terminal
+            await self.emit_block(block_id, 'confirmation', payload)
             if session_id:
                 key = (session_id, tool)
                 self._tool_block_map.setdefault(key, []).append(block_id)
@@ -564,18 +600,15 @@ end tell
             asyncio.create_task(self._update_tile())
             return block_id, payload
         except Exception as e:
-            print(f'[claudecode-controller] emit_block failed: {e}', file=sys.stderr)
+            print(f'[codex-controller] emit_block failed: {e}', file=sys.stderr)
             return None, None
 
     async def _handle_tool_executed(self, msg):
-        """Called by PostToolUse hook — registers session and unblocks any pending permission block."""
         session_id = msg.get('session_id', '')
-        tool_name = msg.get('tool_name', '')
+        tool_name = msg.get('tool_name', '') or msg.get('tool', '')
         cwd = msg.get('cwd', '')
         if not session_id or not tool_name:
             return
-        # Register session if new; refresh the block TTL on every tool use.
-        # Rate-limit to once per 5 min — TTL is 1 hour so frequent refreshes are unnecessary.
         is_new = self._register_session(session_id, cwd)
         if is_new:
             asyncio.create_task(self._emit_session_block(session_id))
@@ -588,39 +621,20 @@ end tell
         for block_id in block_ids:
             q = self._pending_blocks.get(block_id)
             if q:
-                print(f'[claudecode-controller] tool {tool_name} ran — clearing block {block_id}', file=sys.stderr)
+                print(f'[codex-controller] tool {tool_name} ran — clearing block {block_id}', file=sys.stderr)
                 await q.put('Allow')
-
-    async def _build_question_block(self, msg):
-        if not self._initialized:
-            print(f'[claudecode-controller] skipping question block — not yet initialized', file=sys.stderr)
-            return None, None
-        block_id = str(uuid.uuid4())
-        title = msg.get('title', 'Choose an option')
-        body = msg.get('body', '')
-        options = msg.get('options', [])
-        payload = {'title': title, 'body': body, 'options': options}
-        try:
-            await self.emit_block(block_id, 'confirmation', payload, ttl=300)
-            self._active_confirmations += 1
-            self._tile_body = f'{title}\n{body[:100]}' if body else title
-            asyncio.create_task(self._update_tile())
-            return block_id, payload
-        except Exception as e:
-            print(f'[claudecode-controller] emit_block failed: {e}', file=sys.stderr)
-            return None, None
 
     async def _handle_notification(self, msg):
         block_id = str(uuid.uuid4())
         payload = {
-            'title': msg.get('title', 'Claude Code'),
+            'title': msg.get('title', 'Codex'),
             'body': msg.get('body', ''),
             'icon': msg.get('icon', 'bell.fill')
         }
         try:
             await self.emit_block(block_id, 'alert', payload, ttl=3600)
         except Exception as e:
-            print(f'[claudecode-controller] notification emit failed: {e}', file=sys.stderr)
+            print(f'[codex-controller] notification emit failed: {e}', file=sys.stderr)
 
     async def start_socket_server(self):
         os.makedirs(os.path.dirname(SOCKET_PATH), exist_ok=True)
@@ -634,18 +648,12 @@ end tell
 # ------------------------------------------------------------------
 
 async def _tile_heartbeat(client):
-    """Re-emit the tile every 5 minutes while the script runs.
-    TTL=600 means the tile disappears within 10 minutes of the script stopping."""
     while True:
         await asyncio.sleep(300)
         await client._update_tile()
 
 
 async def _session_heartbeat(client):
-    """Re-emit all known session blocks every 5 minutes so idle sessions stay
-    visible on iOS. TTL=3600 means a session block survives up to 1 hour of
-    total inactivity (last heartbeat + TTL), so closing a terminal without
-    a session_stop will clean up within ~65 minutes at worst."""
     while True:
         await asyncio.sleep(300)
         if not client._initialized:
@@ -654,18 +662,17 @@ async def _session_heartbeat(client):
             try:
                 await client._emit_session_block(session_id)
             except Exception as e:
-                print(f'[claudecode-controller] session heartbeat error for {session_id[:8]}: {e}', file=sys.stderr)
+                print(f'[codex-controller] session heartbeat error for {session_id[:8]}: {e}', file=sys.stderr)
 
 
 async def run():
+    _install_hooks()
+
     client = MCPClient()
     server = await client.start_socket_server()
 
-    # Start reading stdin BEFORE initialize() so the response can be received.
     stdin_task = asyncio.create_task(client.read_stdin())
 
-    # Heartbeat runs unconditionally — sleeps 300s before first action so it
-    # never races with initialization even if startup fails partway through.
     asyncio.create_task(_tile_heartbeat(client))
     asyncio.create_task(_session_heartbeat(client))
 
@@ -673,7 +680,7 @@ async def run():
         await client.initialize()
         await client._update_tile()
     except Exception as e:
-        print(f'[claudecode-controller] MCP initialize error: {e}', file=sys.stderr)
+        print(f'[codex-controller] MCP initialize error: {e}', file=sys.stderr)
 
     async with server:
         await stdin_task

@@ -1,5 +1,6 @@
 import Foundation
 import CloudKit
+import SwiftUI
 
 // MARK: - Block type
 
@@ -11,7 +12,7 @@ enum RKBlockType: String, Codable {
     case infoCard = "info_card"
     case chatPrompt = "chat_prompt"
     case claudeMessage = "claude_message"
-    case claudeSession = "claude_session"
+    case agentSession = "agent_session"
     case iconCard = "icon_card"
     case tile   // drives home-screen tile display; not shown in detail view
     case countdown
@@ -70,13 +71,15 @@ struct RKClaudeMessagePayload: Codable {
     }
 }
 
-struct RKClaudeSessionPayload: Codable {
+struct RKAgentSessionPayload: Codable {
     let sessionId: String
     let project: String
     let cwd: String?
     let lastMessage: String?
     let placeholder: String?
     let isWorking: Bool?
+    let agentName: String?
+    let brandColor: String?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
@@ -85,6 +88,20 @@ struct RKClaudeSessionPayload: Codable {
         case lastMessage = "last_message"
         case placeholder
         case isWorking = "is_working"
+        case agentName = "agent_name"
+        case brandColor = "brand_color"
+    }
+
+    /// Parses `brandColor` hex string (e.g. `#74AA9C`) into a SwiftUI Color.
+    var brandColorValue: Color {
+        guard let hex = brandColor else { return .accentColor }
+        let cleaned = hex.trimmingCharacters(in: .init(charactersIn: "#"))
+        guard cleaned.count == 6,
+              let value = UInt64(cleaned, radix: 16) else { return .accentColor }
+        let r = Double((value >> 16) & 0xFF) / 255
+        let g = Double((value >> 8) & 0xFF) / 255
+        let b = Double(value & 0xFF) / 255
+        return Color(red: r, green: g, blue: b)
     }
 }
 
@@ -176,7 +193,7 @@ struct RKBlock: Identifiable {
 
     var requiresResponse: Bool {
         switch blockType {
-        case .confirmation, .prompt, .chatPrompt, .picker, .list, .detail, .claudeSession: return true
+        case .confirmation, .prompt, .chatPrompt, .picker, .list, .detail, .agentSession: return true
         case .alert, .status, .infoCard, .iconCard, .claudeMessage, .tile, .countdown, .feedItem: return false
         }
     }
@@ -217,9 +234,9 @@ struct RKBlock: Identifiable {
         return try? JSONDecoder().decode(RKClaudeMessagePayload.self, from: payloadData)
     }
 
-    var claudeSessionPayload: RKClaudeSessionPayload? {
-        guard blockType == .claudeSession else { return nil }
-        return try? JSONDecoder().decode(RKClaudeSessionPayload.self, from: payloadData)
+    var agentSessionPayload: RKAgentSessionPayload? {
+        guard blockType == .agentSession else { return nil }
+        return try? JSONDecoder().decode(RKAgentSessionPayload.self, from: payloadData)
     }
 
     var iconCardPayload: RKIconCardPayload? {

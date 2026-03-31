@@ -151,9 +151,9 @@ struct BlockView: View {
             if let p = block.claudeMessagePayload {
                 ClaudeMessageBlockView(payload: p)
             }
-        case .claudeSession:
-            if let p = block.claudeSessionPayload {
-                ClaudeSessionBlockView(payload: p, onRespond: onRespond)
+        case .agentSession:
+            if let p = block.agentSessionPayload {
+                AgentSessionBlockView(payload: p, onRespond: onRespond)
             }
         case .iconCard:
             if let p = block.iconCardPayload {
@@ -1055,10 +1055,10 @@ struct ClaudeMessageBlockView: View {
     }
 }
 
-// MARK: - ClaudeSession
+// MARK: - AgentSession
 
-struct ClaudeSessionBlockView: View {
-    let payload: RKClaudeSessionPayload
+struct AgentSessionBlockView: View {
+    let payload: RKAgentSessionPayload
     let onRespond: (String) async -> Void
 
     @State private var text = ""
@@ -1084,7 +1084,7 @@ struct ClaudeSessionBlockView: View {
                             .lineLimit(1)
                             .truncationMode(.tail)
                     } else if isCollapsed, payload.isWorking == true {
-                        Text("Claude is working…")
+                        Text("\(payload.agentName ?? "Claude") is working…")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -1098,14 +1098,16 @@ struct ClaudeSessionBlockView: View {
             .padding(.bottom, isCollapsed ? 0 : -4)
 
             if !isCollapsed {
-                // Last Claude message (or working indicator)
+                // Last agent message (or working indicator)
                 Group {
                     if let msg = payload.lastMessage, !msg.isEmpty {
                         ClaudeMarkdownView(text: msg)
                     } else if payload.isWorking == true {
                         HStack(spacing: 6) {
-                            ProgressView().scaleEffect(0.7)
-                            Text("Claude is working…")
+                            ProgressView()
+                                .scaleEffect(0.7)
+                                .tint(payload.brandColorValue)
+                            Text("\(payload.agentName ?? "Claude") is working…")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
@@ -1151,7 +1153,7 @@ struct ClaudeSessionBlockView: View {
 
                 // Chat input
                 HStack(alignment: .bottom, spacing: 8) {
-                    TextField(payload.placeholder ?? "Reply to Claude…", text: $text, axis: .vertical)
+                    TextField(payload.placeholder ?? "Reply to \(payload.agentName ?? "Claude")…", text: $text, axis: .vertical)
                         .textFieldStyle(.roundedBorder)
                         .font(.subheadline)
                         .lineLimit(1...6)
