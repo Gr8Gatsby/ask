@@ -399,7 +399,7 @@ struct HomeView: View {
             // Prevents a blank UI during the Mac restart window while scripts re-emit.
             var consecutiveEmpty = 0
             while !Task.isCancelled {
-                let interval: Double = Date() < burstPollingUntil ? 1.0 : 3.0
+                let interval: Double = Date() < burstPollingUntil ? 1.0 : 30.0
                 try? await Task.sleep(for: .seconds(interval))
                 guard !Task.isCancelled else { break }
                 if let fresh = try? await cloudKit.fetchMachines(), !fresh.isEmpty {
