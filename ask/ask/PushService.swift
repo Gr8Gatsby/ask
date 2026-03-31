@@ -27,6 +27,7 @@ final class PushService: NSObject {
 
     private func saveSubscriptionsIfNeeded() async {
         let subID = "ask-rkblock-changes-v2"
+        let actionSubID = "ask-action-required-v1"
         let legacyID = "ask-rkblock-created"
 
         // Delete legacy creation-only subscription if present
@@ -35,21 +36,49 @@ final class PushService: NSObject {
             _ = try? await database.modifySubscriptions(saving: [], deleting: [legacyID])
         }
 
-        let existing = (try? await database.subscriptions(for: [CKSubscription.ID(subID)])) ?? [:]
-        guard existing[subID] == nil else { return }
+        let existingIDs = [CKSubscription.ID(subID), CKSubscription.ID(actionSubID)]
+        let existing = (try? await database.subscriptions(for: existingIDs)) ?? [:]
 
-        let sub = CKQuerySubscription(
-            recordType: CKSchema.RecordType.rkBlock,
-            predicate: NSPredicate(value: true),
-            subscriptionID: subID,
-            options: [.firesOnRecordCreation, .firesOnRecordUpdate, .firesOnRecordDeletion]
-        )
-        let info = CKSubscription.NotificationInfo()
-        info.shouldSendContentAvailable = true   // silent push
-        info.shouldBadge = false
-        sub.notificationInfo = info
+        var toSave: [CKSubscription] = []
 
-        _ = try? await database.modifySubscriptions(saving: [sub], deleting: [])
+        // Silent push subscription — fires for all RKBlock changes
+        if existing[subID] == nil {
+            let sub = CKQuerySubscription(
+                recordType: CKSchema.RecordType.rkBlock,
+                predicate: NSPredicate(value: true),
+                subscriptionID: subID,
+                options: [.firesOnRecordCreation, .firesOnRecordUpdate, .firesOnRecordDeletion]
+            )
+            let info = CKSubscription.NotificationInfo()
+            info.shouldSendContentAvailable = true
+            info.shouldBadge = false
+            sub.notificationInfo = info
+            toSave.append(sub)
+        }
+
+        // Alert push subscription — fires when a block requires a response
+        // Delivers a visible notification even when the app is terminated
+        if existing[actionSubID] == nil {
+            let actionSub = CKQuerySubscription(
+                recordType: CKSchema.RecordType.rkBlock,
+                predicate: NSPredicate(format: "requiresResponse == 1"),
+                subscriptionID: actionSubID,
+                options: [.firesOnRecordCreation, .firesOnRecordUpdate]
+            )
+            let actionInfo = CKSubscription.NotificationInfo()
+            actionInfo.shouldSendContentAvailable = true
+            actionInfo.titleLocalizationKey = "%1$@"
+            actionInfo.titleLocalizationArgs = ["scriptName"]
+            actionInfo.alertBody = "Action required"
+            actionInfo.soundName = "default"
+            actionInfo.desiredKeys = ["scriptID", "scriptName"]
+            actionSub.notificationInfo = actionInfo
+            toSave.append(actionSub)
+        }
+
+        if !toSave.isEmpty {
+            _ = try? await database.modifySubscriptions(saving: toSave, deleting: [])
+        }
     }
 
     /// Called by the app delegate when a remote notification arrives.

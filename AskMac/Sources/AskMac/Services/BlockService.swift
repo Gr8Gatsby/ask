@@ -24,7 +24,7 @@ final class BlockService: @unchecked Sendable {
         self.scriptType = scriptType
     }
 
-    func emitBlock(blockID: String, blockType: String, payload: String, expiresAt: Date?) async throws {
+    func emitBlock(blockID: String, blockType: String, payload: String, expiresAt: Date?, requiresResponse: Bool = false) async throws {
         let record = RKBlockRecord(
             blockID: blockID,
             machineID: machineID,
@@ -37,7 +37,8 @@ final class BlockService: @unchecked Sendable {
             payload: payload,
             createdAt: Date(),
             expiresAt: expiresAt,
-            scriptType: scriptType
+            scriptType: scriptType,
+            requiresResponse: requiresResponse ? 1 : 0
         )
         try await withRetry(label: "emitBlock(\(blockID))") {
             try await self.cloudKit.saveBlock(record)

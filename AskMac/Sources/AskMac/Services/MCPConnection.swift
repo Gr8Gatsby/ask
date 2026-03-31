@@ -197,6 +197,18 @@ final class MCPConnection: @unchecked Sendable {
             }
             let ttl = args["ttl"] as? TimeInterval
             let expiresAt = ttl.map { Date().addingTimeInterval($0) }
+            // Determine if this block needs user input for CloudKit alert push delivery
+            let requiresResponse: Bool
+            let responseTypes: Set<String> = ["confirmation", "prompt", "chat_prompt", "picker", "list", "detail"]
+            if responseTypes.contains(blockType) {
+                requiresResponse = true
+            } else if blockType == "tile",
+                      let payloadDict = args["payload"] as? [String: Any],
+                      let actionRequired = payloadDict["action_required"] as? Bool {
+                requiresResponse = actionRequired
+            } else {
+                requiresResponse = false
+            }
             // Reply and update local preview immediately — don't block on CloudKit.
             reply(id: id, result: ["content": [["type": "text", "text": "ok"]]])
             let block = LiveBlock(id: blockID, blockType: blockType, payloadJSON: payloadJSON)
@@ -207,7 +219,8 @@ final class MCPConnection: @unchecked Sendable {
                         blockID: blockID,
                         blockType: blockType,
                         payload: payloadJSON,
-                        expiresAt: expiresAt
+                        expiresAt: expiresAt,
+                        requiresResponse: requiresResponse
                     )
                 } catch {
                     print("[MCPConnection:\(scriptID)] emit_block CloudKit error: \(error)")

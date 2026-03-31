@@ -40,6 +40,7 @@ enum CKSchema {
         static let createdAt = "createdAt"
         static let expiresAt = "expiresAt"
         static let scriptType = "scriptType"  // "tile" (default) or "feed"
+        static let requiresResponse = "requiresResponse"  // 1 if the block needs user input, 0 otherwise
     }
 
     enum FeedSchedule {
@@ -169,6 +170,7 @@ struct RKBlockRecord: Sendable {
     let createdAt: Date
     let expiresAt: Date?
     let scriptType: String  // "tile" (default) or "feed"
+    let requiresResponse: Int  // 1 if user input needed, 0 otherwise
 
     func toCKRecord() -> CKRecord {
         let record = CKRecord(recordType: CKSchema.RecordType.rkBlock,
@@ -185,6 +187,7 @@ struct RKBlockRecord: Sendable {
         record[CKSchema.RKBlock.createdAt] = createdAt
         record[CKSchema.RKBlock.expiresAt] = expiresAt as CKRecordValueProtocol?
         record[CKSchema.RKBlock.scriptType] = scriptType
+        record[CKSchema.RKBlock.requiresResponse] = requiresResponse as CKRecordValue
         return record
     }
 }

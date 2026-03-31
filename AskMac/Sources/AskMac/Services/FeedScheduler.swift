@@ -117,8 +117,8 @@ enum CronExpression {
             }
             if !days.contains(day) || !weekdays.contains(wd) {
                 // Advance to midnight of next day
-                candidate = cal.date(byAdding: .day, value: 1, to: candidate.startOfDay(cal: cal))!
-                    .addingTimeInterval(0)
+                guard let next = cal.date(byAdding: .day, value: 1, to: candidate.startOfDay(cal: cal)) else { break }
+                candidate = next
                 continue
             }
             if !hours.contains(hour) {
@@ -183,7 +183,8 @@ enum CronExpression {
         var d = date
         for _ in 0..<48 {
             guard let next = cal.date(byAdding: .hour, value: 1, to: d) else { return nil }
-            d = cal.date(bySetting: .minute, value: 0, of: next)!
+            guard let zeroed = cal.date(bySetting: .minute, value: 0, of: next) else { return nil }
+            d = zeroed
             if hours.contains(cal.component(.hour, from: d)) { return d }
         }
         return nil
