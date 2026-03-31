@@ -12,14 +12,17 @@ import sys
 import json
 import asyncio
 import os
+import time
 import uuid
 from typing import Optional
 
 # Force UTF-8 on stdout so emoji pass through cleanly to the Mac daemon
 sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)
 
-SOCKET_PATH = os.path.expanduser('~/.ask/sockets/claudecode-controller.sock')
-BLOCK_TILE  = 'claudecode-controller-tile'
+SOCKET_PATH    = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/sockets/claudecode-controller.sock'))
+BLOCK_TILE     = 'claudecode-controller-tile'
+SESSIONS_PATH  = os.path.expanduser('~/.ask/claudecode_sessions.json')
+SESSION_TTL    = 3600  # seconds — matches block TTL
 
 
 class MCPClient:
@@ -35,6 +38,7 @@ class MCPClient:
         # Tile state
         self._active_confirmations = 0
         self._tile_body: Optional[str] = None
+        self._initialized = False  # True after MCP handshake completes
 
     # ------------------------------------------------------------------
     # MCP outbound helpers
@@ -65,7 +69,15 @@ class MCPClient:
             'clientInfo': {'name': 'claudecode-controller', 'version': '1.0'}
         })
         self._write({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+        self._initialized = True
         print('[claudecode-controller] MCP initialized', file=sys.stderr)
+        # Restore sessions from disk, then scan for live claude processes
+        self._load_sessions()
+        self._discover_active_processes()
+        for session_id, info in list(self._sessions.items()):
+            asyncio.create_task(
+                self._emit_session_block(session_id, last_message=info.get('last_message', ''))
+            )
 
     async def emit_block(self, block_id, block_type, payload, ttl=None):
         args = {'blockId': block_id, 'blockType': block_type, 'payload': payload}
@@ -172,12 +184,82 @@ class MCPClient:
     def _session_block_id(self, session_id: str) -> str:
         return f'claudecode-session-{session_id[:8]}'
 
+    @staticmethod
+    def _project_label(cwd: str, session_id: str) -> str:
+        """Human-readable label: last 2 path parts + short session ID."""
+        if cwd:
+            parts = cwd.rstrip('/').split('/')
+            path_label = '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+        else:
+            path_label = 'Claude Code'
+        return f'{path_label} [{session_id[:6]}]'
+
+    def _save_sessions(self):
+        """Persist _sessions to disk so restarts can re-emit known sessions."""
+        try:
+            os.makedirs(os.path.dirname(SESSIONS_PATH), exist_ok=True)
+            with open(SESSIONS_PATH, 'w') as f:
+                json.dump(self._sessions, f)
+        except Exception as e:
+            print(f'[claudecode-controller] session save failed: {e}', file=sys.stderr)
+
+    def _load_sessions(self):
+        """Load persisted sessions, discarding any older than SESSION_TTL."""
+        try:
+            with open(SESSIONS_PATH) as f:
+                data = json.load(f)
+            cutoff = time.time() - SESSION_TTL
+            self._sessions = {
+                sid: info for sid, info in data.items()
+                if isinstance(info, dict) and info.get('last_seen', 0) >= cutoff
+            }
+            print(f'[claudecode-controller] restored {len(self._sessions)} session(s)', file=sys.stderr)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            print(f'[claudecode-controller] session load failed: {e}', file=sys.stderr)
+
+    def _discover_active_processes(self):
+        """Scan for running 'claude' processes and register their cwds as sessions.
+        Uses lsof to find the working directory of each claude process."""
+        import subprocess
+        try:
+            # Find PIDs of running claude CLI processes
+            ps = subprocess.run(
+                ['pgrep', '-f', r'node.*claude'],
+                capture_output=True, text=True, timeout=3
+            )
+            pids = [p.strip() for p in ps.stdout.splitlines() if p.strip()]
+            if not pids:
+                return
+            for pid in pids:
+                try:
+                    lsof = subprocess.run(
+                        ['lsof', '-a', '-p', pid, '-d', 'cwd', '-Fn'],
+                        capture_output=True, text=True, timeout=3
+                    )
+                    # lsof -Fn output: lines starting with 'n' are the name (path)
+                    cwd = next(
+                        (line[1:] for line in lsof.stdout.splitlines() if line.startswith('n')),
+                        ''
+                    )
+                    if cwd and cwd not in ('/', '/private'):
+                        # Use pid as a stable-enough stand-in for session_id when unknown
+                        synthetic_id = f'pid-{pid}'
+                        if self._register_session(synthetic_id, cwd):
+                            print(f'[claudecode-controller] discovered claude process pid={pid} cwd={cwd}', file=sys.stderr)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f'[claudecode-controller] process discovery failed: {e}', file=sys.stderr)
+
     def _register_session(self, session_id: str, cwd: str):
         """Register a session if new; return True if it was new."""
         if session_id in self._sessions:
             return False
-        project = os.path.basename(cwd.rstrip('/')) if cwd else 'Claude Code'
-        self._sessions[session_id] = {'cwd': cwd, 'project': project}
+        project = self._project_label(cwd, session_id)
+        self._sessions[session_id] = {'cwd': cwd, 'project': project, 'last_seen': time.time()}
+        self._save_sessions()
         return True
 
     def _handle_session_active(self, msg):
@@ -197,15 +279,19 @@ class MCPClient:
         if not session_id:
             return
         self._register_session(session_id, cwd)
-        if cwd and session_id in self._sessions:
-            project = os.path.basename(cwd.rstrip('/'))
-            self._sessions[session_id]['cwd'] = cwd
-            self._sessions[session_id]['project'] = project
+        if session_id in self._sessions:
+            if cwd:
+                self._sessions[session_id]['cwd'] = cwd
+                self._sessions[session_id]['project'] = self._project_label(cwd, session_id)
+            self._sessions[session_id]['last_seen'] = time.time()
         print(f'[claudecode-controller] session stopped: {session_id}', file=sys.stderr)
         asyncio.create_task(self._emit_session_block(session_id, last_message=last_message))
 
     async def _emit_session_block(self, session_id: str, last_message: str = ''):
         """Emit (or re-emit) the claude_session block for this session."""
+        if not self._initialized:
+            print(f'[claudecode-controller] skipping session block — not yet initialized', file=sys.stderr)
+            return
         session = self._sessions.get(session_id, {})
         project = session.get('project', 'Claude Code')
         cwd = session.get('cwd', '')
@@ -221,7 +307,12 @@ class MCPClient:
         # Register reply callback (re-registered after each use in _on_session_reply)
         self._response_callbacks[block_id] = lambda v: self._on_session_reply(session_id, v)
         try:
-            await self.emit_block(block_id, 'claude_session', payload, ttl=1800)
+            if session_id in self._sessions:
+                self._sessions[session_id]['last_seen'] = time.time()
+                if last_message:
+                    self._sessions[session_id]['last_message'] = last_message
+            self._save_sessions()
+            await self.emit_block(block_id, 'claude_session', payload, ttl=SESSION_TTL)
         except Exception as e:
             print(f'[claudecode-controller] claude_session emit failed: {e}', file=sys.stderr)
 
@@ -425,12 +516,17 @@ end tell
         return {'value': value or default}
 
     async def _build_permission_block(self, msg):
+        if not self._initialized:
+            print(f'[claudecode-controller] skipping permission block — not yet initialized', file=sys.stderr)
+            return None, None
         block_id = str(uuid.uuid4())
         tool = msg.get('tool', 'Unknown')
         session_id = msg.get('session_id', '')
         preview = msg.get('preview', '')
         options = msg.get('options', ['Allow', 'Deny'])
         payload = {'title': f'Allow {tool}?', 'body': preview, 'options': options}
+        if session_id:
+            payload['session_id'] = session_id
         try:
             await self.emit_block(block_id, 'confirmation', payload, ttl=300)
             # Track so PostToolUse can wake this block if the user accepts in terminal
@@ -452,10 +548,15 @@ end tell
         cwd = msg.get('cwd', '')
         if not session_id or not tool_name:
             return
-        # Register session on first tool execution if not already known
+        # Register session if new; refresh the block TTL on every tool use.
+        # Rate-limit to once per 5 min — TTL is 1 hour so frequent refreshes are unnecessary.
         is_new = self._register_session(session_id, cwd)
         if is_new:
             asyncio.create_task(self._emit_session_block(session_id))
+        else:
+            last = self._sessions[session_id].get('last_emitted', 0)
+            if time.time() - last > 300:
+                asyncio.create_task(self._emit_session_block(session_id))
         key = (session_id, tool_name)
         block_ids = self._tool_block_map.pop(key, [])
         for block_id in block_ids:
@@ -465,6 +566,9 @@ end tell
                 await q.put('Allow')
 
     async def _build_question_block(self, msg):
+        if not self._initialized:
+            print(f'[claudecode-controller] skipping question block — not yet initialized', file=sys.stderr)
+            return None, None
         block_id = str(uuid.uuid4())
         title = msg.get('title', 'Choose an option')
         body = msg.get('body', '')
@@ -492,23 +596,6 @@ end tell
         except Exception as e:
             print(f'[claudecode-controller] notification emit failed: {e}', file=sys.stderr)
 
-    def _handle_session_stop(self, msg):
-        session_id = msg.get('session_id', '')
-        last_message = msg.get('last_message', '')
-        print(f'[claudecode-controller] session stopped: {session_id}', file=sys.stderr)
-        if last_message:
-            asyncio.create_task(self._emit_claude_message(session_id, last_message))
-
-    async def _emit_claude_message(self, session_id, text):
-        """Emit the last Claude response as a claude_message block. Uses a deterministic
-        ID so re-emitting on successive stops replaces the previous message in CloudKit."""
-        block_id = 'claudecode-last-message'
-        payload = {'text': text, 'session_id': session_id}
-        try:
-            await self.emit_block(block_id, 'claude_message', payload, ttl=1800)
-        except Exception as e:
-            print(f'[claudecode-controller] claude_message emit failed: {e}', file=sys.stderr)
-
     async def start_socket_server(self):
         os.makedirs(os.path.dirname(SOCKET_PATH), exist_ok=True)
         if os.path.exists(SOCKET_PATH):
@@ -528,6 +615,22 @@ async def _tile_heartbeat(client):
         await client._update_tile()
 
 
+async def _session_heartbeat(client):
+    """Re-emit all known session blocks every 5 minutes so idle sessions stay
+    visible on iOS. TTL=3600 means a session block survives up to 1 hour of
+    total inactivity (last heartbeat + TTL), so closing a terminal without
+    a session_stop will clean up within ~65 minutes at worst."""
+    while True:
+        await asyncio.sleep(300)
+        if not client._initialized:
+            continue
+        for session_id in list(client._sessions.keys()):
+            try:
+                await client._emit_session_block(session_id)
+            except Exception as e:
+                print(f'[claudecode-controller] session heartbeat error for {session_id[:8]}: {e}', file=sys.stderr)
+
+
 async def run():
     client = MCPClient()
     server = await client.start_socket_server()
@@ -538,6 +641,7 @@ async def run():
     # Heartbeat runs unconditionally — sleeps 300s before first action so it
     # never races with initialization even if startup fails partway through.
     asyncio.create_task(_tile_heartbeat(client))
+    asyncio.create_task(_session_heartbeat(client))
 
     try:
         await client.initialize()
