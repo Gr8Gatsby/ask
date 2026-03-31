@@ -762,6 +762,170 @@ def test_permission_session_grouping():
     h.stop()
 
 
+def test_pid_sessions_not_persisted():
+    """pid-* sessions (process-discovery) must not be written to the sessions file."""
+    print('\nTest 10: pid-* sessions are not persisted to disk')
+    import tempfile
+
+    sessions_file = '/tmp/test-pid-sessions-persist.json'
+    for f in [sessions_file]:
+        if os.path.exists(f): os.unlink(f)
+
+    env = os.environ.copy()
+    env['ASK_SOCKET_PATH'] = TEST_SOCKET
+    env['ASK_SESSIONS_PATH'] = sessions_file
+    env['ASK_SKIP_DISCOVERY'] = '1'
+    proc = subprocess.Popen(
+        [sys.executable, SCRIPT],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=env,
+    )
+    lines: list[dict] = []
+    lock = threading.Lock()
+
+    def reader():
+        for raw in proc.stdout:
+            line = raw.decode('utf-8', errors='replace').strip()
+            if not line: continue
+            try:
+                msg = json.loads(line)
+                with lock: lines.append(msg)
+                if msg.get('method') == 'tools/call' and 'id' in msg:
+                    resp = {'jsonrpc': '2.0', 'id': msg['id'],
+                            'result': {'content': [{'type': 'text', 'text': 'ok'}]}}
+                    proc.stdin.write((json.dumps(resp) + '\n').encode())
+                    proc.stdin.flush()
+            except Exception: pass
+
+    threading.Thread(target=reader, daemon=True).start()
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        with lock:
+            init_m = next((m for m in lines if m.get('method') == 'initialize' and 'id' in m), None)
+        if init_m: break
+        time.sleep(0.05)
+
+    if not init_m:
+        fail('process started and sent initialize'); proc.terminate(); return
+    proc.stdin.write((json.dumps({'jsonrpc': '2.0', 'id': init_m['id'],
+        'result': {'protocolVersion': '2024-11-05', 'capabilities': {},
+                   'serverInfo': {'name': 'test', 'version': '0.1'}}}) + '\n').encode())
+    proc.stdin.flush()
+    time.sleep(0.5)
+
+    # Send a synthetic pid-* session_active via socket
+    sock = socket_lib.socket(socket_lib.AF_UNIX, socket_lib.SOCK_STREAM)
+    sock.settimeout(3)
+    try:
+        sock.connect(TEST_SOCKET)
+        sock.sendall(json.dumps({'type': 'session_active', 'session_id': 'pid-99999',
+                                  'cwd': '/tmp'}).encode())
+        sock.shutdown(socket_lib.SHUT_WR)
+        sock.recv(64)
+    except Exception: pass
+    finally: sock.close()
+
+    time.sleep(0.5)
+    proc.terminate()
+    proc.wait(timeout=3)
+
+    # Check the sessions file: pid-99999 must NOT be present
+    if os.path.exists(sessions_file):
+        with open(sessions_file) as f:
+            saved = json.load(f)
+        if 'pid-99999' not in saved:
+            ok('pid-* session is not written to sessions file')
+        else:
+            fail('pid-* session is not written to sessions file',
+                 'found pid-99999 in saved sessions')
+    else:
+        ok('pid-* session is not written to sessions file (file not created)')
+
+    for f in [sessions_file]:
+        if os.path.exists(f): os.unlink(f)
+
+
+def test_startup_does_not_bump_last_seen():
+    """Startup re-emit must NOT update last_seen so old sessions can expire."""
+    print('\nTest 11: startup re-emit preserves original last_seen')
+    import tempfile
+
+    sessions_file = '/tmp/test-startup-last-seen.json'
+    old_ts = time.time() - 100   # 100 seconds ago
+    seed = {
+        'aaaaaaaa-0000-0000-0000-000000000000': {
+            'cwd': '/tmp', 'project': 'tmp [aaaaaa]',
+            'last_seen': old_ts, 'last_message': 'hello'
+        }
+    }
+    with open(sessions_file, 'w') as f:
+        json.dump(seed, f)
+
+    env = os.environ.copy()
+    env['ASK_SOCKET_PATH'] = TEST_SOCKET
+    env['ASK_SESSIONS_PATH'] = sessions_file
+    env['ASK_SKIP_DISCOVERY'] = '1'
+    proc = subprocess.Popen(
+        [sys.executable, SCRIPT],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=env,
+    )
+    lines: list[dict] = []
+    lock = threading.Lock()
+
+    def reader():
+        for raw in proc.stdout:
+            line = raw.decode('utf-8', errors='replace').strip()
+            if not line: continue
+            try:
+                msg = json.loads(line)
+                with lock: lines.append(msg)
+                if msg.get('method') == 'tools/call' and 'id' in msg:
+                    resp = {'jsonrpc': '2.0', 'id': msg['id'],
+                            'result': {'content': [{'type': 'text', 'text': 'ok'}]}}
+                    proc.stdin.write((json.dumps(resp) + '\n').encode())
+                    proc.stdin.flush()
+            except Exception: pass
+
+    threading.Thread(target=reader, daemon=True).start()
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        with lock:
+            init_m = next((m for m in lines if m.get('method') == 'initialize' and 'id' in m), None)
+        if init_m: break
+        time.sleep(0.05)
+
+    if not init_m:
+        fail('process started and sent initialize'); proc.terminate()
+        if os.path.exists(sessions_file): os.unlink(sessions_file)
+        return
+    proc.stdin.write((json.dumps({'jsonrpc': '2.0', 'id': init_m['id'],
+        'result': {'protocolVersion': '2024-11-05', 'capabilities': {},
+                   'serverInfo': {'name': 'test', 'version': '0.1'}}}) + '\n').encode())
+    proc.stdin.flush()
+    # Wait for the session re-emit to flush to disk
+    time.sleep(0.8)
+    proc.terminate()
+    proc.wait(timeout=3)
+
+    if os.path.exists(sessions_file):
+        with open(sessions_file) as f:
+            saved = json.load(f)
+        sess = saved.get('aaaaaaaa-0000-0000-0000-000000000000', {})
+        saved_ts = sess.get('last_seen', 0)
+        # last_seen should still be close to old_ts (within 2 seconds), not bumped to now
+        if abs(saved_ts - old_ts) < 2:
+            ok('startup re-emit does not bump last_seen (session can still expire)')
+        else:
+            diff = saved_ts - old_ts
+            fail('startup re-emit does not bump last_seen',
+                 f'last_seen was bumped by {diff:.1f}s (expected < 2s)')
+    else:
+        fail('sessions file exists after startup', 'file not written')
+
+    if os.path.exists(sessions_file): os.unlink(sessions_file)
+
+
 # ─── Runner ───────────────────────────────────────────────────────────────────
 
 TESTS = [
@@ -775,6 +939,8 @@ TESTS = [
     test_permission_block,
     test_permission_deny,
     test_permission_session_grouping,
+    test_pid_sessions_not_persisted,
+    test_startup_does_not_bump_last_seen,
 ]
 
 if __name__ == '__main__':
