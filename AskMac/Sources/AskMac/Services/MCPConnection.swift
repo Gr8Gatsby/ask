@@ -352,7 +352,7 @@ final class MCPConnection: @unchecked Sendable {
                     "type": "object",
                     "properties": [
                         "blockId": ["type": "string", "description": "Unique block identifier (use UUID)"],
-                        "blockType": ["type": "string", "enum": ["confirmation", "alert", "status", "prompt", "info_card", "chat_prompt", "icon_card"]],
+                        "blockType": ["type": "string", "enum": ["confirmation", "alert", "status", "prompt", "info_card", "chat_prompt", "icon_card", "claude_session", "claude_message"]],
                         "payload": ["type": "object", "description": "Block-type-specific payload — see get_schema"],
                         "ttl": ["type": "number", "description": "Seconds until the block auto-expires (optional)"]
                     ],

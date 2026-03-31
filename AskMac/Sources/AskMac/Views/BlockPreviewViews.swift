@@ -27,6 +27,7 @@ struct BlockPreviewView: View {
             case "picker":       PickerPreview(payload: payload, onRespond: onRespond)
             case "icon_card":    IconCardPreview(payload: payload)
             case "claude_message": ClaudeMessagePreview(payload: payload)
+            case "claude_session": ClaudeSessionPreview(payload: payload)
             case "tile":         EmptyView() // drives home-screen tile only
             default:             EmptyView()
             }
@@ -449,6 +450,44 @@ private struct IconCardPreview: View {
                 }
             }
             Spacer()
+        }
+        .padding(8)
+        .background(Color.secondary.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+}
+
+// MARK: - ClaudeSession
+
+private struct ClaudeSessionPreview: View {
+    let payload: [String: Any]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 4) {
+                Image(systemName: "sparkles")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(payload["project"] as? String ?? "Claude Code")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                Spacer()
+            }
+            if let msg = payload["last_message"] as? String, !msg.isEmpty {
+                Text(msg)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .lineLimit(4)
+            } else {
+                Text("Waiting for Claude…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .italic()
+            }
+            Text(payload["placeholder"] as? String ?? "Reply to Claude…")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .italic()
         }
         .padding(8)
         .background(Color.secondary.opacity(0.07))

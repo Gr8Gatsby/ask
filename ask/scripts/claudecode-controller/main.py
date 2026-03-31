@@ -28,9 +28,8 @@ class MCPClient:
         self._pending_calls = {}      # rpc_id  -> asyncio.Future (tool call responses)
         self._pending_blocks = {}     # block_id -> asyncio.Queue (blocking waiters)
         self._response_callbacks = {} # block_id -> async callable(value)
-        self._active_chat_block_id = None
-        self._chat_title: str = 'Send to Claude'
-        self._chat_context: str = ''
+        # session_id -> {'cwd': str, 'project': str}
+        self._sessions: dict = {}
         # (session_id, tool_name) -> [block_id, ...] — cleared when the tool runs
         self._tool_block_map = {}
         # Tile state
@@ -167,43 +166,75 @@ class MCPClient:
             self._pending_blocks.pop(block_id, None)
 
     # ------------------------------------------------------------------
-    # Persistent chat block — lets the user send text to Claude at any time
+    # Per-session blocks — one claude_session block per active Claude session
     # ------------------------------------------------------------------
 
-    async def start_chat_block(self, context='', title='Send to Claude'):
-        """Emit a chat_prompt block. When the user replies, type it into Terminal and re-emit."""
-        # Remove the callback for any previous chat block.
-        if self._active_chat_block_id:
-            self._response_callbacks.pop(self._active_chat_block_id, None)
+    def _session_block_id(self, session_id: str) -> str:
+        return f'claudecode-session-{session_id[:8]}'
 
-        # Use a deterministic ID so re-emitting replaces the existing block in CloudKit
-        # rather than creating a duplicate. The daemon's savePolicy:.allKeys handles the upsert.
-        block_id = 'claudecode-chat'
-        self._active_chat_block_id = block_id
-        self._chat_title = title
-        self._chat_context = context
-        payload = {
-            'title': title,
-            'context': context,
-            'placeholder': 'Type your message to Claude…',
+    def _register_session(self, session_id: str, cwd: str):
+        """Register a session if new; return True if it was new."""
+        if session_id in self._sessions:
+            return False
+        project = os.path.basename(cwd.rstrip('/')) if cwd else 'Claude Code'
+        self._sessions[session_id] = {'cwd': cwd, 'project': project}
+        return True
+
+    def _handle_session_active(self, msg):
+        """Called by PostToolUse — registers the session and emits an initial block."""
+        session_id = msg.get('session_id', '')
+        cwd = msg.get('cwd', '') or msg.get('tool_cwd', '')
+        if not session_id:
+            return
+        is_new = self._register_session(session_id, cwd)
+        if is_new:
+            asyncio.create_task(self._emit_session_block(session_id))
+
+    def _handle_session_stop(self, msg):
+        session_id = msg.get('session_id', '')
+        cwd = msg.get('cwd', '')
+        last_message = msg.get('last_message', '')
+        if not session_id:
+            return
+        self._register_session(session_id, cwd)
+        if cwd and session_id in self._sessions:
+            project = os.path.basename(cwd.rstrip('/'))
+            self._sessions[session_id]['cwd'] = cwd
+            self._sessions[session_id]['project'] = project
+        print(f'[claudecode-controller] session stopped: {session_id}', file=sys.stderr)
+        asyncio.create_task(self._emit_session_block(session_id, last_message=last_message))
+
+    async def _emit_session_block(self, session_id: str, last_message: str = ''):
+        """Emit (or re-emit) the claude_session block for this session."""
+        session = self._sessions.get(session_id, {})
+        project = session.get('project', 'Claude Code')
+        cwd = session.get('cwd', '')
+        block_id = self._session_block_id(session_id)
+        payload: dict = {
+            'session_id': session_id,
+            'project': project,
+            'cwd': cwd,
+            'placeholder': 'Reply to Claude…',
         }
+        if last_message:
+            payload['last_message'] = last_message
+        # Register reply callback (re-registered after each use in _on_session_reply)
+        self._response_callbacks[block_id] = lambda v: self._on_session_reply(session_id, v)
         try:
-            await self.emit_block(block_id, 'chat_prompt', payload, ttl=600)
-            self._response_callbacks[block_id] = self._on_chat_reply
+            await self.emit_block(block_id, 'claude_session', payload, ttl=1800)
         except Exception as e:
-            print(f'[claudecode-controller] chat block emit failed: {e}', file=sys.stderr)
+            print(f'[claudecode-controller] claude_session emit failed: {e}', file=sys.stderr)
 
-    async def _on_chat_reply(self, value):
-        """Called when the user submits a reply from iOS."""
-        self._active_chat_block_id = None
+    async def _on_session_reply(self, session_id: str, value: str):
+        """Called when the user sends a reply from iOS for a specific session."""
+        block_id = self._session_block_id(session_id)
+        # Re-register immediately so the user can reply again
+        self._response_callbacks[block_id] = lambda v: self._on_session_reply(session_id, v)
         if value:
-            await self._type_in_terminal(value)
-        # Re-emit so the input is always available
-        await asyncio.sleep(0.5)
-        await self.start_chat_block()
+            await self._route_to_terminal(session_id, value)
 
-    async def _type_in_terminal(self, text):
-        """Copy text to clipboard then paste into the frontmost Terminal window."""
+    async def _route_to_terminal(self, session_id: str, text: str):
+        """Copy text to clipboard then paste into the terminal running this session."""
         try:
             pbcopy = await asyncio.create_subprocess_exec(
                 'pbcopy',
@@ -216,26 +247,67 @@ class MCPClient:
             print(f'[claudecode-controller] pbcopy failed: {e}', file=sys.stderr)
             return
 
-        script = (
-            'tell application "Terminal" to activate\n'
-            'delay 0.3\n'
-            'tell application "System Events"\n'
-            '    keystroke "v" using command down\n'
-            '    delay 0.1\n'
-            '    keystroke return\n'
-            'end tell'
-        )
+        session = self._sessions.get(session_id, {})
+        project = session.get('project', '')
+        safe_project = project.replace('\\', '\\\\').replace('"', '\\"')
+
+        # Try to focus the Terminal/iTerm2 window whose title contains the project name,
+        # then paste. Falls back to whatever window is frontmost.
+        script = f'''
+set projectName to "{safe_project}"
+set didFocus to false
+
+if application "Terminal" is running then
+    tell application "Terminal"
+        repeat with w in every window
+            repeat with t in every tab of w
+                if title of t contains projectName then
+                    set selected tab of w to t
+                    set index of w to 1
+                    activate
+                    set didFocus to true
+                    exit repeat
+                end if
+            end repeat
+            if didFocus then exit repeat
+        end repeat
+    end tell
+end if
+
+if not didFocus and application "iTerm2" is running then
+    tell application "iTerm2"
+        repeat with w in every window
+            repeat with t in every tab of w
+                if name of current session of t contains projectName then
+                    tell w to select t
+                    activate
+                    set didFocus to true
+                    exit repeat
+                end if
+            end repeat
+            if didFocus then exit repeat
+        end repeat
+    end tell
+end if
+
+delay 0.3
+tell application "System Events"
+    keystroke "v" using command down
+    delay 0.1
+    keystroke return
+end tell
+'''
         try:
             proc = await asyncio.create_subprocess_exec(
                 'osascript', '-e', script,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
             )
-            _, err = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+            _, err = await asyncio.wait_for(proc.communicate(), timeout=8.0)
             if err:
                 print(f'[claudecode-controller] osascript: {err.decode().strip()}', file=sys.stderr)
         except Exception as e:
-            print(f'[claudecode-controller] _type_in_terminal failed: {e}', file=sys.stderr)
+            print(f'[claudecode-controller] _route_to_terminal failed: {e}', file=sys.stderr)
 
     # ------------------------------------------------------------------
     # Unix socket server (hook scripts → main.py)
@@ -269,10 +341,8 @@ class MCPClient:
                     writer.write(json.dumps(response, ensure_ascii=False).encode())
                     await writer.drain()
 
-            elif msg_type == 'chat_prompt':
-                context = msg.get('context', '')
-                title = msg.get('title', 'Send to Claude')
-                asyncio.create_task(self.start_chat_block(context=context, title=title))
+            elif msg_type == 'session_active':
+                self._handle_session_active(msg)
                 writer.write(json.dumps({'status': 'ok'}, ensure_ascii=False).encode())
                 await writer.drain()
 
@@ -376,11 +446,16 @@ class MCPClient:
             return None, None
 
     async def _handle_tool_executed(self, msg):
-        """Called by PostToolUse hook — unblocks any permission block waiting for this tool."""
+        """Called by PostToolUse hook — registers session and unblocks any pending permission block."""
         session_id = msg.get('session_id', '')
         tool_name = msg.get('tool_name', '')
+        cwd = msg.get('cwd', '')
         if not session_id or not tool_name:
             return
+        # Register session on first tool execution if not already known
+        is_new = self._register_session(session_id, cwd)
+        if is_new:
+            asyncio.create_task(self._emit_session_block(session_id))
         key = (session_id, tool_name)
         block_ids = self._tool_block_map.pop(key, [])
         for block_id in block_ids:
@@ -446,16 +521,11 @@ class MCPClient:
 # ------------------------------------------------------------------
 
 async def _tile_heartbeat(client):
-    """Re-emit the tile and chat block every 5 minutes while the script runs.
-    TTL=600 means both blocks disappear within 10 minutes of the script stopping."""
+    """Re-emit the tile every 5 minutes while the script runs.
+    TTL=600 means the tile disappears within 10 minutes of the script stopping."""
     while True:
         await asyncio.sleep(300)
         await client._update_tile()
-        if client._active_chat_block_id:
-            await client.start_chat_block(
-                context=client._chat_context,
-                title=client._chat_title,
-            )
 
 
 async def run():
@@ -472,8 +542,6 @@ async def run():
     try:
         await client.initialize()
         await client._update_tile()
-        # Always-available input block for sending messages to Claude
-        await client.start_chat_block()
     except Exception as e:
         print(f'[claudecode-controller] MCP initialize error: {e}', file=sys.stderr)
 

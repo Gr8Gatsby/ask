@@ -12,6 +12,7 @@ SOCKET_PATH = os.path.expanduser('~/.ask/sockets/claudecode-controller.sock')
 
 data = json.load(sys.stdin)
 session_id = data.get('session_id', '')
+cwd = data.get('cwd', '')
 
 if not session_id:
     sys.exit(0)
@@ -26,6 +27,7 @@ try:
     sock.sendall(json.dumps({
         'type': 'session_stop',
         'session_id': session_id,
+        'cwd': cwd,
         'last_message': last_text,
     }).encode())
     sock.close()

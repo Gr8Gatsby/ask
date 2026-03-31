@@ -11,6 +11,7 @@ enum RKBlockType: String, Codable {
     case infoCard = "info_card"
     case chatPrompt = "chat_prompt"
     case claudeMessage = "claude_message"
+    case claudeSession = "claude_session"
     case iconCard = "icon_card"
     case tile   // drives home-screen tile display; not shown in detail view
     case countdown
@@ -60,6 +61,22 @@ struct RKClaudeMessagePayload: Codable {
     enum CodingKeys: String, CodingKey {
         case text
         case sessionId = "session_id"
+    }
+}
+
+struct RKClaudeSessionPayload: Codable {
+    let sessionId: String
+    let project: String
+    let cwd: String?
+    let lastMessage: String?
+    let placeholder: String?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case project
+        case cwd
+        case lastMessage = "last_message"
+        case placeholder
     }
 }
 
@@ -151,7 +168,7 @@ struct RKBlock: Identifiable {
 
     var requiresResponse: Bool {
         switch blockType {
-        case .confirmation, .prompt, .chatPrompt, .picker, .list, .detail: return true
+        case .confirmation, .prompt, .chatPrompt, .picker, .list, .detail, .claudeSession: return true
         case .alert, .status, .infoCard, .iconCard, .claudeMessage, .tile, .countdown, .feedItem: return false
         }
     }
@@ -190,6 +207,11 @@ struct RKBlock: Identifiable {
     var claudeMessagePayload: RKClaudeMessagePayload? {
         guard blockType == .claudeMessage else { return nil }
         return try? JSONDecoder().decode(RKClaudeMessagePayload.self, from: payloadData)
+    }
+
+    var claudeSessionPayload: RKClaudeSessionPayload? {
+        guard blockType == .claudeSession else { return nil }
+        return try? JSONDecoder().decode(RKClaudeSessionPayload.self, from: payloadData)
     }
 
     var iconCardPayload: RKIconCardPayload? {

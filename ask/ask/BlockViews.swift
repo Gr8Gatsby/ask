@@ -151,6 +151,10 @@ struct BlockView: View {
             if let p = block.claudeMessagePayload {
                 ClaudeMessageBlockView(payload: p)
             }
+        case .claudeSession:
+            if let p = block.claudeSessionPayload {
+                ClaudeSessionBlockView(payload: p, onRespond: onRespond)
+            }
         case .iconCard:
             if let p = block.iconCardPayload {
                 IconCardBlockView(payload: p, iconData: block.scriptIconData, icon: block.scriptIcon)
@@ -439,6 +443,7 @@ struct PromptBlockView: View {
 
 struct ChatPromptBlockView: View {
     let payload: RKChatPromptPayload
+    var claudeMessage: String? = nil
     let onRespond: (String) async -> Void
 
     @State private var text = ""
@@ -447,6 +452,11 @@ struct ChatPromptBlockView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: BlockStyle.innerSpacing + 2) {
+            // Inline claude_message block — shown on top without redundant header
+            if let msg = claudeMessage, !msg.isEmpty {
+                ClaudeMarkdownView(text: msg)
+                Divider()
+            }
             // Claude's last message shown as context — rendered as markdown
             if let context = payload.context, !context.isEmpty {
                 VStack(alignment: .leading, spacing: BlockStyle.innerSpacing) {
@@ -1047,20 +1057,110 @@ struct ClaudeMessageBlockView: View {
     let payload: RKClaudeMessagePayload
 
     var body: some View {
+        ClaudeMarkdownView(text: payload.text)
+            .padding(.vertical, BlockStyle.blockVerticalPadding)
+    }
+}
+
+// MARK: - ClaudeSession
+
+struct ClaudeSessionBlockView: View {
+    let payload: RKClaudeSessionPayload
+    let onRespond: (String) async -> Void
+
+    @State private var text = ""
+    @State private var responding = false
+    @State private var sentMessage = ""
+
+    var body: some View {
         VStack(alignment: .leading, spacing: BlockStyle.innerSpacing + 2) {
-            HStack(spacing: 4) {
+            // Session header
+            HStack(spacing: 6) {
                 Image("claudecode")
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 12, height: 12)
-                Text("Claude Code")
-                    .font(.caption2)
-                    .fontWeight(.medium)
-                    .foregroundStyle(.secondary)
+                    .frame(width: 14, height: 14)
+                Text(payload.project)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                Spacer()
             }
+
+            // Last Claude message
+            if let msg = payload.lastMessage, !msg.isEmpty {
+                ClaudeMarkdownView(text: msg)
+                    .padding(8)
+                    .background(Color(.systemGray6))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
             Divider()
-            ClaudeMarkdownView(text: payload.text)
+
+            // Sent message bubble
+            if !sentMessage.isEmpty {
+                VStack(alignment: .trailing, spacing: 2) {
+                    HStack {
+                        Spacer(minLength: 40)
+                        Text(sentMessage)
+                            .font(.caption)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color.accentColor)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    HStack(spacing: 4) {
+                        Spacer()
+                        if responding {
+                            ProgressView().scaleEffect(0.5)
+                            Text("Sending…")
+                        } else {
+                            Image(systemName: "checkmark")
+                            Text("Sent")
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
+                .transition(.opacity)
+            }
+
+            // Chat input
+            HStack(alignment: .bottom, spacing: 8) {
+                TextField(payload.placeholder ?? "Reply to Claude…", text: $text, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.subheadline)
+                    .lineLimit(1...6)
+                    .disabled(responding)
+                    .onSubmit { submit() }
+
+                Button { submit() } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(
+                            text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                ? Color.secondary : Color.accentColor
+                        )
+                }
+                .disabled(responding || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
         }
         .padding(.vertical, BlockStyle.blockVerticalPadding)
+        .onChange(of: payload.lastMessage) { _, _ in
+            withAnimation { sentMessage = "" }
+        }
+    }
+
+    private func submit() {
+        let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !answer.isEmpty, !responding else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation { sentMessage = answer }
+        text = ""
+        Task {
+            responding = true
+            await onRespond(answer)
+            responding = false
+        }
     }
 }

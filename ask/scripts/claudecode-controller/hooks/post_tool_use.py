@@ -14,6 +14,7 @@ SOCKET_PATH = os.path.expanduser('~/.ask/sockets/claudecode-controller.sock')
 data = json.load(sys.stdin)
 session_id = data.get('session_id', '')
 tool_name = data.get('tool_name', '')
+cwd = data.get('cwd', '')
 
 if not session_id or not tool_name:
     sys.exit(0)
@@ -26,6 +27,7 @@ try:
         'type': 'tool_executed',
         'session_id': session_id,
         'tool_name': tool_name,
+        'cwd': cwd,
     }).encode())
     sock.close()
 except Exception:
