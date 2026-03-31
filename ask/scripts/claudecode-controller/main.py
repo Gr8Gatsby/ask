@@ -73,9 +73,13 @@ class MCPClient:
         self._write({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         self._initialized = True
         print('[claudecode-controller] MCP initialized', file=sys.stderr)
-        # Restore sessions from disk, then scan for live claude processes
+        # Restore sessions from disk (pid-* sessions are NOT persisted, so none load here),
+        # then scan for live claude processes to register fresh pid-* entries.
         self._load_sessions()
         self._discover_active_processes()
+        # Prune any pid-* sessions whose process is no longer running (discovery may have
+        # registered them before we checked, or they died between pgrep and now).
+        self._prune_dead_pid_sessions()
         for session_id, info in list(self._sessions.items()):
             asyncio.create_task(
                 self._emit_session_block(session_id, last_message=info.get('last_message', ''))
@@ -197,11 +201,14 @@ class MCPClient:
         return f'{path_label} [{session_id[:6]}]'
 
     def _save_sessions(self):
-        """Persist _sessions to disk so restarts can re-emit known sessions."""
+        """Persist _sessions to disk so restarts can re-emit known sessions.
+        PID-based sessions (pid-*) are transient process discoveries and are NOT persisted."""
         try:
             os.makedirs(os.path.dirname(SESSIONS_PATH), exist_ok=True)
+            to_save = {sid: info for sid, info in self._sessions.items()
+                       if not sid.startswith('pid-')}
             with open(SESSIONS_PATH, 'w') as f:
-                json.dump(self._sessions, f)
+                json.dump(to_save, f)
         except Exception as e:
             print(f'[claudecode-controller] session save failed: {e}', file=sys.stderr)
 
@@ -257,6 +264,29 @@ class MCPClient:
                     pass
         except Exception as e:
             print(f'[claudecode-controller] process discovery failed: {e}', file=sys.stderr)
+
+    @staticmethod
+    def _pid_session_alive(session_id: str) -> bool:
+        """Return True if the process behind a pid-{n} session still exists."""
+        if not session_id.startswith('pid-'):
+            return True
+        try:
+            pid = int(session_id[4:])
+            os.kill(pid, 0)  # signal 0 = existence check, no-op if alive
+            return True
+        except (ValueError, ProcessLookupError):
+            return False
+        except PermissionError:
+            return True  # process exists but we can't signal it
+
+    def _prune_dead_pid_sessions(self):
+        """Remove pid-* sessions whose process is no longer running."""
+        dead = [sid for sid in list(self._sessions) if sid.startswith('pid-') and not self._pid_session_alive(sid)]
+        for sid in dead:
+            self._sessions.pop(sid, None)
+            self._working_sessions.discard(sid)
+            print(f'[claudecode-controller] pruned dead pid session {sid}', file=sys.stderr)
+        return dead
 
     def _register_session(self, session_id: str, cwd: str):
         """Register a session if new; return True if it was new."""
@@ -645,11 +675,20 @@ async def _session_heartbeat(client):
     """Re-emit all known session blocks every 5 minutes so idle sessions stay
     visible on iOS. TTL=3600 means a session block survives up to 1 hour of
     total inactivity (last heartbeat + TTL), so closing a terminal without
-    a session_stop will clean up within ~65 minutes at worst."""
+    a session_stop will clean up within ~65 minutes at worst.
+
+    On each heartbeat, dead pid-* sessions are pruned and their blocks cleared."""
     while True:
         await asyncio.sleep(300)
         if not client._initialized:
             continue
+        # Prune pid-* sessions whose process is gone and clear their iOS blocks
+        dead = client._prune_dead_pid_sessions()
+        for session_id in dead:
+            try:
+                await client.clear_block(client._session_block_id(session_id))
+            except Exception:
+                pass
         for session_id in list(client._sessions.keys()):
             try:
                 await client._emit_session_block(session_id)

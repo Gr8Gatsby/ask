@@ -1,7 +1,7 @@
 {
   "id": "claudecode-controller",
   "name": "Claude Code",
-  "version": "1.9.0",
+  "version": "2.0.0",
   "description": "Claude Code session supervisor — routes permissions and notifications to iPhone",
   "entry": "main.py",
   "icon": "sparkles",
