@@ -444,38 +444,49 @@ set didFocus to false
 
 if application "Terminal" is running then
     tell application "Terminal"
-        repeat with w in every window
-            repeat with t in every tab of w
-                if title of t contains projectName then
-                    set selected tab of w to t
-                    set index of w to 1
-                    activate
-                    set didFocus to true
-                    exit repeat
-                end if
-            end repeat
-            if didFocus then exit repeat
-        end repeat
-    end tell
-end if
-
-if not didFocus and application "iTerm2" is running then
-    tell application "iTerm2"
-        repeat with w in every window
-            repeat with t in every tab of w
-                repeat with s in every session of t
-                    if name of s contains projectName then
-                        tell w to select t
+        repeat with w in windows
+            set tList to tabs of w
+            repeat with t in tList
+                try
+                    if name of t contains projectName then
+                        set selected tab of w to t
+                        set index of w to 1
                         activate
                         set didFocus to true
                         exit repeat
                     end if
+                end try
+            end repeat
+            if didFocus then exit repeat
+        end repeat
+        if not didFocus then activate
+    end tell
+    set didFocus to true
+end if
+
+if not didFocus and application "iTerm2" is running then
+    tell application "iTerm2"
+        repeat with w in windows
+            set tList to tabs of w
+            repeat with t in tList
+                set sList to sessions of t
+                repeat with s in sList
+                    try
+                        if name of s contains projectName then
+                            select t
+                            activate
+                            set didFocus to true
+                            exit repeat
+                        end if
+                    end try
                 end repeat
                 if didFocus then exit repeat
             end repeat
             if didFocus then exit repeat
         end repeat
+        if not didFocus then activate
     end tell
+    set didFocus to true
 end if
 
 delay 0.3
