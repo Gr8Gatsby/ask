@@ -395,22 +395,30 @@ class GitHubScript:
         labels  = ', '.join(l['name'] for l in issue.get('labels', [])) or None
         created = issue.get('createdAt', '')[:10]
 
+        # Clear any previously open detail block
+        if self._current_detail_block_id:
+            await self.mcp.clear_block(self._current_detail_block_id)
+
+        block_id = f'github-issue-{number}'
+        self._current_detail_block_id = block_id
+
         # Markdown body: metadata header + issue body
         meta = f'**#{number}** · @{author} · {created}'
         if labels:
             meta += f' · {labels}'
         detail_body = meta + (f'\n\n{body}' if body else '')
 
-        self.mcp.set_callback(BLOCK_ISSUE_DET, self._on_issue_detail_dismissed)
-        await self.mcp.emit_block(BLOCK_ISSUE_DET, 'detail', {
+        async def on_dismissed(_value: str):
+            self._current_detail_block_id = None
+            await self.mcp.clear_block(block_id)
+            # Re-register list callback so the user can tap another issue
+            self.mcp.set_callback(BLOCK_ISSUES_LIST, self._on_issues_list_response)
+
+        self.mcp.set_callback(block_id, on_dismissed)
+        await self.mcp.emit_block(block_id, 'detail', {
             'title': title,
             'body': detail_body,
         }, ttl=3600)
-
-    async def _on_issue_detail_dismissed(self, _value: str):
-        await self.mcp.clear_block(BLOCK_ISSUE_DET)
-        # Re-register list callback so the user can tap another issue
-        self.mcp.set_callback(BLOCK_ISSUES_LIST, self._on_issues_list_response)
 
     # -- New issue --
 
