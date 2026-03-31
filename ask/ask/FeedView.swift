@@ -7,67 +7,43 @@ struct FeedView: View {
     @Environment(iOSCloudKitService.self) private var cloudKit
     @Environment(\.scenePhase) private var scenePhase
 
-    @State private var machines: [AskMachine] = []
-    @State private var feedBlocks: [RKBlock] = []
-    @State private var activeMachineID: String?
-    @State private var hasLoaded = false
+    var machines: [AskMachine] = []
+    var activeMachineID: String? = nil
+
+    @State private var store = FeedStore.shared
     @State private var pollTask: Task<Void, Never>?
-    @State private var selectedScriptID: String?
+    @State private var selectedItem: LocalFeedItem?
 
     private var activeMachine: AskMachine? {
         if let id = activeMachineID { return machines.first { $0.id == id } }
         return machines.sorted { $0.lastHeartbeat > $1.lastHeartbeat }.first
     }
 
-    private var feedGroups: [ScriptGroup] {
-        let grouped = Dictionary(grouping: feedBlocks, by: { $0.scriptID })
-        return grouped.keys.sorted().map { ScriptGroup(scriptID: $0, blocks: grouped[$0] ?? []) }
-    }
-
     var body: some View {
-        NavigationStack {
-            Group {
-                if !hasLoaded {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if feedGroups.isEmpty {
-                    ContentUnavailableView {
-                        Label("No Updates", systemImage: "tray")
-                    } description: {
-                        Text("Results from scheduled scripts will appear here.")
-                    }
-                } else {
-                    feedList
+        Group {
+            if store.items.isEmpty {
+                ContentUnavailableView {
+                    Label("No Feed Updates", systemImage: "tray")
+                } description: {
+                    Text("Updates from scheduled scripts will appear here.")
                 }
+            } else {
+                feedList
             }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { toolbar }
         }
-        .fullScreenCover(
-            isPresented: Binding(
-                get: { selectedScriptID != nil },
-                set: { if !$0 { selectedScriptID = nil } }
-            )
-        ) {
-            if let id = selectedScriptID {
-                ScriptDetailView(
-                    scriptID: id,
-                    allBlocks: feedBlocks,
-                    isWaiting: false,
-                    onRespond: { _, _ in }
-                )
-            }
+        .sheet(item: $selectedItem) { item in
+            FeedItemDetailSheet(item: item)
         }
         .task {
-            await load()
+            await fetchFromCloudKit()
             startPolling()
         }
         .onDisappear { pollTask?.cancel() }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await load() } }
+            if phase == .active { Task { await fetchFromCloudKit() } }
         }
         .onReceive(NotificationCenter.default.publisher(for: .askRefreshRequired)) { _ in
-            Task<Void, Never> { await load() }
+            Task<Void, Never> { await fetchFromCloudKit() }
         }
     }
 
@@ -75,42 +51,23 @@ struct FeedView: View {
 
     private var feedList: some View {
         List {
-            ForEach(feedGroups) { group in
-                Section {
-                    FeedGroupCard(group: group) {
-                        selectedScriptID = group.scriptID
-                    }
+            ForEach(store.items) { item in
+                Button { selectedItem = item } label: {
+                    FeedItemRow(item: item)
                 }
-                .listSectionSpacing(4)
+                .buttonStyle(.plain)
             }
         }
-        .listStyle(.insetGrouped)
-        .refreshable { await load() }
-    }
-
-    // MARK: - Toolbar
-
-    @ToolbarContentBuilder
-    private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .principal) {
-            Text("Feed")
-                .font(.headline)
-        }
+        .listStyle(.plain)
+        .refreshable { await fetchFromCloudKit() }
     }
 
     // MARK: - Data
 
-    private func load() async {
-        if machines.isEmpty {
-            if let fresh = try? await cloudKit.fetchMachines() {
-                machines = fresh
-            }
-        }
-        if let machine = activeMachine,
-           let fresh = try? await cloudKit.fetchBlocks(machineID: machine.id) {
-            feedBlocks = fresh.filter { $0.isFeedBlock && $0.blockType != .alert }
-        }
-        hasLoaded = true
+    private func fetchFromCloudKit() async {
+        guard let machine = activeMachine else { return }
+        _ = try? await cloudKit.fetchBlocks(machineID: machine.id)
+        // FeedStore.shared.upsert() is called inside fetchBlocks for feed_item blocks
     }
 
     private func startPolling() {
@@ -119,100 +76,98 @@ struct FeedView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(30))
                 guard !Task.isCancelled else { break }
-                if let machine = activeMachine,
-                   let fresh = try? await cloudKit.fetchBlocks(machineID: machine.id) {
-                    feedBlocks = fresh.filter { $0.isFeedBlock && $0.blockType != .alert }
-                }
+                await fetchFromCloudKit()
             }
         }
     }
 }
 
-// MARK: - FeedGroupCard
+// MARK: - FeedItemRow
 
-private struct FeedGroupCard: View {
-    let group: ScriptGroup
-    let onTap: () -> Void
-
-    private var latestBlock: RKBlock? { group.blocks.max(by: { $0.createdAt < $1.createdAt }) }
+private struct FeedItemRow: View {
+    let item: LocalFeedItem
 
     var body: some View {
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 8) {
-                // Header: icon + name + timestamp
-                HStack(spacing: 10) {
-                    FeedScriptIconView(iconData: group.iconData, sfSymbol: group.icon ?? "doc.text")
-                    Text(group.name)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    Spacer()
-                    if let date = latestBlock?.createdAt {
-                        Text(date, style: .relative)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+        HStack(spacing: 10) {
+            Circle()
+                .fill(statusColor(item.statusColor))
+                .frame(width: 8, height: 8)
 
-                // Summary: use tile label or first status/info label
-                if let label = group.tileLabel ?? group.blocks.first?.statusPayload?.label {
-                    HStack(spacing: 6) {
-                        if let color = group.tileStatusColor {
-                            Circle()
-                                .fill(statusColor(color))
-                                .frame(width: 7, height: 7)
-                        }
-                        Text(label)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-                }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.headline)
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
 
-                // Body text if available
-                if let body = group.tileBody {
-                    Text(body)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                }
+                Text(sourceLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .padding(.vertical, 4)
+
+            Spacer()
+
+            Text(item.timestamp, style: .relative)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
-        .buttonStyle(.plain)
+        .padding(.vertical, 4)
     }
 
-    private func statusColor(_ name: String) -> Color {
+    private var sourceLine: String {
+        item.scriptName ?? item.scriptID
+    }
+
+    private func statusColor(_ name: String?) -> Color {
         switch name {
         case "green":  return .green
         case "blue":   return .blue
         case "orange": return .orange
         case "red":    return .red
         case "yellow": return .yellow
-        default:       return .secondary
+        default:       return Color(.systemGray4)
         }
     }
 }
 
-// MARK: - FeedScriptIconView
+// MARK: - FeedItemDetailSheet
 
-private struct FeedScriptIconView: View {
-    let iconData: String?
-    let sfSymbol: String
+private struct FeedItemDetailSheet: View {
+    let item: LocalFeedItem
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        Group {
-            if let data = iconData,
-               let imageData = Data(base64Encoded: data),
-               let uiImage = UIImage(data: imageData) {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .scaledToFit()
-            } else {
-                Image(systemName: sfSymbol)
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(item.headline)
+                        .font(.headline)
+
+                    if let body = item.body, !body.isEmpty {
+                        Text(body)
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Divider()
+
+                    Label(item.scriptName ?? item.scriptID, systemImage: "app.badge")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
+                    Label(item.timestamp.formatted(date: .long, time: .shortened), systemImage: "clock")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+            }
+            .navigationTitle(item.scriptName ?? item.scriptID)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
             }
         }
-        .frame(width: 28, height: 28)
     }
 }

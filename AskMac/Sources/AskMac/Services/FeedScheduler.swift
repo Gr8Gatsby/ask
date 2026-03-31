@@ -45,6 +45,12 @@ final class FeedScheduler: @unchecked Sendable {
         lock.unlock()
     }
 
+    func task(for scriptID: String) -> Task<Void, Never>? {
+        lock.lock()
+        defer { lock.unlock() }
+        return tasks[scriptID]
+    }
+
     func cancel(scriptID: String) {
         lock.lock()
         tasks.removeValue(forKey: scriptID)?.cancel()

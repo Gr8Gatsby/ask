@@ -356,6 +356,11 @@ final class iOSCloudKitService {
             _ = try? await database.modifyRecords(saving: [], deleting: toDelete, savePolicy: .allKeys, atomically: false)
         }
 
+        let feedItems = blocks.filter { $0.blockType == .feedItem }
+        if !feedItems.isEmpty {
+            FeedStore.shared.upsert(feedItems)
+        }
+
         return blocks.sorted {
             // Confirmation and prompt blocks (require response) sort before informational ones
             if $0.requiresResponse != $1.requiresResponse { return $0.requiresResponse }

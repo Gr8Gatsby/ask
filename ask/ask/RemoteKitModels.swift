@@ -16,6 +16,7 @@ enum RKBlockType: String, Codable {
     case picker
     case list
     case detail
+    case feedItem = "feed_item"
 }
 
 // MARK: - Block payloads
@@ -98,6 +99,18 @@ struct RKDetailPayload: Codable {
     let actions: [String]?
 }
 
+struct RKFeedItemPayload: Codable {
+    let headline: String
+    let body: String?
+    let statusColor: String?
+
+    enum CodingKeys: String, CodingKey {
+        case headline
+        case body
+        case statusColor = "status_color"
+    }
+}
+
 struct RKInfoCardPayload: Codable {
     struct Pair: Codable {
         let key: String
@@ -128,7 +141,7 @@ struct RKBlock: Identifiable {
     var requiresResponse: Bool {
         switch blockType {
         case .confirmation, .prompt, .chatPrompt, .picker, .list, .detail: return true
-        case .alert, .status, .infoCard, .iconCard, .tile, .countdown: return false
+        case .alert, .status, .infoCard, .iconCard, .tile, .countdown, .feedItem: return false
         }
     }
 
@@ -191,6 +204,11 @@ struct RKBlock: Identifiable {
     var detailPayload: RKDetailPayload? {
         guard blockType == .detail else { return nil }
         return try? JSONDecoder().decode(RKDetailPayload.self, from: payloadData)
+    }
+
+    var feedItemPayload: RKFeedItemPayload? {
+        guard blockType == .feedItem else { return nil }
+        return try? JSONDecoder().decode(RKFeedItemPayload.self, from: payloadData)
     }
 
     /// payloadJSON with UTF-16 surrogate pairs decoded to real Unicode scalars, as UTF-8 Data.

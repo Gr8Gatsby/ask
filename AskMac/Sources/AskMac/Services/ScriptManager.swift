@@ -111,8 +111,9 @@ final class ScriptManager {
         feedScheduler.cancelAll()
     }
 
-    /// Rescans the scripts directory and launches any newly discovered scripts.
-    /// Already-running scripts are left untouched.
+    /// Rescans the scripts directory, picks up newly discovered scripts, and restarts
+    /// all already-tracked enabled scripts (tile scripts restart; feed scripts get an
+    /// immediate run if not currently running).
     func reload() {
         let fm = FileManager.default
         guard let subdirs = try? fm.contentsOfDirectory(
@@ -128,9 +129,6 @@ final class ScriptManager {
                   let manifest = try? JSONDecoder().decode(ScriptManifest.self, from: data)
             else { continue }
 
-            // Skip scripts that are already tracked
-            guard manifests[manifest.id] == nil else { continue }
-
             let iconCandidate = manifest.iconFile ?? "icon.svg"
             let iconURL = dir.appendingPathComponent(iconCandidate)
             let resolvedIcon = iconURL.resolvingSymlinksInPath()
@@ -141,22 +139,42 @@ final class ScriptManager {
             let svgString: String? = iconInBounds && iconURL.pathExtension.lowercased() == "svg"
                 ? try? String(contentsOf: iconURL, encoding: .utf8)
                 : nil
+
+            let isNew = manifests[manifest.id] == nil
             manifests[manifest.id] = (manifest, dir, iconImage, svgString)
+
             let isEnabled = !settings.disabledScripts.contains(manifest.id)
-            if isEnabled {
-                if manifest.isFeed {
+            guard isEnabled else {
+                upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon,
+                             iconImage: iconImage, status: .stopped, isEnabled: false)
+                continue
+            }
+
+            if manifest.isFeed {
+                // Stop any existing tile connection for this script (handles tile→feed transition)
+                if let conn = connections[manifest.id] {
+                    conn.stop()
+                    connections.removeValue(forKey: manifest.id)
+                    activeBlocks.removeValue(forKey: manifest.id)
+                }
+                // Set up the cron schedule if not already scheduled
+                if feedScheduler.task(for: manifest.id) == nil {
                     feedScheduler.schedule(manifest: manifest, scriptDir: dir, settings: settings) { [weak self] m, d in
                         self?.launchFeedRun(manifest: m, scriptDir: d)
                     }
-                    launchFeedRun(manifest: manifest, scriptDir: dir)
-                } else {
-                    launch(manifest: manifest, scriptDir: dir)
                 }
+                // Trigger an immediate run
+                launchFeedRun(manifest: manifest, scriptDir: dir)
             } else {
-                upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon,
-                             iconImage: iconImage, status: .stopped, isEnabled: false)
+                // Tile script: stop existing connection then re-launch
+                if !isNew, let conn = connections[manifest.id] {
+                    conn.stop()
+                    connections.removeValue(forKey: manifest.id)
+                    activeBlocks.removeValue(forKey: manifest.id)
+                }
+                launch(manifest: manifest, scriptDir: dir)
             }
-            print("[ScriptManager] Reloaded new script: \(manifest.id)")
+            print("[ScriptManager] \(isNew ? "Loaded" : "Refreshed") script: \(manifest.id)")
         }
     }
 

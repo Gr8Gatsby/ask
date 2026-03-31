@@ -167,6 +167,8 @@ struct BlockView: View {
             }
         case .detail:
             EmptyView() // detail blocks are surfaced as navigation pushes in ScriptDetailView
+        case .feedItem:
+            EmptyView() // feed_item blocks are shown in FeedView, not in block detail
         }
     }
 

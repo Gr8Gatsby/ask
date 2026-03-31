@@ -61,7 +61,6 @@ struct HomeView: View {
     @State private var hasLoaded = false
     @State private var activeMachineID: String?
     @State private var showSettings = false
-    @State private var showMachinePicker = false
     @State private var selectedScriptID: String?
     @State private var pollTask: Task<Void, Never>?
     @State private var lastHeartbeatAt: Date = .distantPast
@@ -73,8 +72,11 @@ struct HomeView: View {
     @State private var deviceEnabled: Bool = true
     @State private var showQueueReview: Bool = false
     @State private var wasOffline: Bool = false
+    @State private var selectedTab: HomeTab = .home
 
     private var offlineQueue: OfflineQueue { .shared }
+
+    enum HomeTab { case home, feed }
 
     private var macIsOffline: Bool {
         activeMachine?.connectionStatus == .offline
@@ -115,20 +117,15 @@ struct HomeView: View {
                     emptyState
                 } else if !deviceEnabled {
                     disabledState
+                } else if selectedTab == .feed {
+                    FeedView(machines: machines, activeMachineID: activeMachineID)
                 } else {
                     content
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbar }
-            .confirmationDialog("Switch Machine", isPresented: $showMachinePicker, titleVisibility: .visible) {
-                ForEach(machines) { machine in
-                    Button(machine.name) {
-                        activeMachineID = machine.id
-                        Task { await load() }
-                    }
-                }
-            }
+            .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
             .sheet(isPresented: $showQueueReview) {
                 QueueReviewSheet(isPresented: $showQueueReview)
                     .environment(cloudKit)
@@ -215,7 +212,13 @@ struct HomeView: View {
         }
         .onDisappear { pollTask?.cancel() }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await load() } }
+            if phase == .active {
+                Task {
+                    // Re-check account status only when foregrounding (throttled by CK internally)
+                    await cloudKit.checkAccountStatus()
+                    await load()
+                }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .askRefreshRequired)) { _ in
             Task<Void, Never> { await load() }
@@ -253,7 +256,7 @@ struct HomeView: View {
         .refreshable { await load() }
     }
 
-    // MARK: - Toolbar
+    // MARK: - Toolbar (nav bar title only)
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
@@ -261,40 +264,47 @@ struct HomeView: View {
             Text("Ask")
                 .font(.custom("PlaywriteNGModern-Regular", size: 22))
         }
-        ToolbarItem(placement: .bottomBar) {
-            machinePickerButton
-        }
-        ToolbarItem(placement: .bottomBar) {
+    }
+
+    // MARK: - Custom bottom bar (avoids UIKitToolbar subview warning on iOS 26)
+
+    private var bottomBar: some View {
+        HStack {
             Spacer()
-        }
-        ToolbarItem(placement: .bottomBar) {
+            Picker("", selection: $selectedTab) {
+                Text("Home").tag(HomeTab.home)
+                Text("Feed").tag(HomeTab.feed)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 110)
+            .scaleEffect(0.85)
+            Spacer()
+            machineMenuButton
+                .padding(.trailing, 8)
             Button { showSettings = true } label: {
                 Image(systemName: "gearshape")
             }
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.bar)
     }
 
     @ViewBuilder
-    private var machinePickerButton: some View {
-        if let machine = activeMachine {
-            let offline = machine.connectionStatus == .offline
-            Button {
-                if machines.count > 1 { showMachinePicker = true }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: machine.systemImage)
-                        .font(.footnote)
-                    Text(machine.name)
-                        .font(.footnote)
-                    if machines.count > 1 {
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.caption2)
-                            .foregroundStyle(offline ? .tertiary : .secondary)
-                    }
+    private var machineMenuButton: some View {
+        Menu {
+            ForEach(machines) { machine in
+                Button {
+                    activeMachineID = machine.id
+                    Task { await load() }
+                } label: {
+                    Label(machine.name, systemImage: machine.systemImage)
                 }
-                .foregroundStyle(offline ? .secondary : .primary)
             }
-            .disabled(machines.count <= 1)
+        } label: {
+            let offline = activeMachine?.connectionStatus == .offline
+            Image(systemName: activeMachine?.systemImage ?? "desktopcomputer")
+                .foregroundStyle(offline ? .secondary : .primary)
         }
     }
 
@@ -465,6 +475,7 @@ struct HomeView: View {
         if shouldRemove {
             withAnimation(.easeOut(duration: 0.22)) {
                 blocks.removeAll { $0.id == block.id }
+                dismissedToastScriptIDs.insert(block.scriptID)
             }
         }
 
@@ -485,6 +496,7 @@ struct HomeView: View {
                         if $0.requiresResponse != $1.requiresResponse { return $0.requiresResponse }
                         return $0.createdAt > $1.createdAt
                     }
+                    dismissedToastScriptIDs.remove(block.scriptID)
                 }
             }
             burstPollingUntil = .distantPast

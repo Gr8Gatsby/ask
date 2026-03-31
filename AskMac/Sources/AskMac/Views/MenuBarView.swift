@@ -120,7 +120,7 @@ struct MenuBarView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Reload Scripts")
+                .help("Refresh Scripts")
             }
             if scriptManager.scripts.isEmpty {
                 Text("No scripts configured")

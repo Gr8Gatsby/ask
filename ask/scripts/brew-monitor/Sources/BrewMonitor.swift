@@ -10,9 +10,9 @@ struct BrewPackage {
 
 // MARK: - Block IDs
 
+private let blockFeed     = "brew-monitor-feed"
 private let blockUpdates  = "brew-monitor-updates"
 private let blockStatus   = "brew-monitor-status"
-private let blockUpToDate = "brew-monitor-uptodate"
 
 // MARK: - BrewMonitor
 
@@ -40,51 +40,51 @@ actor BrewMonitor {
     private func check() async throws {
         fputs("[brew-monitor] checking for outdated packages…\n", stderr)
 
-        try await mcp.emitBlock(blockStatus, type: "status", payload: [
-            "label": "Checking for Homebrew updates…",
-            "icon":  "arrow.clockwise",
-            "color": "blue"
-        ], ttl: 60)
+        // Clear any stale blocks from previous runs
+        await mcp.clearBlock(blockStatus)
 
         let outdated = getOutdated()
-        await mcp.clearBlock(blockStatus)
+        let ttl30Days: TimeInterval = 30 * 24 * 3600
 
         if outdated.isEmpty {
             fputs("[brew-monitor] all packages up to date\n", stderr)
             await mcp.clearBlock(blockUpdates)
-            try await mcp.emitBlock(blockUpToDate, type: "status", payload: [
-                "label": "Homebrew up to date",
-                "icon":  "checkmark.circle",
-                "color": "green"
-            ], ttl: 86400)
+            try await mcp.emitBlock(blockFeed, type: "feed_item", payload: [
+                "headline":     "Homebrew up to date",
+                "status_color": "green"
+            ], ttl: ttl30Days)
             return
         }
 
-        await mcp.clearBlock(blockUpToDate)
-
         let count = outdated.count
-        let title = "\(count) Homebrew \(count == 1 ? "update" : "updates") available"
+        let headline = "\(count) Homebrew \(count == 1 ? "package" : "packages") need updating"
         let body  = outdated.map { "\($0.name)  \($0.installed) → \($0.available)" }.joined(separator: "\n")
 
-        fputs("[brew-monitor] \(title)\n", stderr)
+        fputs("[brew-monitor] \(headline)\n", stderr)
 
-        // Register response stream BEFORE emitting so a fast response isn't missed.
+        // Post feed item (persistent, 30-day TTL)
+        try await mcp.emitBlock(blockFeed, type: "feed_item", payload: [
+            "headline":     headline,
+            "body":         body,
+            "status_color": "orange"
+        ], ttl: ttl30Days)
+
+        // Also post confirmation so user can act from the home screen
         let stream = await mcp.responseStream(blockID: blockUpdates)
-
         try await mcp.emitBlock(blockUpdates, type: "confirmation", payload: [
-            "title":   title,
-            "body":    body,
+            "title":   "Homebrew",
+            "body":    "\(count) \(count == 1 ? "package" : "packages") available to upgrade.",
             "options": ["Upgrade All", "Later"]
         ], ttl: 86400)
 
-        // Wait up to 1 hour for a user response; nil means "Later" or timeout.
+        // Wait up to 24 hours for a user response
         let response = await withTaskGroup(of: String?.self) { group -> String? in
             group.addTask {
                 for await value in stream { return value }
                 return nil
             }
             group.addTask {
-                try? await Task.sleep(for: .seconds(3600))
+                try? await Task.sleep(for: .seconds(86400))
                 return nil
             }
             guard let first = await group.next() else { return nil }
@@ -105,24 +105,21 @@ actor BrewMonitor {
             fputs("[brew-monitor] upgrade error: \(error)\n", stderr)
         }
 
-        // Emit fresh result after upgrade.
+        // Post result feed item after upgrade
         let remaining = getOutdated()
-        await mcp.clearBlock(blockUpToDate)
-
         if remaining.isEmpty {
-            try await mcp.emitBlock(blockUpToDate, type: "status", payload: [
-                "label": "Homebrew up to date",
-                "icon":  "checkmark.circle",
-                "color": "green"
-            ], ttl: 86400)
+            try await mcp.emitBlock(blockFeed, type: "feed_item", payload: [
+                "headline":     "Homebrew upgraded successfully",
+                "body":         body,
+                "status_color": "green"
+            ], ttl: ttl30Days)
         } else {
             let remCount = remaining.count
-            try await mcp.emitBlock(blockUpToDate, type: "status", payload: [
-                "label":  "\(remCount) packages still need attention",
-                "detail": "Some upgrades may require manual intervention",
-                "icon":   "exclamationmark.triangle",
-                "color":  "orange"
-            ], ttl: 86400)
+            try await mcp.emitBlock(blockFeed, type: "feed_item", payload: [
+                "headline":     "\(remCount) packages still need attention",
+                "body":         remaining.map { "\($0.name)  \($0.installed) → \($0.available)" }.joined(separator: "\n"),
+                "status_color": "orange"
+            ], ttl: ttl30Days)
         }
     }
 
