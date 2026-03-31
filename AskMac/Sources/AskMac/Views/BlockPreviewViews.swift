@@ -26,6 +26,7 @@ struct BlockPreviewView: View {
             case "detail":       DetailPreview(payload: payload, onRespond: onRespond)
             case "picker":       PickerPreview(payload: payload, onRespond: onRespond)
             case "icon_card":    IconCardPreview(payload: payload)
+            case "claude_message": ClaudeMessagePreview(payload: payload)
             case "tile":         EmptyView() // drives home-screen tile only
             default:             EmptyView()
             }
@@ -448,6 +449,30 @@ private struct IconCardPreview: View {
                 }
             }
             Spacer()
+        }
+        .padding(8)
+        .background(Color.secondary.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+}
+
+// MARK: - ClaudeMessage
+
+private struct ClaudeMessagePreview: View {
+    let payload: [String: Any]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Claude Code")
+                .font(.caption2)
+                .fontWeight(.medium)
+                .foregroundStyle(.secondary)
+            if let text = payload["text"] as? String, !text.isEmpty {
+                Text(text)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .lineLimit(4)
+            }
         }
         .padding(8)
         .background(Color.secondary.opacity(0.07))
