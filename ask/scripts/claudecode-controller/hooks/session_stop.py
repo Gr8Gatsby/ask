@@ -13,16 +13,6 @@ SOCKET_PATH = os.path.expanduser('~/.ask/sockets/claudecode-controller.sock')
 data = json.load(sys.stdin)
 session_id = data.get('session_id', '')
 
-# Debug log — records the raw payload keys and transcript length
-LOG_PATH = os.path.expanduser('~/.ask/logs/session_stop_debug.log')
-os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
-with open(LOG_PATH, 'a') as f:
-    transcript_raw = data.get('transcript', [])
-    f.write(f"session_id={session_id} keys={list(data.keys())} transcript_len={len(transcript_raw)}\n")
-    if transcript_raw:
-        last = transcript_raw[-1]
-        f.write(f"  last_msg role={last.get('role')} content_type={type(last.get('content')).__name__}\n")
-
 if not session_id:
     sys.exit(0)
 
