@@ -507,30 +507,23 @@ struct ChatPromptBlockView: View {
             }
 
             // Input area
-            VStack(alignment: .leading, spacing: BlockStyle.innerSpacing) {
-                Text(payload.title)
-                    .font(.caption2)
-                    .fontWeight(.medium)
-                    .foregroundStyle(.secondary)
+            HStack(alignment: .bottom, spacing: 8) {
+                TextField(payload.placeholder ?? "Reply to Claude…", text: $text, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.subheadline)
+                    .lineLimit(1...6)
+                    .disabled(responding)
+                    .onSubmit { submit() }
 
-                HStack(alignment: .bottom, spacing: 8) {
-                    TextField(payload.placeholder ?? "Reply to Claude…", text: $text, axis: .vertical)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.subheadline)
-                        .lineLimit(1...6)
-                        .disabled(responding)
-                        .onSubmit { submit() }
-
-                    Button { submit() } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.title3)
-                            .foregroundStyle(
-                                text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                    ? Color.secondary : Color.accentColor
-                            )
-                    }
-                    .disabled(responding || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button { submit() } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(
+                            text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                ? Color.secondary : Color.accentColor
+                        )
                 }
+                .disabled(responding || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(.vertical, BlockStyle.blockVerticalPadding)
@@ -1074,25 +1067,29 @@ struct ClaudeSessionBlockView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: BlockStyle.innerSpacing + 2) {
-            // Session header
-            HStack(spacing: 6) {
-                Image("claudecode")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 14, height: 14)
-                Text(payload.project)
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                Spacer()
-            }
+            // Session header — show short session ID as identifier
+            Text(String(payload.sessionId.prefix(8)))
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .padding(.bottom, -4)
 
-            // Last Claude message
-            if let msg = payload.lastMessage, !msg.isEmpty {
-                ClaudeMarkdownView(text: msg)
-                    .padding(8)
-                    .background(Color(.systemGray6))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            // Last Claude message (or working indicator)
+            Group {
+                if let msg = payload.lastMessage, !msg.isEmpty {
+                    ClaudeMarkdownView(text: msg)
+                } else {
+                    HStack(spacing: 6) {
+                        ProgressView().scaleEffect(0.7)
+                        Text("Claude is working…")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.systemGray6))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
 
             Divider()
 
