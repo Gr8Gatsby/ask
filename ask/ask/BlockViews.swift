@@ -1116,8 +1116,6 @@ struct ClaudeSessionBlockView: View {
                 .background(Color(.systemGray6))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
-                Divider()
-
                 // Sent message bubble
                 if !sentMessage.isEmpty {
                     VStack(alignment: .trailing, spacing: 2) {
