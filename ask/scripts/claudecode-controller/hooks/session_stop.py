@@ -26,25 +26,8 @@ with open(LOG_PATH, 'a') as f:
 if not session_id:
     sys.exit(0)
 
-# Extract the last assistant message text from the transcript
-last_text = ''
-transcript = data.get('transcript', [])
-for msg in reversed(transcript):
-    if msg.get('role') != 'assistant':
-        continue
-    content = msg.get('content', '')
-    if isinstance(content, str):
-        last_text = content.strip()
-    elif isinstance(content, list):
-        parts = []
-        for block in content:
-            if isinstance(block, dict) and block.get('type') == 'text':
-                t = block.get('text', '').strip()
-                if t:
-                    parts.append(t)
-        last_text = '\n\n'.join(parts).strip()
-    if last_text:
-        break
+# Claude Code provides the last assistant message directly in the payload
+last_text = data.get('last_assistant_message', '').strip()
 
 try:
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
