@@ -15,6 +15,7 @@ Blocks are the UI primitives that Mac scripts push to the iOS app via CloudKit. 
 | [Status](#status) | `status` | No | Show a labeled status with color |
 | [Prompt](#prompt) | `prompt` | Yes | Free-text input from the user |
 | [Chat Prompt](#chat-prompt) | `chat_prompt` | Yes | Conversational reply with context |
+| [Claude Message](#claude-message) | `claude_message` | No | Display Claude's last message in formatted markdown |
 | [Info Card](#info-card) | `info_card` | No | Key-value data display |
 | [Icon Card](#icon-card) | `icon_card` | No | Script identity card with icon |
 | [Tile](#tile) | `tile` | No | Home-screen tile update |
@@ -172,14 +173,17 @@ Collects free-text input from the user. Supports single-line or multi-line entry
 
 ## Chat Prompt
 
-A conversational reply block. Shows Claude's previous message as context above the input field.
+A conversational reply block. Shows Claude's previous message as context above the input field. The `context` field is rendered as formatted markdown.
 
 ```
 ╭─────────────────────────────────╮
 │  ╭───────────────────────────╮  │
-│  │ I found 3 failing tests.  │  │
-│  │ Should I attempt auto-    │  │
-│  │ fixes or open a ticket?   │  │
+│  │ ◉ Claude Code             │  │
+│  │                           │  │
+│  │ I found **3 failing       │  │
+│  │ tests**. Should I attempt │  │
+│  │ auto-fixes or open a      │  │
+│  │ ticket?                   │  │
 │  ╰───────────────────────────╯  │
 │                                 │
 │  ┌─────────────────────────┐    │
@@ -196,12 +200,51 @@ A conversational reply block. Shows Claude's previous message as context above t
 | Field | Type | Description |
 |---|---|---|
 | `title` | `String` | Input field label |
-| `context` | `String?` | Claude's message shown above the input |
+| `context` | `String?` | Claude's message shown above the input — rendered as markdown |
 | `placeholder` | `String?` | Placeholder (default: "Reply to Claude…") |
 
 **Implementations:**
 - iOS view: [`ask/ask/BlockViews.swift`](../ask/ask/BlockViews.swift) — `ChatPromptBlockView`
 - Mac preview: [`AskMac/Sources/AskMac/Views/BlockPreviewViews.swift`](../AskMac/Sources/AskMac/Views/BlockPreviewViews.swift) — `PromptPreview` (shared with prompt)
+
+---
+
+## Claude Message
+
+Displays Claude Code's last response in formatted markdown. Emitted by the Claude Code `Stop` hook when Claude finishes a response that does not require user input to continue. No reply input — informational only.
+
+```
+╭─────────────────────────────────╮
+│  ◉ Claude Code                  │
+│  ─────────────────────────────  │
+│  ## Analysis complete           │
+│                                 │
+│  I've reviewed the codebase     │
+│  and found **3 issues**:        │
+│                                 │
+│  - Auth token not refreshed     │
+│  - Missing error handling in    │
+│    `fetchUser()`                │
+│  - Stale cache on logout        │
+│                                 │
+│  All fixes are committed.       │
+╰─────────────────────────────────╯
+```
+
+**Payload:**
+
+| Field | Type | Description |
+|---|---|---|
+| `text` | `String` | Claude's full response — rendered as markdown |
+| `session_id` | `String?` | Claude Code session ID (for context grouping) |
+
+**Markdown rendering:** Supports headings, bold, italic, inline code, fenced code blocks, bulleted and numbered lists, and blockquotes. Tables are rendered as plain key-value rows.
+
+**Source:** Emitted by `~/.ask/scripts/stop-hook.sh` via the Claude Code `Stop` hook. The hook writes a `claude_message` block with `scriptID = "claude-code"`, `scriptName = "Claude Code"`, and a short TTL (30 minutes) so stale messages don't accumulate.
+
+**Implementations:**
+- iOS view: [`ask/ask/BlockViews.swift`](../ask/ask/BlockViews.swift) — `ClaudeMessageBlockView`
+- Mac: not applicable (Stop hook is the source, not a script)
 
 ---
 

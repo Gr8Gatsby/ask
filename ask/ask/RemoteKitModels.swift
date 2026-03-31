@@ -10,6 +10,7 @@ enum RKBlockType: String, Codable {
     case prompt
     case infoCard = "info_card"
     case chatPrompt = "chat_prompt"
+    case claudeMessage = "claude_message"
     case iconCard = "icon_card"
     case tile   // drives home-screen tile display; not shown in detail view
     case countdown
@@ -48,8 +49,18 @@ struct RKPromptPayload: Codable {
 
 struct RKChatPromptPayload: Codable {
     let title: String
-    let context: String?       // Claude's last message shown above the input
+    let context: String?       // Claude's last message shown above the input — rendered as markdown
     let placeholder: String?
+}
+
+struct RKClaudeMessagePayload: Codable {
+    let text: String
+    let sessionId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case text
+        case sessionId = "session_id"
+    }
 }
 
 struct RKTilePayload: Codable {
@@ -141,7 +152,7 @@ struct RKBlock: Identifiable {
     var requiresResponse: Bool {
         switch blockType {
         case .confirmation, .prompt, .chatPrompt, .picker, .list, .detail: return true
-        case .alert, .status, .infoCard, .iconCard, .tile, .countdown, .feedItem: return false
+        case .alert, .status, .infoCard, .iconCard, .claudeMessage, .tile, .countdown, .feedItem: return false
         }
     }
 
@@ -174,6 +185,11 @@ struct RKBlock: Identifiable {
     var chatPromptPayload: RKChatPromptPayload? {
         guard blockType == .chatPrompt else { return nil }
         return try? JSONDecoder().decode(RKChatPromptPayload.self, from: payloadData)
+    }
+
+    var claudeMessagePayload: RKClaudeMessagePayload? {
+        guard blockType == .claudeMessage else { return nil }
+        return try? JSONDecoder().decode(RKClaudeMessagePayload.self, from: payloadData)
     }
 
     var iconCardPayload: RKIconCardPayload? {

@@ -147,6 +147,10 @@ struct BlockView: View {
             if let p = block.chatPromptPayload {
                 ChatPromptBlockView(payload: p, onRespond: onRespond)
             }
+        case .claudeMessage:
+            if let p = block.claudeMessagePayload {
+                ClaudeMessageBlockView(payload: p)
+            }
         case .iconCard:
             if let p = block.iconCardPayload {
                 IconCardBlockView(payload: p, iconData: block.scriptIconData, icon: block.scriptIcon)
@@ -443,7 +447,7 @@ struct ChatPromptBlockView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: BlockStyle.innerSpacing + 2) {
-            // Claude's last message shown as context
+            // Claude's last message shown as context — rendered as markdown
             if let context = payload.context, !context.isEmpty {
                 VStack(alignment: .leading, spacing: BlockStyle.innerSpacing) {
                     HStack(spacing: 4) {
@@ -456,10 +460,8 @@ struct ChatPromptBlockView: View {
                             .fontWeight(.medium)
                             .foregroundStyle(.secondary)
                     }
-                    Text(context)
-                        .font(.caption)
+                    ClaudeMarkdownView(text: context)
                         .padding(8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                         .background(Color(.systemGray6))
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
@@ -902,6 +904,162 @@ struct InfoCardBlockView: View {
                         .fontWeight(.medium)
                 }
             }
+        }
+        .padding(.vertical, BlockStyle.blockVerticalPadding)
+    }
+}
+
+// MARK: - ClaudeMarkdownView
+
+/// Renders a markdown string using a simple block parser.
+/// Handles fenced code blocks and ATX headings natively; delegates inline
+/// formatting (bold, italic, inline code, links) to AttributedString.
+struct ClaudeMarkdownView: View {
+    let text: String
+
+    private enum Segment {
+        case paragraph(String)
+        case heading(level: Int, text: String)
+        case codeBlock(lang: String, code: String)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(segments.enumerated()), id: \.offset) { _, seg in
+                switch seg {
+                case .paragraph(let s):
+                    paragraphView(s)
+                case .heading(let level, let s):
+                    headingView(level: level, text: s)
+                case .codeBlock(_, let code):
+                    codeBlockView(code)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: Segment views
+
+    @ViewBuilder
+    private func paragraphView(_ s: String) -> some View {
+        if let attr = try? AttributedString(markdown: s,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+            Text(attr)
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            Text(s)
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private func headingView(level: Int, text: String) -> some View {
+        let font: Font = level == 1 ? .subheadline.bold() : level == 2 ? .footnote.bold() : .caption.bold()
+        Text(text)
+            .font(font)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private func codeBlockView(_ code: String) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Text(code)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+        }
+        .background(Color(.systemGray5))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    // MARK: Parser
+
+    private var segments: [Segment] {
+        var result: [Segment] = []
+        let lines = text.components(separatedBy: "\n")
+        var paraLines: [String] = []
+        var codeLines: [String] = []
+        var codeLang = ""
+        var inCode = false
+
+        func flushParagraph() {
+            let joined = paraLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !joined.isEmpty { result.append(.paragraph(joined)) }
+            paraLines = []
+        }
+
+        func flushCode() {
+            let joined = codeLines.joined(separator: "\n")
+            result.append(.codeBlock(lang: codeLang, code: joined))
+            codeLines = []
+            codeLang = ""
+        }
+
+        for line in lines {
+            if inCode {
+                if line.hasPrefix("```") {
+                    flushCode()
+                    inCode = false
+                } else {
+                    codeLines.append(line)
+                }
+                continue
+            }
+
+            if line.hasPrefix("```") {
+                flushParagraph()
+                codeLang = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                inCode = true
+                continue
+            }
+
+            if line.hasPrefix("### ") {
+                flushParagraph()
+                result.append(.heading(level: 3, text: String(line.dropFirst(4))))
+            } else if line.hasPrefix("## ") {
+                flushParagraph()
+                result.append(.heading(level: 2, text: String(line.dropFirst(3))))
+            } else if line.hasPrefix("# ") {
+                flushParagraph()
+                result.append(.heading(level: 1, text: String(line.dropFirst(2))))
+            } else {
+                paraLines.append(line)
+            }
+        }
+
+        // Flush any trailing content
+        if inCode { flushCode() }
+        flushParagraph()
+
+        return result
+    }
+}
+
+// MARK: - ClaudeMessage
+
+struct ClaudeMessageBlockView: View {
+    let payload: RKClaudeMessagePayload
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: BlockStyle.innerSpacing + 2) {
+            HStack(spacing: 4) {
+                Image("claudecode")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 12, height: 12)
+                Text("Claude Code")
+                    .font(.caption2)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+            }
+            Divider()
+            ClaudeMarkdownView(text: payload.text)
         }
         .padding(.vertical, BlockStyle.blockVerticalPadding)
     }
