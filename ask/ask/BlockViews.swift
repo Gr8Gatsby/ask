@@ -1064,82 +1064,108 @@ struct ClaudeSessionBlockView: View {
     @State private var text = ""
     @State private var responding = false
     @State private var sentMessage = ""
+    @State private var isCollapsed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: BlockStyle.innerSpacing + 2) {
-            // Session header — show short session ID as identifier
-            Text(String(payload.sessionId.prefix(8)))
-                .font(.subheadline)
-                .fontWeight(.semibold)
-                .padding(.bottom, -4)
-
-            // Last Claude message (or working indicator)
-            Group {
-                if let msg = payload.lastMessage, !msg.isEmpty {
-                    ClaudeMarkdownView(text: msg)
-                } else {
-                    HStack(spacing: 6) {
-                        ProgressView().scaleEffect(0.7)
+            // Session header with collapse toggle
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { isCollapsed.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Text(String(payload.sessionId.prefix(8)))
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.primary)
+                    if isCollapsed, let msg = payload.lastMessage, !msg.isEmpty {
+                        Text(msg)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    } else if isCollapsed {
                         Text("Claude is working…")
-                            .font(.subheadline)
+                            .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    Spacer()
+                    Image(systemName: isCollapsed ? "chevron.down" : "chevron.up")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.systemGray6))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .buttonStyle(.plain)
+            .padding(.bottom, isCollapsed ? 0 : -4)
 
-            Divider()
-
-            // Sent message bubble
-            if !sentMessage.isEmpty {
-                VStack(alignment: .trailing, spacing: 2) {
-                    HStack {
-                        Spacer(minLength: 40)
-                        Text(sentMessage)
-                            .font(.caption)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(Color.accentColor)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-                    HStack(spacing: 4) {
-                        Spacer()
-                        if responding {
-                            ProgressView().scaleEffect(0.5)
-                            Text("Sending…")
-                        } else {
-                            Image(systemName: "checkmark")
-                            Text("Sent")
+            if !isCollapsed {
+                // Last Claude message (or working indicator)
+                Group {
+                    if let msg = payload.lastMessage, !msg.isEmpty {
+                        ClaudeMarkdownView(text: msg)
+                    } else {
+                        HStack(spacing: 6) {
+                            ProgressView().scaleEffect(0.7)
+                            Text("Claude is working…")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
                 }
-                .transition(.opacity)
-            }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.systemGray6))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
 
-            // Chat input
-            HStack(alignment: .bottom, spacing: 8) {
-                TextField(payload.placeholder ?? "Reply to Claude…", text: $text, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.subheadline)
-                    .lineLimit(1...6)
-                    .disabled(responding)
-                    .onSubmit { submit() }
+                Divider()
 
-                Button { submit() } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(
-                            text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                ? Color.secondary : Color.accentColor
-                        )
+                // Sent message bubble
+                if !sentMessage.isEmpty {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        HStack {
+                            Spacer(minLength: 40)
+                            Text(sentMessage)
+                                .font(.caption)
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color.accentColor)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                        HStack(spacing: 4) {
+                            Spacer()
+                            if responding {
+                                ProgressView().scaleEffect(0.5)
+                                Text("Sending…")
+                            } else {
+                                Image(systemName: "checkmark")
+                                Text("Sent")
+                            }
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    }
+                    .transition(.opacity)
                 }
-                .disabled(responding || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                // Chat input
+                HStack(alignment: .bottom, spacing: 8) {
+                    TextField(payload.placeholder ?? "Reply to Claude…", text: $text, axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.subheadline)
+                        .lineLimit(1...6)
+                        .disabled(responding)
+                        .onSubmit { submit() }
+
+                    Button { submit() } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(
+                                text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    ? Color.secondary : Color.accentColor
+                            )
+                    }
+                    .disabled(responding || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
             }
         }
         .padding(.vertical, BlockStyle.blockVerticalPadding)
