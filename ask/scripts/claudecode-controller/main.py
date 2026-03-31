@@ -82,7 +82,7 @@ class MCPClient:
         self._prune_dead_pid_sessions()
         for session_id, info in list(self._sessions.items()):
             asyncio.create_task(
-                self._emit_session_block(session_id, last_message=info.get('last_message', ''))
+                self._emit_session_block(session_id, last_message=info.get('last_message', ''), touch_last_seen=False)
             )
 
     async def emit_block(self, block_id, block_type, payload, ttl=None):
@@ -324,8 +324,11 @@ class MCPClient:
         print(f'[claudecode-controller] session stopped: {session_id}', file=sys.stderr)
         asyncio.create_task(self._emit_session_block(session_id, last_message=last_message))
 
-    async def _emit_session_block(self, session_id: str, last_message: str = ''):
-        """Emit (or re-emit) the claude_session block for this session."""
+    async def _emit_session_block(self, session_id: str, last_message: str = '', touch_last_seen: bool = True):
+        """Emit (or re-emit) the claude_session block for this session.
+
+        touch_last_seen=False during startup re-emit so that sessions whose
+        last hook activity predates SESSION_TTL are not artificially kept alive."""
         if not self._initialized:
             print(f'[claudecode-controller] skipping session block — not yet initialized', file=sys.stderr)
             return
@@ -349,7 +352,8 @@ class MCPClient:
         try:
             if session_id in self._sessions:
                 now = time.time()
-                self._sessions[session_id]['last_seen'] = now
+                if touch_last_seen:
+                    self._sessions[session_id]['last_seen'] = now
                 self._sessions[session_id]['last_emitted'] = now
                 if last_message:
                     self._sessions[session_id]['last_message'] = last_message
