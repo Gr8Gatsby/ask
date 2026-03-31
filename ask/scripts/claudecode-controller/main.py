@@ -419,7 +419,20 @@ class MCPClient:
 
     def _handle_session_stop(self, msg):
         session_id = msg.get('session_id', '')
+        last_message = msg.get('last_message', '')
         print(f'[claudecode-controller] session stopped: {session_id}', file=sys.stderr)
+        if last_message:
+            asyncio.create_task(self._emit_claude_message(session_id, last_message))
+
+    async def _emit_claude_message(self, session_id, text):
+        """Emit the last Claude response as a claude_message block. Uses a deterministic
+        ID so re-emitting on successive stops replaces the previous message in CloudKit."""
+        block_id = 'claudecode-last-message'
+        payload = {'text': text, 'session_id': session_id}
+        try:
+            await self.emit_block(block_id, 'claude_message', payload, ttl=1800)
+        except Exception as e:
+            print(f'[claudecode-controller] claude_message emit failed: {e}', file=sys.stderr)
 
     async def start_socket_server(self):
         os.makedirs(os.path.dirname(SOCKET_PATH), exist_ok=True)
