@@ -27,7 +27,7 @@ struct BlockPreviewView: View {
             case "picker":       PickerPreview(payload: payload, onRespond: onRespond)
             case "icon_card":    IconCardPreview(payload: payload)
             case "claude_message": ClaudeMessagePreview(payload: payload)
-            case "agent_session": AgentSessionPreview(payload: payload)
+            case "agent_session": AgentSessionPreview(payload: payload, onRespond: onRespond)
             case "tile":         EmptyView() // drives home-screen tile only
             default:             EmptyView()
             }
@@ -461,35 +461,81 @@ private struct IconCardPreview: View {
 
 private struct AgentSessionPreview: View {
     let payload: [String: Any]
+    var onRespond: ((String) -> Void)?
+
+    @State private var replyText = ""
 
     private var agentName: String { payload["agent_name"] as? String ?? "Claude" }
+    private var isWorking: Bool { payload["is_working"] as? Bool ?? false }
+    private var lastMessage: String? { payload["last_message"] as? String }
+    private var placeholder: String { payload["placeholder"] as? String ?? "Reply to \(agentName)…" }
+
+    private var brandColor: Color {
+        guard let hex = payload["brand_color"] as? String else { return .accentColor }
+        let cleaned = hex.trimmingCharacters(in: .init(charactersIn: "#"))
+        guard cleaned.count == 6, let value = UInt64(cleaned, radix: 16) else { return .accentColor }
+        let r = Double((value >> 16) & 0xFF) / 255
+        let g = Double((value >> 8) & 0xFF) / 255
+        let b = Double(value & 0xFF) / 255
+        return Color(red: r, green: g, blue: b)
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 4) {
-                Image(systemName: "sparkles")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text(payload["project"] as? String ?? agentName)
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                Spacer()
+        VStack(alignment: .leading, spacing: 6) {
+            // Message / working state box
+            Group {
+                if isWorking {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small).tint(brandColor)
+                        Text("\(agentName) is working…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .italic()
+                    }
+                } else if let msg = lastMessage, !msg.isEmpty {
+                    Text(msg)
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                        .lineLimit(6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Text("Waiting for input…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .italic()
+                }
             }
-            if let msg = payload["last_message"] as? String, !msg.isEmpty {
-                Text(msg)
-                    .font(.caption)
-                    .foregroundStyle(.primary)
-                    .lineLimit(4)
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            // Reply input
+            if let respond = onRespond {
+                HStack(spacing: 6) {
+                    TextField(placeholder, text: $replyText)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption)
+                        .onSubmit {
+                            guard !replyText.isEmpty else { return }
+                            respond(replyText)
+                            replyText = ""
+                        }
+                    Button("Send") {
+                        guard !replyText.isEmpty else { return }
+                        respond(replyText)
+                        replyText = ""
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(replyText.isEmpty)
+                }
             } else {
-                Text("Waiting for \(agentName)…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text(placeholder)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
                     .italic()
             }
-            Text(payload["placeholder"] as? String ?? "Reply to \(agentName)…")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .italic()
         }
         .padding(8)
         .background(Color.secondary.opacity(0.07))
