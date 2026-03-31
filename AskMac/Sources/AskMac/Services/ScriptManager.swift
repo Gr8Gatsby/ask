@@ -78,7 +78,7 @@ final class ScriptManager {
         self.settings = settings
         self.actionHistory = actionHistory
         self.feedScheduler = FeedScheduler()
-        self.scriptsDir = FileManager.default.homeDirectoryForCurrentUser
+        self.scriptsDir = settings.vaultPath ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".ask/scripts")
     }
 
@@ -354,9 +354,9 @@ final class ScriptManager {
         let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData, scriptIconSVG: svgString, scriptType: "feed")
         let conn = MCPConnection(scriptID: manifest.id, entryURL: entryURL, blockService: blockService)
 
-        conn.onTerminate = { [weak self] in
+        conn.onTerminate = { [weak self, weak conn] in
             DispatchQueue.main.async {
-                self?.handleFeedExit(manifest: manifest, scriptDir: scriptDir)
+                self?.handleFeedExit(manifest: manifest, scriptDir: scriptDir, conn: conn)
             }
         }
 
@@ -378,18 +378,25 @@ final class ScriptManager {
         print("[ScriptManager] \(manifest.id): feed run started")
     }
 
-    private func handleFeedExit(manifest: ScriptManifest, scriptDir: URL) {
+    private func handleFeedExit(manifest: ScriptManifest, scriptDir: URL, conn: MCPConnection?) {
         guard !settings.disabledScripts.contains(manifest.id) else { return }
 
-        let exitCode = connections[manifest.id]?.terminationStatus ?? 0
-        connections.removeValue(forKey: manifest.id)
-        activeBlocks.removeValue(forKey: manifest.id)
+        let exitCode = conn?.exitCode ?? 0
+        let bySignal = conn?.exitedBySignal ?? false
+        let stderr   = conn?.lastStderrSummary ?? "no output"
+
+        // Only clear the connections entry if it's still this connection (not a replacement)
+        if connections[manifest.id] === conn {
+            connections.removeValue(forKey: manifest.id)
+            activeBlocks.removeValue(forKey: manifest.id)
+        }
 
         if exitCode == 0 {
             print("[ScriptManager] \(manifest.id): feed run completed cleanly")
             upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: manifests[manifest.id]?.icon, status: .stopped, isEnabled: true)
         } else {
-            print("[ScriptManager] \(manifest.id): feed run failed (exit \(exitCode)) — not restarting")
+            let reason = bySignal ? "signal \(exitCode)" : "exit \(exitCode)"
+            print("[ScriptManager] \(manifest.id): feed run failed (\(reason)) — last stderr: \(stderr)")
             upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: manifests[manifest.id]?.icon, status: .crashed, isEnabled: true)
             Task {
                 let iconData  = manifests[manifest.id]?.icon.flatMap { ScriptManager.iconPNGBase64($0) }

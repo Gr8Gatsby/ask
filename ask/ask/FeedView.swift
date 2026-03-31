@@ -1,49 +1,68 @@
 import SwiftUI
 import CloudKit
+import SwiftData
 
 // MARK: - FeedView
 
 struct FeedView: View {
     @Environment(iOSCloudKitService.self) private var cloudKit
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.modelContext) private var modelContext
 
     var machines: [AskMachine] = []
     var activeMachineID: String? = nil
 
-    @State private var store = FeedStore.shared
     @State private var pollTask: Task<Void, Never>?
-    @State private var selectedItem: LocalFeedItem?
+    @State private var hasLoaded = false
+    @State private var selectedScriptID: String?
+
+    @Query(sort: \FeedHistoryEntry.createdAt, order: .reverse)
+    private var history: [FeedHistoryEntry]
 
     private var activeMachine: AskMachine? {
         if let id = activeMachineID { return machines.first { $0.id == id } }
         return machines.sorted { $0.lastHeartbeat > $1.lastHeartbeat }.first
     }
 
+    private func historyFor(_ scriptID: String) -> [FeedHistoryEntry] {
+        history.filter { $0.scriptID == scriptID }
+    }
+
     var body: some View {
         Group {
-            if store.items.isEmpty {
+            if !hasLoaded {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if history.isEmpty {
                 ContentUnavailableView {
-                    Label("No Feed Updates", systemImage: "tray")
+                    Label("No Feed Activity", systemImage: "tray")
                 } description: {
-                    Text("Updates from scheduled scripts will appear here.")
+                    Text("Results from scheduled scripts will appear here.")
                 }
             } else {
                 feedList
             }
         }
-        .sheet(item: $selectedItem) { item in
-            FeedItemDetailSheet(item: item)
+        .fullScreenCover(
+            isPresented: Binding(
+                get: { selectedScriptID != nil },
+                set: { if !$0 { selectedScriptID = nil } }
+            )
+        ) {
+            if let id = selectedScriptID {
+                FeedScriptDetailView(scriptID: id, entries: historyFor(id))
+            }
         }
         .task {
-            await fetchFromCloudKit()
+            await load()
             startPolling()
         }
         .onDisappear { pollTask?.cancel() }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await fetchFromCloudKit() } }
+            if phase == .active { Task { await load() } }
         }
         .onReceive(NotificationCenter.default.publisher(for: .askRefreshRequired)) { _ in
-            Task<Void, Never> { await fetchFromCloudKit() }
+            Task<Void, Never> { await load() }
         }
     }
 
@@ -51,23 +70,51 @@ struct FeedView: View {
 
     private var feedList: some View {
         List {
-            ForEach(store.items) { item in
-                Button { selectedItem = item } label: {
-                    FeedItemRow(item: item)
+            Section {
+                ActivitySummaryCard(history: history)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+            }
+
+            Section {
+                ForEach(history) { entry in
+                    FeedEntryRow(entry: entry) {
+                        selectedScriptID = entry.scriptID
+                    }
                 }
-                .buttonStyle(.plain)
             }
         }
-        .listStyle(.plain)
-        .refreshable { await fetchFromCloudKit() }
+        .listStyle(.insetGrouped)
+        .refreshable { await load() }
     }
 
     // MARK: - Data
 
-    private func fetchFromCloudKit() async {
-        guard let machine = activeMachine else { return }
-        _ = try? await cloudKit.fetchBlocks(machineID: machine.id)
-        // FeedStore.shared.upsert() is called inside fetchBlocks for feed_item blocks
+    private func load() async {
+        if let machine = activeMachine,
+           let fresh = try? await cloudKit.fetchBlocks(machineID: machine.id) {
+            let feedBlocks = fresh.filter { $0.isFeedBlock && !$0.requiresResponse && $0.blockType != .tile }
+            await MainActor.run { saveToHistory(feedBlocks) }
+        }
+        hasLoaded = true
+    }
+
+    private func saveToHistory(_ blocks: [RKBlock]) {
+        let existingIDs = Set(history.map(\.blockID))
+        for block in blocks where !existingIDs.contains(block.id) {
+            modelContext.insert(FeedHistoryEntry(
+                blockID:       block.id,
+                scriptID:      block.scriptID,
+                scriptName:    block.scriptName,
+                scriptIcon:    block.scriptIcon,
+                scriptIconData: block.scriptIconData,
+                blockTypeRaw:  block.blockType.rawValue,
+                headline:      block.feedHeadline,
+                statusColor:   block.feedStatusColor,
+                payloadJSON:   block.payloadJSON,
+                createdAt:     block.createdAt
+            ))
+        }
+        try? modelContext.save()
     }
 
     private func startPolling() {
@@ -76,98 +123,192 @@ struct FeedView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(30))
                 guard !Task.isCancelled else { break }
-                await fetchFromCloudKit()
+                await load()
             }
         }
     }
 }
 
-// MARK: - FeedItemRow
+// MARK: - Activity summary card
 
-private struct FeedItemRow: View {
-    let item: LocalFeedItem
+private struct ActivitySummaryCard: View {
+    let history: [FeedHistoryEntry]
+
+    private var scriptIDs: [String] { Array(Set(history.map(\.scriptID))).sorted() }
+    private var lastActivity: Date? { history.map(\.createdAt).max() }
+
+    private func latest(for scriptID: String) -> FeedHistoryEntry? {
+        history.filter { $0.scriptID == scriptID }.max(by: { $0.createdAt < $1.createdAt })
+    }
 
     var body: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(statusColor(item.statusColor))
-                .frame(width: 8, height: 8)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.headline)
-                    .font(.subheadline)
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
-
-                Text(sourceLine)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Activity")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                if let date = lastActivity {
+                    Text(date, style: .relative)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
-            Spacer()
-
-            Text(item.timestamp, style: .relative)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+            HStack(spacing: 16) {
+                ForEach(scriptIDs, id: \.self) { id in
+                    if let entry = latest(for: id) {
+                        VStack(spacing: 4) {
+                            Circle()
+                                .fill(namedColor(entry.statusColor))
+                                .frame(width: 8, height: 8)
+                            Text(entry.scriptName ?? id)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
         }
         .padding(.vertical, 4)
     }
+}
 
-    private var sourceLine: String {
-        item.scriptName ?? item.scriptID
-    }
+// MARK: - Feed entry row
 
-    private func statusColor(_ name: String?) -> Color {
-        switch name {
-        case "green":  return .green
-        case "blue":   return .blue
-        case "orange": return .orange
-        case "red":    return .red
-        case "yellow": return .yellow
-        default:       return Color(.systemGray4)
+private struct FeedEntryRow: View {
+    let entry: FeedHistoryEntry
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                FeedIconView(iconData: entry.scriptIconData, sfSymbol: entry.scriptIcon ?? "doc.text")
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.scriptName ?? entry.scriptID)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Text(entry.headline)
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(entry.createdAt, style: .relative)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    if let color = entry.statusColor {
+                        Circle()
+                            .fill(namedColor(color))
+                            .frame(width: 7, height: 7)
+                    }
+                }
+            }
+            .padding(.vertical, 2)
         }
+        .buttonStyle(.plain)
     }
 }
 
-// MARK: - FeedItemDetailSheet
+// MARK: - Feed script detail view
 
-private struct FeedItemDetailSheet: View {
-    let item: LocalFeedItem
+struct FeedScriptDetailView: View {
+    let scriptID: String
+    let entries: [FeedHistoryEntry]
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(item.headline)
-                        .font(.headline)
-
-                    if let body = item.body, !body.isEmpty {
-                        Text(body)
-                            .font(.body)
-                            .foregroundStyle(.secondary)
+            List {
+                ForEach(entries) { entry in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Circle()
+                                .fill(namedColor(entry.statusColor))
+                                .frame(width: 8, height: 8)
+                            Text(entry.headline)
+                                .font(.subheadline.weight(.medium))
+                            Spacer()
+                            Text(entry.createdAt, style: .relative)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
-
-                    Divider()
-
-                    Label(item.scriptName ?? item.scriptID, systemImage: "app.badge")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-
-                    Label(item.timestamp.formatted(date: .long, time: .shortened), systemImage: "clock")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    .padding(.vertical, 2)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
             }
-            .navigationTitle(item.scriptName ?? item.scriptID)
+            .listStyle(.insetGrouped)
+            .navigationTitle(entries.first?.scriptName ?? scriptID)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
             }
+        }
+    }
+}
+
+// MARK: - Feed icon
+
+private struct FeedIconView: View {
+    let iconData: String?
+    let sfSymbol: String
+
+    var body: some View {
+        Group {
+            if let data = iconData,
+               let imageData = Data(base64Encoded: data),
+               let uiImage = UIImage(data: imageData) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Image(systemName: sfSymbol)
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 28, height: 28)
+    }
+}
+
+// MARK: - Helpers
+
+func namedColor(_ name: String?) -> Color {
+    switch name {
+    case "green":  return .green
+    case "blue":   return .blue
+    case "orange": return .orange
+    case "red":    return .red
+    case "yellow": return .yellow
+    default:       return .secondary
+    }
+}
+
+// MARK: - RKBlock feed helpers (used at save time)
+
+extension RKBlock {
+    var feedHeadline: String {
+        switch blockType {
+        case .feedItem: return feedItemPayload?.headline ?? scriptName ?? scriptID
+        case .status:   return statusPayload?.label ?? scriptName ?? scriptID
+        case .detail:   return detailPayload?.title ?? scriptName ?? scriptID
+        case .infoCard: return infoCardPayload?.title ?? scriptName ?? scriptID
+        case .iconCard: return iconCardPayload?.title ?? scriptName ?? scriptID
+        default:        return scriptName ?? scriptID
+        }
+    }
+
+    var feedStatusColor: String? {
+        switch blockType {
+        case .feedItem: return feedItemPayload?.statusColor
+        case .status:   return statusPayload?.color
+        default:        return nil
         }
     }
 }

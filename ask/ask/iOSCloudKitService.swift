@@ -413,6 +413,40 @@ final class iOSCloudKitService {
         return enabledInt != 0
     }
 
+    // MARK: - Feed schedules
+
+    /// Upserts a schedule override for a feed script. The Mac polls these records
+    /// and reschedules the script's cron task accordingly.
+    func saveFeedSchedule(machineID: String, scriptID: String, schedule: String) async throws {
+        let recordName = "feedschedule-\(machineID)-\(scriptID)"
+        let recordID = CKRecord.ID(recordName: recordName)
+        let record: CKRecord
+        if let existing = try? await database.record(for: recordID) {
+            record = existing
+        } else {
+            record = CKRecord(recordType: CKSchema.RecordType.feedSchedule, recordID: recordID)
+            record[CKSchema.FeedSchedule.machineID] = machineID
+            record[CKSchema.FeedSchedule.scriptID]  = scriptID
+        }
+        record[CKSchema.FeedSchedule.schedule]  = schedule
+        record[CKSchema.FeedSchedule.updatedAt] = Date()
+        _ = try await database.save(record)
+    }
+
+    /// Returns the current schedule override per script for a given machine.
+    func fetchFeedSchedules(machineID: String) async throws -> [(scriptID: String, schedule: String)] {
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.FeedSchedule.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.feedSchedule, predicate: predicate)
+        let (results, _) = try await database.records(matching: query, resultsLimit: 100)
+        return results.compactMap { _, result in
+            guard let record = try? result.get(),
+                  let scriptID = record[CKSchema.FeedSchedule.scriptID] as? String,
+                  let schedule = record[CKSchema.FeedSchedule.schedule] as? String
+            else { return nil }
+            return (scriptID: scriptID, schedule: schedule)
+        }
+    }
+
     private static var stableDeviceID: String {
         let key = "askDeviceID"
         if let existing = UserDefaults.standard.string(forKey: key) { return existing }

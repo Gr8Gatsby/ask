@@ -46,8 +46,9 @@ final class MCPConnection: @unchecked Sendable {
             ?? "Script exited unexpectedly"
     }
 
-    /// Exit code of the process after it terminates (0 = clean exit).
-    var terminationStatus: Int32 { process?.terminationStatus ?? 0 }
+    /// Exit code and reason captured at termination time.
+    private(set) var exitCode: Int32 = 0
+    private(set) var exitedBySignal: Bool = false
 
     init(scriptID: String, entryURL: URL, blockService: BlockService) {
         self.scriptID = scriptID
@@ -72,7 +73,9 @@ final class MCPConnection: @unchecked Sendable {
         p.standardInput = inPipe
         p.standardOutput = outPipe
         p.standardError = errPipe
-        p.terminationHandler = { [weak self] _ in
+        p.terminationHandler = { [weak self] proc in
+            self?.exitCode = proc.terminationStatus
+            self?.exitedBySignal = proc.terminationReason == .uncaughtSignal
             self?.readTask?.cancel()
             self?.stderrTask?.cancel()
             self?.onTerminate?()

@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
-github — Ask daemon script
-Browse GitHub repositories and manage issues from your iPhone.
+git-repos — Ask daemon script
+Monitors local git repositories on this Mac. Push and pull from your iPhone.
 """
 import os
 import sys
 import json
 import asyncio
 import subprocess
-from typing import Optional
+import hashlib
+import urllib.request
+import urllib.error
 
 # CRITICAL: unbuffered stdout so JSON-RPC messages reach the daemon immediately.
 sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)
@@ -106,418 +109,499 @@ class MCPClient:
 
 
 # ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+SCAN_ROOT    = os.path.expanduser('~')
+REFRESH_SECS = 300   # 5 minutes
+MAX_REPOS    = 100
+
+SKIP_DIRS = {
+    'node_modules', 'Library', '.Trash', 'Pods', 'DerivedData', '.build',
+    'build', 'dist', 'vendor', 'venv', '.venv', '.cache', '.npm', '.yarn',
+    '.pnpm', '__pycache__', 'target', 'env', '.env', 'Volumes',
+    '.Spotlight-V100', '.fseventsd', '.DocumentRevisions-V100',
+}
+
+# Ollama
+OLLAMA_BASE_URL = 'http://localhost:11434'
+DIFF_MAX_CHARS  = 4000   # truncate diffs sent to Ollama
+
 # Block IDs
-# ---------------------------------------------------------------------------
-
-BLOCK_ICON        = 'github-icon'
-BLOCK_STATUS      = 'github-status'
-BLOCK_SETUP       = 'github-setup'
-BLOCK_REPO_PICK   = 'github-repo-picker'
-BLOCK_ISSUES_LIST = 'github-issues-list'
-BLOCK_NEW_TITLE   = 'github-new-title'
-BLOCK_NEW_BODY    = 'github-new-body'
-BLOCK_NEW_CONF    = 'github-new-confirm'
-BLOCK_TILE        = 'github-tile'
+BLOCK_TILE         = 'git-tile'
+BLOCK_LIST         = 'git-list'
+BLOCK_STATUS       = 'git-status'
+BLOCK_CONFIRM      = 'git-confirm'
+BLOCK_COMMIT_MSG   = 'git-commit-msg'   # proposed commit message detail
+BLOCK_COMMIT_EDIT  = 'git-commit-edit'  # manual commit message prompt
 
 
 # ---------------------------------------------------------------------------
-# GitHub CLI helpers
+# Ollama helpers (blocking — run via executor)
 # ---------------------------------------------------------------------------
 
-def _find_gh() -> str:
-    for candidate in ('/opt/homebrew/bin/gh', '/usr/local/bin/gh', '/usr/bin/gh'):
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-    import shutil
-    return shutil.which('gh') or 'gh'
-
-_GH = _find_gh()
-
-
-def gh_json(*args):
-    result = subprocess.run(
-        [_GH, *args],
-        capture_output=True, text=True, stdin=subprocess.DEVNULL
-    )
-    if result.returncode != 0:
-        print(f'[github] gh error: {result.stderr.strip()}', file=sys.stderr)
-        return None
+def _ollama_models() -> list:
+    """Return list of installed model names, or [] if Ollama is not reachable."""
     try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError:
+        req  = urllib.request.Request(
+            f'{OLLAMA_BASE_URL}/api/tags',
+            headers={'User-Agent': 'ask-git-repos/1.0'}
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+        return [m['name'] for m in data.get('models', [])]
+    except Exception:
+        return []
+
+
+def _ollama_generate_commit_msg(diff: str, status: str, model: str) -> str:
+    """Ask Ollama to produce a commit message for the given diff."""
+    truncated_diff = diff[:DIFF_MAX_CHARS] + ('\n[diff truncated]' if len(diff) > DIFF_MAX_CHARS else '')
+    prompt = (
+        'Generate a concise git commit message for the following changes.\n'
+        'Rules:\n'
+        '- Use imperative mood ("Add feature", not "Added feature")\n'
+        '- Keep the subject line under 72 characters\n'
+        '- Be specific about what changed\n'
+        '- Return ONLY the commit message text — no quotes, no explanation\n\n'
+        f'Changed files:\n{status}\n\n'
+        f'Diff:\n{truncated_diff}'
+    )
+    body = json.dumps({
+        'model':   model,
+        'messages': [{'role': 'user', 'content': prompt}],
+        'stream':  False,
+    }).encode()
+    req = urllib.request.Request(
+        f'{OLLAMA_BASE_URL}/api/chat',
+        data=body,
+        headers={'Content-Type': 'application/json', 'User-Agent': 'ask-git-repos/1.0'}
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = json.loads(resp.read())
+    return data.get('message', {}).get('content', '').strip()
+
+
+# ---------------------------------------------------------------------------
+# Git helpers
+# ---------------------------------------------------------------------------
+
+def _git(path, *args, timeout=5):
+    """Run a git command in the given repo path. Returns (returncode, stdout, stderr)."""
+    try:
+        r = subprocess.run(
+            ['git', '-C', path, *args],
+            capture_output=True, text=True,
+            timeout=timeout, stdin=subprocess.DEVNULL
+        )
+        return r.returncode, r.stdout.strip(), r.stderr.strip()
+    except subprocess.TimeoutExpired:
+        return 1, '', 'timeout'
+    except Exception as e:
+        return 1, '', str(e)
+
+
+def _get_diff(path: str) -> tuple:
+    """Return (diff_text, status_text) for the repo at path."""
+    _, diff, _   = _git(path, 'diff', 'HEAD', timeout=10)
+    _, status, _ = _git(path, 'status', '--short')
+    if not diff:
+        _, diff, _ = _git(path, 'diff', timeout=10)
+    return diff, status
+
+
+def _repo_status(path):
+    """Return a dict describing the current state of the repo at path."""
+    rc, branch, _ = _git(path, 'rev-parse', '--abbrev-ref', 'HEAD')
+    if rc != 0 or not branch or branch == 'HEAD':
         return None
 
+    rc, tracking, _ = _git(path, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}')
+    tracking = tracking if rc == 0 and tracking else None
 
-def gh_run(*args):
-    result = subprocess.run(
-        [_GH, *args],
-        capture_output=True, text=True, stdin=subprocess.DEVNULL
-    )
-    return result.returncode, result.stdout.strip(), result.stderr.strip()
+    ahead, behind = 0, 0
+    if tracking:
+        rc, counts, _ = _git(path, 'rev-list', '--left-right', '--count', f'HEAD...{tracking}')
+        if rc == 0 and counts:
+            parts = counts.split()
+            if len(parts) == 2:
+                try:
+                    ahead, behind = int(parts[0]), int(parts[1])
+                except ValueError:
+                    pass
+
+    rc, remote_out, _ = _git(path, 'remote')
+    has_remote = rc == 0 and bool(remote_out.strip())
+
+    rc, status_out, _ = _git(path, 'status', '--porcelain')
+    dirty_lines = [l for l in (status_out or '').splitlines() if l.strip()]
+
+    return {
+        'path':        path,
+        'name':        os.path.basename(path),
+        'branch':      branch,
+        'tracking':    tracking,
+        'has_remote':  has_remote,
+        'ahead':       ahead,
+        'behind':      behind,
+        'dirty':       len(dirty_lines) > 0,
+        'dirty_count': len(dirty_lines),
+    }
+
+
+def _find_repos():
+    """Walk SCAN_ROOT and return a list of repo root paths."""
+    repos = []
+    try:
+        for dirpath, dirnames, _ in os.walk(SCAN_ROOT, followlinks=False):
+            dirnames[:] = [
+                d for d in dirnames
+                if d not in SKIP_DIRS and (not d.startswith('.') or d == '.git')
+            ]
+            if '.git' in dirnames:
+                repos.append(dirpath)
+                dirnames[:] = []
+                if len(repos) >= MAX_REPOS:
+                    return repos
+    except Exception as e:
+        print(f'[git-repos] walk error: {e}', file=sys.stderr)
+    return repos
+
+
+def _scan_all():
+    """Discover all repos and collect their statuses. Runs in executor thread."""
+    paths = _find_repos()
+    print(f'[git-repos] found {len(paths)} repos', file=sys.stderr)
+
+    repos = []
+    for path in paths:
+        try:
+            info = _repo_status(path)
+            if info:
+                repos.append(info)
+        except Exception as e:
+            print(f'[git-repos] status error {path}: {e}', file=sys.stderr)
+
+    def priority(r):
+        if r['ahead'] > 0:  return 0
+        if r['dirty']:       return 1
+        if r['behind'] > 0: return 2
+        return 3
+
+    repos.sort(key=lambda r: (priority(r), r['name'].lower()))
+    return repos
+
+
+def _repo_key(path):
+    return hashlib.md5(path.encode()).hexdigest()[:8]
+
+
+def _state_label(repo):
+    parts = []
+    if repo['ahead'] > 0:
+        parts.append(f'↑{repo["ahead"]} to push')
+    if repo['behind'] > 0:
+        parts.append(f'↓{repo["behind"]} to pull')
+    if repo['dirty']:
+        parts.append(f'{repo["dirty_count"]} changed')
+    if not parts:
+        if not repo['has_remote'] and not repo['tracking']:
+            parts.append('local only')
+        else:
+            parts.append('up to date')
+    return ' · '.join(parts)
 
 
 # ---------------------------------------------------------------------------
-# GitHub script
+# Script
 # ---------------------------------------------------------------------------
 
-class GitHubScript:
+class GitReposScript:
     def __init__(self, mcp: MCPClient):
         self.mcp = mcp
-        self.selected_repo: Optional[str] = None
-        self.new_issue_title: Optional[str] = None
-        self._cached_issues: list = []
-        self._current_detail_block_id: Optional[str] = None
+        self.repos: list = []
+        self._open_detail_id: str | None = None
 
     async def run(self, test_mode: bool):
-        asyncio.create_task(self._tile_heartbeat())
-
-        await self.mcp.emit_block(BLOCK_ICON, 'icon_card', {
-            'title': 'GitHub',
-            'subtitle': 'Select a repository to get started',
-        }, ttl=86400)
-        await self._update_tile()
-        await self.show_repo_picker()
-
+        await self._refresh()
+        asyncio.create_task(self._refresh_loop())
         if test_mode:
-            print('[github] test mode complete', file=sys.stderr)
-            await asyncio.sleep(60)
+            print('[git-repos] test mode — sleeping 30s', file=sys.stderr)
+            await asyncio.sleep(30)
             return
-
         await asyncio.Event().wait()
 
-    # -- Tile --
-
-    async def _tile_heartbeat(self):
+    async def _refresh_loop(self):
         while True:
-            await asyncio.sleep(300)
-            await self._update_tile()
+            await asyncio.sleep(REFRESH_SECS)
+            await self._refresh()
 
-    async def _update_tile(self):
-        if not self.selected_repo:
-            await self.mcp.emit_block(BLOCK_TILE, 'tile', {
-                'label': 'GitHub',
-                'body': 'No repo selected',
-            }, ttl=600)
+    async def _refresh(self):
+        loop = asyncio.get_running_loop()
+        self.repos = await loop.run_in_executor(None, _scan_all)
+        await self._emit_tile()
+        await self._emit_list()
+
+    async def _emit_tile(self):
+        needs_attn = [r for r in self.repos if r['ahead'] > 0 or r['dirty']]
+        total = len(self.repos)
+        attn  = len(needs_attn)
+        if total == 0:
+            label, color = 'No repos found', 'orange'
+        elif attn > 0:
+            noun = 'repo' if attn == 1 else 'repos'
+            label = f'{attn} {noun} need attention'
+            color = 'orange'
         else:
-            name = self.selected_repo.split('/')[-1]
-            count = len(self._cached_issues)
-            noun = 'issue' if count == 1 else 'issues'
-            await self.mcp.emit_block(BLOCK_TILE, 'tile', {
-                'label': name,
-                'body': f'{count} open {noun}',
-                'status_color': 'orange' if count > 0 else 'green',
-            }, ttl=600)
+            label = f'All {total} repos up to date'
+            color = 'green'
+        await self.mcp.emit_block(BLOCK_TILE, 'tile', {
+            'label': 'Git Repos',
+            'body':  label,
+            'status_color': color,
+        }, ttl=600)
 
-    # -- Setup check --
-
-    def _gh_check(self):
-        if not os.path.isfile(_GH) or not os.access(_GH, os.X_OK):
-            return ('not_found', None)
-        rc, stdout, stderr = gh_run('auth', 'status')
-        if rc == 0:
-            return ('ok', None)
-        combined = (stdout + ' ' + stderr).lower()
-        if any(k in combined for k in ('not logged', '401', 'not authenticated', 'no accounts')):
-            return ('not_authed', None)
-        return ('error', stderr or stdout or 'Unknown error')
-
-    async def _check_setup(self) -> bool:
-        loop = asyncio.get_running_loop()
-        status, msg = await loop.run_in_executor(None, self._gh_check)
-
-        if status == 'ok':
-            await self.mcp.clear_block(BLOCK_SETUP)
-            return True
-
-        if status == 'not_found':
-            title = 'gh CLI not installed'
-            body  = 'Install it in Terminal:\n  brew install gh\n\nThen authenticate:\n  gh auth login\n\nTap Retry when done.'
-        elif status == 'not_authed':
-            title = 'GitHub not authenticated'
-            body  = 'Run in Terminal:\n  gh auth login\n\nTap Retry when done.'
-        else:
-            title = 'GitHub CLI error'
-            body  = msg
-
-        async def on_retry(_value):
-            await self.mcp.clear_block(BLOCK_SETUP)
-            await self.show_repo_picker()
-
-        self.mcp.set_callback(BLOCK_SETUP, on_retry)
-        await self.mcp.emit_block(BLOCK_SETUP, 'confirmation', {
-            'title': title,
-            'body':  body,
-            'options': ['Retry'],
-        }, ttl=86400)
-        return False
-
-    # -- Repo picker --
-
-    async def show_repo_picker(self):
-        await self.mcp.emit_block(BLOCK_STATUS, 'status', {
-            'label': 'Checking gh CLI...',
-            'icon': 'arrow.clockwise',
-            'color': 'blue',
-        }, ttl=30)
-
-        if not await self._check_setup():
-            await self.mcp.clear_block(BLOCK_STATUS)
-            return
-
-        await self.mcp.emit_block(BLOCK_STATUS, 'status', {
-            'label': 'Loading repositories...',
-            'icon': 'arrow.clockwise',
-            'color': 'blue',
-        }, ttl=60)
-
-        loop = asyncio.get_running_loop()
-        repos = await loop.run_in_executor(None, self._fetch_repos)
-        await self.mcp.clear_block(BLOCK_STATUS)
-
-        if not repos:
-            await self.mcp.emit_block(BLOCK_STATUS, 'status', {
-                'label': 'Could not load repositories',
-                'detail': 'Check that gh CLI is working correctly.',
-                'icon': 'exclamationmark.triangle',
-                'color': 'red',
-            }, ttl=300)
-            return
-
-        options = [r['nameWithOwner'] for r in repos]
-        selected = self.selected_repo if self.selected_repo in options else options[0]
-
-        self.mcp.set_callback(BLOCK_REPO_PICK, self._on_repo_selected)
-        await self.mcp.emit_block(BLOCK_REPO_PICK, 'picker', {
-            'title': 'Select Repository',
-            'options': options,
-            'selected': selected,
-        }, ttl=3600)
-
-    def _fetch_repos(self):
-        data = gh_json('repo', 'list', '--limit', '50',
-                       '--json', 'nameWithOwner,isPrivate,description')
-        return data or []
-
-    async def _on_repo_selected(self, value: str):
-        self.selected_repo = value
-        print(f'[github] repo selected: {value}', file=sys.stderr)
-        await self.mcp.clear_block(BLOCK_REPO_PICK)
-        await self.mcp.clear_block(BLOCK_ICON)
-        await self.show_repo_home()
-
-    # -- Repo home --
-
-    async def show_repo_home(self):
-        await self._clear_issue_blocks()
-
-        await self.mcp.emit_block(BLOCK_STATUS, 'status', {
-            'label': f'Loading {self.selected_repo}...',
-            'icon': 'arrow.clockwise',
-            'color': 'blue',
-        }, ttl=60)
-
-        loop = asyncio.get_running_loop()
-        self._cached_issues = await loop.run_in_executor(None, self._fetch_issues)
-        await self.mcp.clear_block(BLOCK_STATUS)
-
-        await self._update_tile()
-        await self.show_issues()
-
-    def _fetch_issues(self):
-        data = gh_json(
-            'issue', 'list',
-            '--repo', self.selected_repo,
-            '--limit', '20',
-            '--state', 'open',
-            '--json', 'number,title,body,state,createdAt,author,labels',
-        )
-        return data or []
-
-    async def _clear_issue_blocks(self):
-        ids = [BLOCK_ISSUES_LIST, BLOCK_NEW_TITLE, BLOCK_NEW_BODY, BLOCK_NEW_CONF]
-        if self._current_detail_block_id:
-            ids.append(self._current_detail_block_id)
-            self._current_detail_block_id = None
-        for block_id in ids:
-            await self.mcp.clear_block(block_id)
-
-    # -- Issues list --
-
-    async def show_issues(self):
-        count = len(self._cached_issues)
-        noun = 'issue' if count == 1 else 'issues'
-        title = (f'{self.selected_repo} — No open issues'
-                 if count == 0
-                 else f'{self.selected_repo} — {count} open {noun}')
-
+    async def _emit_list(self):
         items = [
             {
-                'id': f'#{i["number"]}',
-                'label': f'#{i["number"]} {i["title"]}',
-                'subtitle': f'@{i["author"]["login"]}' if i.get('author') else None,
+                'id':       _repo_key(r['path']),
+                'label':    r['name'],
+                'subtitle': f'{r["branch"]} · {_state_label(r)}',
             }
-            for i in self._cached_issues
+            for r in self.repos
         ]
-
-        self.mcp.set_callback(BLOCK_ISSUES_LIST, self._on_issues_list_response)
-        await self.mcp.emit_block(BLOCK_ISSUES_LIST, 'list', {
-            'title': title,
-            'items': items,
-            'actions': ['New Issue', 'Refresh', 'Change Repo'],
+        self.mcp.set_callback(BLOCK_LIST, self._on_list_response)
+        await self.mcp.emit_block(BLOCK_LIST, 'list', {
+            'title':   f'{len(self.repos)} Local Repositories',
+            'items':   items,
+            'actions': ['Refresh'],
         }, ttl=3600)
 
-    async def _on_issues_list_response(self, value: str):
-        if value == 'New Issue':
-            await self.show_new_issue_title()
-        elif value == 'Refresh':
-            await self.show_repo_home()
-        elif value == 'Change Repo':
-            await self._clear_issue_blocks()
-            await self.show_repo_picker()
+    async def _on_list_response(self, value: str):
+        if value == 'Refresh':
+            await self._refresh()
+            return
+        repo = next((r for r in self.repos if _repo_key(r['path']) == value), None)
+        if not repo:
+            self.mcp.set_callback(BLOCK_LIST, self._on_list_response)
+            return
+        self.mcp.set_callback(BLOCK_LIST, self._on_list_response)
+        await self._show_detail(repo)
+
+    async def _show_detail(self, repo: dict):
+        block_id = f'git-detail-{_repo_key(repo["path"])}'
+        if self._open_detail_id and self._open_detail_id != block_id:
+            await self.mcp.clear_block(self._open_detail_id)
+        self._open_detail_id = block_id
+
+        lines = [f'**Branch:** {repo["branch"]}']
+        if repo['tracking']:
+            lines.append(f'**Tracking:** {repo["tracking"]}')
+        elif repo['has_remote']:
+            lines.append('**Remote:** configured (no tracking branch)')
         else:
-            # Issue tapped — re-register so the list stays tappable
-            self.mcp.set_callback(BLOCK_ISSUES_LIST, self._on_issues_list_response)
-            try:
-                number = int(value.lstrip('#'))
-            except ValueError:
+            lines.append('**Remote:** none configured')
+        if repo['ahead'] > 0:
+            n = repo['ahead']
+            lines.append(f'**Ahead:** {n} unpushed commit{"s" if n != 1 else ""}')
+        if repo['behind'] > 0:
+            n = repo['behind']
+            lines.append(f'**Behind:** {n} commit{"s" if n != 1 else ""} not yet pulled')
+        if repo['dirty']:
+            n = repo['dirty_count']
+            lines.append(f'**Uncommitted:** {n} file{"s" if n != 1 else ""} changed')
+        if repo['ahead'] == 0 and repo['behind'] == 0 and not repo['dirty']:
+            lines.append('**Status:** up to date')
+        lines.append(f'\n`{repo["path"]}`')
+
+        actions = []
+        if repo['dirty']:
+            actions.append('Commit')
+        if repo['ahead'] > 0 and repo['tracking']:
+            actions.append('Push')
+        if repo['behind'] > 0 and repo['tracking']:
+            actions.append('Pull')
+        if repo['has_remote'] or repo['tracking']:
+            actions.append('Fetch')
+        if repo['dirty']:
+            actions.append('Discard Changes')
+
+        async def on_detail_response(value: str):
+            if value == 'dismissed':
+                self._open_detail_id = None
                 return
-            issue = next((i for i in self._cached_issues if i['number'] == number), None)
-            if issue:
-                await self.show_issue_detail(issue)
+            await self._handle_action(repo, block_id, value)
 
-    # -- Issue detail --
-
-    async def show_issue_detail(self, issue: dict):
-        number  = issue['number']
-        title   = issue['title']
-        body    = (issue.get('body') or '').strip()
-        author  = issue.get('author', {}).get('login', 'unknown')
-        labels  = ', '.join(l['name'] for l in issue.get('labels', [])) or None
-        created = issue.get('createdAt', '')[:10]
-
-        # Clear any previously open detail block
-        if self._current_detail_block_id:
-            await self.mcp.clear_block(self._current_detail_block_id)
-
-        block_id = f'github-issue-{number}'
-        self._current_detail_block_id = block_id
-
-        # Markdown body: metadata header + issue body
-        meta = f'**#{number}** · @{author} · {created}'
-        if labels:
-            meta += f' · {labels}'
-        detail_body = meta + (f'\n\n{body}' if body else '')
-
-        async def on_dismissed(_value: str):
-            self._current_detail_block_id = None
-            await self.mcp.clear_block(block_id)
-            # Re-register list callback so the user can tap another issue
-            self.mcp.set_callback(BLOCK_ISSUES_LIST, self._on_issues_list_response)
-
-        self.mcp.set_callback(block_id, on_dismissed)
+        self.mcp.set_callback(block_id, on_detail_response)
         await self.mcp.emit_block(block_id, 'detail', {
-            'title': title,
-            'body': detail_body,
+            'title':   repo['name'],
+            'body':    '\n'.join(lines),
+            'actions': actions,
         }, ttl=3600)
 
-    # -- New issue --
+    async def _handle_action(self, repo: dict, detail_block_id: str, action: str):
+        path = repo['path']
+        if action == 'Commit':
+            await self._start_commit_flow(repo, detail_block_id)
+        elif action == 'Push':
+            await self._run_git_op(repo, detail_block_id, 'Pushing…', ['git', '-C', path, 'push'])
+        elif action == 'Pull':
+            await self._run_git_op(repo, detail_block_id, 'Pulling…', ['git', '-C', path, 'pull'])
+        elif action == 'Fetch':
+            await self._run_git_op(repo, detail_block_id, 'Fetching…', ['git', '-C', path, 'fetch'])
+        elif action == 'Discard Changes':
+            await self._confirm_discard(repo, detail_block_id)
 
-    async def show_new_issue_title(self):
-        await self.mcp.clear_block(BLOCK_ISSUES_LIST)
-        if self._current_detail_block_id:
-            await self.mcp.clear_block(self._current_detail_block_id)
-            self._current_detail_block_id = None
-        await self.mcp.clear_block(BLOCK_NEW_BODY)
-        await self.mcp.clear_block(BLOCK_NEW_CONF)
-        self.mcp.set_callback(BLOCK_NEW_TITLE, self._on_new_issue_title)
-        await self.mcp.emit_block(BLOCK_NEW_TITLE, 'prompt', {
-            'title': f'New Issue — {self.selected_repo}',
-            'placeholder': 'Short description of the issue',
-        }, ttl=3600)
-
-    async def _on_new_issue_title(self, value: str):
-        if not value.strip():
-            self.mcp.set_callback(BLOCK_NEW_TITLE, self._on_new_issue_title)
-            return
-        self.new_issue_title = value.strip()
-        await self.mcp.clear_block(BLOCK_NEW_TITLE)
-        self.mcp.set_callback(BLOCK_NEW_BODY, self._on_new_issue_body)
-        await self.mcp.emit_block(BLOCK_NEW_BODY, 'chat_prompt', {
-            'title': 'Issue Body (optional)',
-            'context': f'Title: {self.new_issue_title}',
-            'placeholder': 'Describe the issue in detail...',
-        }, ttl=3600)
-
-    async def _on_new_issue_body(self, value: str):
-        body = value.strip()
-        await self.mcp.clear_block(BLOCK_NEW_BODY)
-
-        preview = f'**Title:** {self.new_issue_title}'
-        if body:
-            snippet = body[:300] + ('...' if len(body) > 300 else '')
-            preview += f'\n\n{snippet}'
-
-        async def on_confirm(v):
-            await self._on_new_issue_confirm(v, body)
-
-        self.mcp.set_callback(BLOCK_NEW_CONF, on_confirm)
-        await self.mcp.emit_block(BLOCK_NEW_CONF, 'confirmation', {
-            'title': f'Create issue in {self.selected_repo}?',
-            'body': preview,
-            'options': ['Submit', 'Cancel'],
-        }, ttl=3600)
-
-    async def _on_new_issue_confirm(self, value: str, body: str):
-        await self.mcp.clear_block(BLOCK_NEW_CONF)
-
-        if value == 'Cancel':
-            await self.show_repo_home()
-            return
-
+    async def _run_git_op(self, repo: dict, detail_block_id: str | None,
+                          label: str, cmd: list, then: list | None = None):
         await self.mcp.emit_block(BLOCK_STATUS, 'status', {
-            'label': 'Creating issue...',
-            'icon': 'arrow.clockwise',
-            'color': 'blue',
+            'label': label, 'icon': 'arrow.clockwise', 'color': 'blue',
         }, ttl=60)
-
         loop = asyncio.get_running_loop()
-        title = self.new_issue_title
-        url = await loop.run_in_executor(None, lambda: self._create_issue(title, body))
+        rc, out, err = await loop.run_in_executor(None, lambda: _run_cmd(cmd))
+        if rc == 0 and then:
+            rc, out, err = await loop.run_in_executor(None, lambda: _run_cmd(then))
         await self.mcp.clear_block(BLOCK_STATUS)
-
-        if url:
-            issue_num = url.rstrip('/').split('/')[-1]
+        if rc == 0:
             await self.mcp.emit_block(BLOCK_STATUS, 'status', {
-                'label': f'Issue #{issue_num} created',
-                'detail': title,
-                'icon': 'checkmark.circle',
-                'color': 'green',
-            }, ttl=10)
-            self.new_issue_title = None
+                'label': 'Done', 'icon': 'checkmark.circle', 'color': 'green',
+            }, ttl=5)
             await asyncio.sleep(2)
             await self.mcp.clear_block(BLOCK_STATUS)
         else:
+            msg = (err or out or 'Unknown error')[:200]
             await self.mcp.emit_block(BLOCK_STATUS, 'status', {
-                'label': 'Failed to create issue',
-                'icon': 'exclamationmark.triangle',
-                'color': 'red',
-            }, ttl=30)
-            await asyncio.sleep(3)
+                'label': f'Failed: {msg}', 'icon': 'exclamationmark.triangle', 'color': 'red',
+            }, ttl=15)
+            await asyncio.sleep(5)
             await self.mcp.clear_block(BLOCK_STATUS)
+        updated = await loop.run_in_executor(None, lambda: _repo_status(repo['path']))
+        if updated:
+            for i, r in enumerate(self.repos):
+                if r['path'] == repo['path']:
+                    self.repos[i] = updated
+                    break
+            self.repos.sort(key=lambda r: (
+                0 if r['ahead'] > 0 else 1 if r['dirty'] else 2 if r['behind'] > 0 else 3,
+                r['name'].lower()
+            ))
+        await self._emit_tile()
+        await self._emit_list()
+        if updated:
+            await self._show_detail(updated)
 
-        await self.show_repo_home()
+    async def _start_commit_flow(self, repo: dict, detail_block_id: str):
+        path = repo['path']
+        await self.mcp.emit_block(BLOCK_STATUS, 'status', {
+            'label': 'Getting diff…', 'icon': 'arrow.clockwise', 'color': 'blue',
+        }, ttl=30)
+        loop = asyncio.get_running_loop()
+        diff, status_out = await loop.run_in_executor(None, lambda: _get_diff(path))
+        models = await loop.run_in_executor(None, _ollama_models)
+        if models:
+            model = models[0]
+            await self.mcp.emit_block(BLOCK_STATUS, 'status', {
+                'label': 'Generating commit message…', 'icon': 'cpu', 'color': 'blue',
+            }, ttl=90)
+            try:
+                message = await loop.run_in_executor(
+                    None, lambda: _ollama_generate_commit_msg(diff, status_out, model)
+                )
+            except Exception as e:
+                print(f'[git-repos] ollama error: {e}', file=sys.stderr)
+                message = None
+        else:
+            message = None
+        await self.mcp.clear_block(BLOCK_STATUS)
+        if message:
+            await self._show_commit_proposal(repo, detail_block_id, message)
+        else:
+            await self._show_commit_edit(repo, detail_block_id)
 
-    def _create_issue(self, title: str, body: str) -> Optional[str]:
-        rc, stdout, stderr = gh_run(
-            'issue', 'create',
-            '--repo', self.selected_repo,
-            '--title', title,
-            '--body', body or '',
+    async def _show_commit_proposal(self, repo: dict, detail_block_id: str, message: str):
+        await self.mcp.clear_block(detail_block_id)
+        async def on_proposal(value: str):
+            await self.mcp.clear_block(BLOCK_COMMIT_MSG)
+            if value == 'Commit':
+                await self._do_commit(repo, message)
+            elif value == 'Edit':
+                await self._show_commit_edit(repo, detail_block_id, prefill_hint=message)
+            elif value == 'dismissed':
+                loop = asyncio.get_running_loop()
+                updated = await loop.run_in_executor(None, lambda: _repo_status(repo['path']))
+                await self._show_detail(updated or repo)
+        self.mcp.set_callback(BLOCK_COMMIT_MSG, on_proposal)
+        await self.mcp.emit_block(BLOCK_COMMIT_MSG, 'detail', {
+            'title':   f'Commit {repo["name"]}',
+            'body':    f'**Proposed message:**\n\n{message}',
+            'actions': ['Commit', 'Edit'],
+        }, ttl=3600)
+
+    async def _show_commit_edit(self, repo: dict, detail_block_id: str, prefill_hint: str = None):
+        await self.mcp.clear_block(detail_block_id)
+        await self.mcp.clear_block(BLOCK_COMMIT_MSG)
+        placeholder = prefill_hint or 'Describe what changed…'
+        async def on_message(value: str):
+            value = value.strip()
+            if not value:
+                await self._show_commit_edit(repo, detail_block_id, prefill_hint)
+                return
+            await self.mcp.clear_block(BLOCK_COMMIT_EDIT)
+            await self._do_commit(repo, value)
+        self.mcp.set_callback(BLOCK_COMMIT_EDIT, on_message)
+        await self.mcp.emit_block(BLOCK_COMMIT_EDIT, 'prompt', {
+            'title':       f'Commit message — {repo["name"]}',
+            'placeholder': placeholder,
+        }, ttl=3600)
+
+    async def _do_commit(self, repo: dict, message: str):
+        path = repo['path']
+        await self._run_git_op(
+            repo, None, 'Committing…',
+            ['git', '-C', path, 'add', '-A'],
+            then=['git', '-C', path, 'commit', '-m', message]
         )
-        if rc != 0:
-            print(f'[github] create issue error: {stderr}', file=sys.stderr)
-            return None
-        return stdout or None
+
+    async def _confirm_discard(self, repo: dict, detail_block_id: str):
+        n = repo['dirty_count']
+        noun = 'files' if n != 1 else 'file'
+        async def on_confirm(value: str):
+            await self.mcp.clear_block(BLOCK_CONFIRM)
+            if value == 'Discard':
+                await self._run_git_op(
+                    repo, detail_block_id, 'Discarding changes…',
+                    ['git', '-C', repo['path'], 'restore', '.']
+                )
+            else:
+                await self._show_detail(repo)
+        await self.mcp.clear_block(detail_block_id)
+        self._open_detail_id = None
+        self.mcp.set_callback(BLOCK_CONFIRM, on_confirm)
+        await self.mcp.emit_block(BLOCK_CONFIRM, 'confirmation', {
+            'title': f'Discard all changes in {repo["name"]}?',
+            'body':  (
+                f'This will permanently discard {n} changed {noun}. '
+                f'This cannot be undone.'
+            ),
+            'options': ['Discard', 'Cancel'],
+        }, ttl=120)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _run_cmd(cmd: list):
+    try:
+        r = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=30, stdin=subprocess.DEVNULL
+        )
+        return r.returncode, r.stdout.strip(), r.stderr.strip()
+    except subprocess.TimeoutExpired:
+        return 1, '', 'Operation timed out'
+    except Exception as e:
+        return 1, '', str(e)
 
 
 # ---------------------------------------------------------------------------
@@ -525,15 +609,13 @@ class GitHubScript:
 # ---------------------------------------------------------------------------
 
 async def main():
-    test_mode = len(sys.argv) > 1 and sys.argv[1] in ('test', '--test')
+    test_mode = '--test' in sys.argv or 'test' in sys.argv
     if test_mode:
-        print('[github] running in test mode', file=sys.stderr)
-
+        print('[git-repos] running in test mode', file=sys.stderr)
     mcp = MCPClient()
     asyncio.create_task(mcp.read_loop())
-    await mcp.initialize(client_name='github')
-
-    script = GitHubScript(mcp)
+    await mcp.initialize(client_name='git-repos')
+    script = GitReposScript(mcp)
     await script.run(test_mode=test_mode)
 
 

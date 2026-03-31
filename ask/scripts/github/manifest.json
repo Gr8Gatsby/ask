@@ -1,9 +1,9 @@
 {
   "id": "github",
-  "name": "GitHub",
-  "version": "1.0",
-  "description": "Browse repositories and manage issues",
+  "name": "Git Repos",
+  "version": "2.0",
+  "description": "Monitor local git repos and push changes from iPhone",
   "entry": "main.py",
-  "icon": "ant.circle",
+  "icon": "arrow.triangle.branch",
   "icon_file": "icon.svg"
 }

@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import CloudKit
 import UserNotifications
+import SwiftData
 
 // MARK: - Script group model
 
@@ -65,7 +66,6 @@ struct HomeView: View {
     @State private var pollTask: Task<Void, Never>?
     @State private var lastHeartbeatAt: Date = .distantPast
     @State private var notifiedBlockIDs: Set<String> = []
-    @State private var dismissedToastScriptIDs: Set<String> = []
     @State private var burstPollingUntil: Date = .distantPast
     @State private var responseErrorMessage: String?
     @State private var queuedMessage: String?
@@ -99,10 +99,6 @@ struct HomeView: View {
 
     private var actionGroups: [ScriptGroup] {
         scriptGroups.filter { $0.isActionRequired }
-    }
-
-    private var visibleToastGroups: [ScriptGroup] {
-        actionGroups.filter { !dismissedToastScriptIDs.contains($0.scriptID) }
     }
 
     var body: some View {
@@ -152,26 +148,9 @@ struct HomeView: View {
                             .clipShape(Capsule())
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
-                    if !visibleToastGroups.isEmpty {
-                        ForEach(visibleToastGroups) { group in
-                            ActionToastView(group: group, onTap: {
-                                selectedScriptID = group.scriptID
-                            }, onDismiss: {
-                                let anim = SwiftUI.Animation.spring(response: 0.3, dampingFraction: 0.8)
-                                _ = withAnimation(anim) {
-                                    dismissedToastScriptIDs.insert(group.scriptID)
-                                }
-                            })
-                            .transition(.asymmetric(
-                                insertion: .move(edge: .bottom).combined(with: .opacity),
-                                removal: .move(edge: .bottom).combined(with: .opacity)
-                            ))
-                        }
-                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 20)
-                .animation(.spring(response: 0.35, dampingFraction: 0.8), value: visibleToastGroups.map(\.scriptID))
                 .animation(.spring(response: 0.3, dampingFraction: 0.8), value: responseErrorMessage)
                 .animation(.spring(response: 0.3, dampingFraction: 0.8), value: queuedMessage)
             }
@@ -188,16 +167,7 @@ struct HomeView: View {
                     allBlocks: blocks,
                     isWaiting: Date() < burstPollingUntil,
                     onRespond: { block, value in await respondToBlock(block, value: value) },
-                    toastGroups: visibleToastGroups,
-                    errorMessage: responseErrorMessage,
-                    onToastTap: { scriptID in
-                        // Switch to the tapped script's detail inside the cover
-                        selectedScriptID = scriptID
-                    },
-                    onToastDismiss: { scriptID in
-                        let anim = SwiftUI.Animation.spring(response: 0.3, dampingFraction: 0.8)
-                        _ = withAnimation(anim) { dismissedToastScriptIDs.insert(scriptID) }
-                    }
+                    errorMessage: responseErrorMessage
                 )
             }
         }
@@ -222,6 +192,11 @@ struct HomeView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .askRefreshRequired)) { _ in
             Task<Void, Never> { await load() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .askNavigateToScript)) { notif in
+            if let scriptID = notif.userInfo?["scriptID"] as? String {
+                selectedScriptID = scriptID
+            }
         }
     }
 
@@ -269,25 +244,25 @@ struct HomeView: View {
     // MARK: - Custom bottom bar (avoids UIKitToolbar subview warning on iOS 26)
 
     private var bottomBar: some View {
-        HStack {
-            Spacer()
+        HStack(spacing: 14) {
+            machineMenuButton
             Picker("", selection: $selectedTab) {
                 Text("Home").tag(HomeTab.home)
                 Text("Feed").tag(HomeTab.feed)
             }
             .pickerStyle(.segmented)
             .frame(width: 110)
-            .scaleEffect(0.85)
-            Spacer()
-            machineMenuButton
-                .padding(.trailing, 8)
             Button { showSettings = true } label: {
                 Image(systemName: "gearshape")
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 18)
         .padding(.vertical, 10)
-        .background(.bar)
+        .background(.regularMaterial, in: Capsule())
+        .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+        .padding(.horizontal, 32)
+        .padding(.bottom, 16)
+        .padding(.top, 4)
     }
 
     @ViewBuilder
@@ -383,8 +358,6 @@ struct HomeView: View {
             let newBlocks = actionBlocks.filter { !notifiedBlockIDs.contains($0.id) }
             guard !newBlocks.isEmpty else { continue }
 
-            // New action arrived for this script — clear any prior dismissal so toast reappears
-            dismissedToastScriptIDs.remove(group.scriptID)
             for block in newBlocks { notifiedBlockIDs.insert(block.id) }
 
             let notifContent = UNMutableNotificationContent()
@@ -475,7 +448,6 @@ struct HomeView: View {
         if shouldRemove {
             withAnimation(.easeOut(duration: 0.22)) {
                 blocks.removeAll { $0.id == block.id }
-                dismissedToastScriptIDs.insert(block.scriptID)
             }
         }
 
@@ -496,7 +468,6 @@ struct HomeView: View {
                         if $0.requiresResponse != $1.requiresResponse { return $0.requiresResponse }
                         return $0.createdAt > $1.createdAt
                     }
-                    dismissedToastScriptIDs.remove(block.scriptID)
                 }
             }
             burstPollingUntil = .distantPast
@@ -625,70 +596,6 @@ private struct CountdownTileLine: View {
     }
 }
 
-// MARK: - Action toast banner
-
-private struct ActionToastView: View {
-    let group: ScriptGroup
-    let onTap: () -> Void
-    let onDismiss: () -> Void
-
-    var body: some View {
-        HStack(spacing: 0) {
-            Button(action: onTap) {
-                HStack(spacing: 12) {
-                    ScriptIconView(
-                        svgString: group.iconSVG,
-                        iconData: group.iconData,
-                        sfSymbol: group.icon ?? "terminal.fill"
-                    )
-                    .frame(width: 32, height: 32)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(group.name)
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(.primary)
-                        if let title = group.actionTitle {
-                            Text(title)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-
-                    Spacer()
-
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-                .padding(.leading, 14)
-                .padding(.trailing, 8)
-                .padding(.vertical, 12)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-        }
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(Color.orange.opacity(0.4), lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(0.12), radius: 12, y: 4)
-    }
-}
-
 // MARK: - Script detail (full screen)
 
 struct ScriptDetailView: View {
@@ -696,10 +603,7 @@ struct ScriptDetailView: View {
     let allBlocks: [RKBlock]
     var isWaiting: Bool = false
     let onRespond: (RKBlock, String) async -> Void
-    var toastGroups: [ScriptGroup] = []
     var errorMessage: String? = nil
-    var onToastTap: ((String) -> Void)? = nil
-    var onToastDismiss: ((String) -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
 
@@ -777,9 +681,6 @@ struct ScriptDetailView: View {
                     )
                 }
             }
-            .overlay(alignment: .bottom) {
-                toastOverlay
-            }
         }
         .onChange(of: currentDetailBlock?.id) { _, newID in
             if let id = newID {
@@ -836,37 +737,6 @@ struct ScriptDetailView: View {
         }
     }
 
-    private var toastOverlay: some View {
-        VStack(spacing: 8) {
-            if let errorMsg = errorMessage {
-                Text(errorMsg)
-                    .font(.caption)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
-                    .background(Color.red.opacity(0.85))
-                    .clipShape(Capsule())
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-            if !toastGroups.isEmpty {
-                ForEach(toastGroups) { group in
-                    ActionToastView(group: group, onTap: {
-                        onToastTap?(group.scriptID)
-                    }, onDismiss: {
-                        onToastDismiss?(group.scriptID)
-                    })
-                    .transition(.asymmetric(
-                        insertion: .move(edge: .bottom).combined(with: .opacity),
-                        removal: .move(edge: .bottom).combined(with: .opacity)
-                    ))
-                }
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 20)
-        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: toastGroups.map(\.scriptID))
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: errorMessage)
-    }
 }
 
 // MARK: - Detail full-screen view
@@ -1007,6 +877,21 @@ struct SettingsSheetView: View {
     @AppStorage("showBlockDebugInfo") private var showDebugInfo: Bool = false
     @State private var machines: [AskMachine] = []
     @State private var showQueueReview = false
+    @State private var feedSchedules: [String: String] = [:]
+
+    @Query(sort: \FeedHistoryEntry.createdAt, order: .reverse)
+    private var feedHistory: [FeedHistoryEntry]
+
+    private var feedScripts: [(id: String, name: String)] {
+        var seen = Set<String>()
+        var result: [(id: String, name: String)] = []
+        for entry in feedHistory {
+            if seen.insert(entry.scriptID).inserted {
+                result.append((id: entry.scriptID, name: entry.scriptName ?? entry.scriptID))
+            }
+        }
+        return result
+    }
 
     private var queue: OfflineQueue { .shared }
 
@@ -1057,6 +942,31 @@ struct SettingsSheetView: View {
                     }
                 }
 
+                if !feedScripts.isEmpty {
+                    Section("Feed Schedules") {
+                        ForEach(feedScripts, id: \.id) { script in
+                            FeedScheduleRow(
+                                scriptName: script.name,
+                                schedule: Binding(
+                                    get: { feedSchedules[script.id] ?? "0 * * * *" },
+                                    set: { newSchedule in
+                                        feedSchedules[script.id] = newSchedule
+                                        if let machine = machines.first {
+                                            Task {
+                                                try? await cloudKit.saveFeedSchedule(
+                                                    machineID: machine.id,
+                                                    scriptID: script.id,
+                                                    schedule: newSchedule
+                                                )
+                                            }
+                                        }
+                                    }
+                                )
+                            )
+                        }
+                    }
+                }
+
                 Section("Developer") {
                     Toggle("Show Debug Info on Cards", isOn: $showDebugInfo)
                 }
@@ -1071,10 +981,59 @@ struct SettingsSheetView: View {
             }
             .task {
                 machines = (try? await cloudKit.fetchMachines()) ?? []
+                if let machine = machines.first,
+                   let schedules = try? await cloudKit.fetchFeedSchedules(machineID: machine.id) {
+                    var map: [String: String] = [:]
+                    for (scriptID, schedule) in schedules { map[scriptID] = schedule }
+                    feedSchedules = map
+                }
             }
             .sheet(isPresented: $showQueueReview) {
                 QueueReviewSheet(isPresented: $showQueueReview)
                     .environment(cloudKit)
+            }
+        }
+    }
+}
+
+// MARK: - Feed schedule row
+
+private struct FeedScheduleRow: View {
+    let scriptName: String
+    @Binding var schedule: String
+
+    private let presets: [(label: String, cron: String)] = [
+        ("Every Hour",   "0 * * * *"),
+        ("Daily 9am",    "0 9 * * *"),
+        ("Daily 6pm",    "0 18 * * *"),
+        ("Weekly Mon",   "0 9 * * 1"),
+    ]
+
+    private var presetLabel: String {
+        presets.first(where: { $0.cron == schedule })?.label ?? "Custom"
+    }
+
+    var body: some View {
+        HStack {
+            Text(scriptName)
+                .lineLimit(1)
+            Spacer()
+            Menu {
+                ForEach(presets, id: \.cron) { preset in
+                    Button {
+                        schedule = preset.cron
+                    } label: {
+                        if preset.cron == schedule {
+                            Label(preset.label, systemImage: "checkmark")
+                        } else {
+                            Text(preset.label)
+                        }
+                    }
+                }
+            } label: {
+                Text(presetLabel)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
         }
     }

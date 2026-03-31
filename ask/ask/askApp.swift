@@ -1,16 +1,32 @@
 import SwiftUI
 import CloudKit
 import UIKit
+import UserNotifications
+import SwiftData
+
+private let feedHistoryContainer: ModelContainer = {
+    let config = ModelConfiguration(cloudKitDatabase: .none)
+    return try! ModelContainer(for: FeedHistoryEntry.self, configurations: config)
+}()
 
 extension Notification.Name {
-    static let askRefreshRequired = Notification.Name("AskRefreshRequired")
+    static let askRefreshRequired    = Notification.Name("AskRefreshRequired")
+    static let askNavigateToScript   = Notification.Name("AskNavigateToScript")
 }
 
 // MARK: - AppDelegate
 
-final class AppDelegate: NSObject, UIApplicationDelegate {
-    /// Called by iOS when a silent push arrives — including when the app is backgrounded.
-    /// Posts askRefreshRequired so any open HomeView fetches immediately.
+final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        UNUserNotificationCenter.current().delegate = self
+        return true
+    }
+
+    /// Silent push from CloudKit — trigger a data refresh.
     func application(
         _ application: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
@@ -18,6 +34,38 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     ) {
         NotificationCenter.default.post(name: .askRefreshRequired, object: nil)
         completionHandler(.newData)
+    }
+
+    // MARK: - UNUserNotificationCenterDelegate
+
+    /// Show notification banners even when the app is in the foreground.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
+    }
+
+    /// Handle tap on a notification — navigate to the relevant script.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let id = response.notification.request.identifier
+        // Identifier format: "ask-action-{scriptID}-{blockID}"
+        if id.hasPrefix("ask-action-") {
+            let parts = id.dropFirst("ask-action-".count).split(separator: "-", maxSplits: 1)
+            if let scriptID = parts.first.map(String.init) {
+                NotificationCenter.default.post(
+                    name: .askNavigateToScript,
+                    object: nil,
+                    userInfo: ["scriptID": scriptID]
+                )
+            }
+        }
+        completionHandler()
     }
 }
 
@@ -41,9 +89,9 @@ struct askApp: App {
                 .environment(cloudKit)
                 .task { await push.setup() }
         }
+        .modelContainer(feedHistoryContainer)
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
-                // App foregrounded — trigger a data refresh
                 push.handleRemoteNotification()
             }
         }
