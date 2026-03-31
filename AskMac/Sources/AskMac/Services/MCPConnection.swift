@@ -199,7 +199,7 @@ final class MCPConnection: @unchecked Sendable {
             let expiresAt = ttl.map { Date().addingTimeInterval($0) }
             // Determine if this block needs user input for CloudKit alert push delivery
             let requiresResponse: Bool
-            let responseTypes: Set<String> = ["confirmation", "prompt", "chat_prompt", "picker", "list", "detail"]
+            let responseTypes: Set<String> = ["confirmation", "prompt", "chat_prompt", "picker", "list", "detail", "agent_session"]
             if responseTypes.contains(blockType) {
                 requiresResponse = true
             } else if blockType == "tile",
@@ -352,7 +352,7 @@ final class MCPConnection: @unchecked Sendable {
                     "type": "object",
                     "properties": [
                         "blockId": ["type": "string", "description": "Unique block identifier (use UUID)"],
-                        "blockType": ["type": "string", "enum": ["confirmation", "alert", "status", "prompt", "info_card", "chat_prompt", "icon_card", "claude_session", "claude_message"]],
+                        "blockType": ["type": "string", "enum": ["confirmation", "alert", "status", "prompt", "info_card", "chat_prompt", "icon_card", "agent_session", "claude_message"]],
                         "payload": ["type": "object", "description": "Block-type-specific payload — see get_schema"],
                         "ttl": ["type": "number", "description": "Seconds until the block auto-expires (optional)"]
                     ],
