@@ -194,6 +194,12 @@ private struct ScriptRow: View {
                     .font(.caption)
                     .foregroundStyle(.red)
             }
+            if script.lastEmitTime != nil {
+                let isActive = scriptManager.activeBlocks[script.id]?.isEmpty == false
+                Image(systemName: "icloud")
+                    .font(.caption)
+                    .foregroundStyle(isActive ? Color.green : Color(white: 0.4))
+            }
             Toggle("", isOn: Binding(
                 get: { script.isEnabled },
                 set: { enabled in

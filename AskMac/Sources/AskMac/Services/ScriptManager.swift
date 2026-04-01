@@ -1,5 +1,7 @@
 import AppKit
+#if canImport(AskMacCore)
 import AskMacCore
+#endif
 import Foundation
 import Observation
 
@@ -36,6 +38,7 @@ struct ManagedScript: Identifiable {
     var status: ScriptStatus
     var isEnabled: Bool
     var lastError: String?  // last stderr output before most recent crash
+    var lastEmitTime: Date? // last time this script emitted a block to CloudKit
 
     enum ScriptStatus {
         case starting, running, crashed, stopped
@@ -316,6 +319,9 @@ final class ScriptManager {
         conn.onBlockEmitted = { [weak self] block in
             Task { @MainActor [weak self] in
                 self?.activeBlocks[manifest.id, default: [:]][block.id] = block
+                if let idx = self?.scripts.firstIndex(where: { $0.id == manifest.id }) {
+                    self?.scripts[idx].lastEmitTime = Date()
+                }
             }
         }
         conn.onBlockCleared = { [weak self] blockID in
@@ -368,6 +374,9 @@ final class ScriptManager {
         conn.onBlockEmitted = { [weak self] block in
             Task { @MainActor [weak self] in
                 self?.activeBlocks[manifest.id, default: [:]][block.id] = block
+                if let idx = self?.scripts.firstIndex(where: { $0.id == manifest.id }) {
+                    self?.scripts[idx].lastEmitTime = Date()
+                }
             }
         }
         conn.onBlockCleared = { [weak self] blockID in
