@@ -1,4 +1,5 @@
 import Foundation
+import AskMacCore
 
 // MARK: - LiveBlock
 
@@ -27,6 +28,7 @@ final class MCPConnection: @unchecked Sendable {
 
     private let entryURL: URL
     private let blockService: BlockService
+    private let terminalMonitor: TerminalMonitorService
 
     private var process: Process?
     private var stdinPipe: Pipe?
@@ -50,10 +52,11 @@ final class MCPConnection: @unchecked Sendable {
     private(set) var exitCode: Int32 = 0
     private(set) var exitedBySignal: Bool = false
 
-    init(scriptID: String, entryURL: URL, blockService: BlockService) {
+    init(scriptID: String, entryURL: URL, blockService: BlockService, terminalMonitor: TerminalMonitorService) {
         self.scriptID = scriptID
         self.entryURL = entryURL
         self.blockService = blockService
+        self.terminalMonitor = terminalMonitor
     }
 
     // MARK: - Lifecycle
@@ -246,6 +249,14 @@ final class MCPConnection: @unchecked Sendable {
         case "get_schema":
             reply(id: id, result: ["content": [["type": "text", "text": schemaText]]])
 
+        case "list_terminal_sessions":
+            let filter = args["filter"] as? String
+            Task {
+                let sessions = await terminalMonitor.listSessions(filter: filter)
+                let sessionDicts = sessions.map { $0.asDictionary }
+                reply(id: id, result: ["sessions": sessionDicts])
+            }
+
         default:
             replyError(id: id, code: -32601, message: "Unknown tool: \(name)")
         }
@@ -374,6 +385,16 @@ final class MCPConnection: @unchecked Sendable {
                 "name": "get_schema",
                 "description": "Get payload schemas for all block types",
                 "inputSchema": ["type": "object", "properties": [String: String]()]
+            ],
+            [
+                "name": "list_terminal_sessions",
+                "description": "List interactive terminal sessions on this Mac. Returns pid, name, tty, cwd, and tab_title (if available) for each session.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "filter": ["type": "string", "description": "Optional process name filter (case-insensitive substring, e.g. \"claude\" or \"codex\")"]
+                    ]
+                ]
             ]
         ]
     }

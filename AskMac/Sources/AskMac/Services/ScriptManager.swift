@@ -1,4 +1,5 @@
 import AppKit
+import AskMacCore
 import Foundation
 import Observation
 
@@ -73,6 +74,7 @@ final class ScriptManager {
 
     private let actionHistory: ActionHistoryService
     private let feedScheduler: FeedScheduler
+    private let terminalMonitor = TerminalMonitorService()
 
     init(cloudKit: CloudKitService, machineID: String, settings: AppSettings, actionHistory: ActionHistoryService) {
         self.cloudKit = cloudKit
@@ -301,7 +303,7 @@ final class ScriptManager {
         let iconData = iconImage.flatMap { ScriptManager.iconPNGBase64($0) }
         let svgString = manifests[manifest.id]?.svgString
         let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData, scriptIconSVG: svgString, scriptType: "tile")
-        let conn = MCPConnection(scriptID: manifest.id, entryURL: entryURL, blockService: blockService)
+        let conn = MCPConnection(scriptID: manifest.id, entryURL: entryURL, blockService: blockService, terminalMonitor: terminalMonitor)
 
         conn.onTerminate = { [weak self] in
             DispatchQueue.main.async {
@@ -354,7 +356,7 @@ final class ScriptManager {
         let iconData  = iconImage.flatMap { ScriptManager.iconPNGBase64($0) }
         let svgString = manifests[manifest.id]?.svgString
         let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData, scriptIconSVG: svgString, scriptType: "feed")
-        let conn = MCPConnection(scriptID: manifest.id, entryURL: entryURL, blockService: blockService)
+        let conn = MCPConnection(scriptID: manifest.id, entryURL: entryURL, blockService: blockService, terminalMonitor: terminalMonitor)
 
         conn.onTerminate = { [weak self, weak conn] in
             DispatchQueue.main.async {

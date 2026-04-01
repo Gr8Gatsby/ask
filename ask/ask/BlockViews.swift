@@ -1076,7 +1076,7 @@ struct AgentSessionBlockView: View {
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) { isCollapsed.toggle() }
             } label: {
-                HStack(alignment: .top, spacing: 6) {
+                HStack(alignment: .center, spacing: 6) {
                     Text(payload.project)
                         .font(.subheadline)
                         .fontWeight(.semibold)

@@ -83,7 +83,7 @@ class MCPClient:
         # Restore sessions from disk (pid-* sessions are NOT persisted, so none load here),
         # then scan for live claude processes to register fresh pid-* entries.
         self._load_sessions()
-        self._discover_active_processes()
+        await self._discover_active_processes()
         # Prune any pid-* sessions whose process is no longer running (discovery may have
         # registered them before we checked, or they died between pgrep and now).
         self._prune_dead_pid_sessions()
@@ -101,6 +101,18 @@ class MCPClient:
 
     async def clear_block(self, block_id):
         return await self._rpc('tools/call', {'name': 'clear_block', 'arguments': {'blockId': block_id}})
+
+    async def list_terminal_sessions(self, filter: str = '') -> list:
+        """Query the daemon for active terminal sessions on this Mac."""
+        args = {}
+        if filter:
+            args['filter'] = filter
+        try:
+            result = await self._rpc('tools/call', {'name': 'list_terminal_sessions', 'arguments': args})
+            return result.get('sessions', []) if isinstance(result, dict) else []
+        except Exception as e:
+            print(f'[claudecode-controller] list_terminal_sessions failed: {e}', file=sys.stderr)
+            return []
 
     async def _update_tile(self):
         """Re-emit the tile block reflecting current state."""
@@ -486,50 +498,18 @@ class MCPClient:
         except Exception as e:
             print(f'[claudecode-controller] session load failed: {e}', file=sys.stderr)
 
-    def _discover_active_processes(self):
+    async def _discover_active_processes(self):
+        """Scan for running 'claude' processes via the list_terminal_sessions MCP tool."""
         if os.environ.get('ASK_SKIP_DISCOVERY'):
             return
-        """Scan for running 'claude' processes and register their cwds as sessions.
-        Uses lsof to find the working directory of each claude process."""
-        import subprocess
-        try:
-            # Match the claude CLI binary — avoid matching other node processes
-            # that happen to have 'claude' elsewhere in their command line
-            ps = subprocess.run(
-                ['pgrep', '-f', r'(^|/)claude(\s|$)'],
-                capture_output=True, text=True, timeout=3
-            )
-            pids = [p.strip() for p in ps.stdout.splitlines() if p.strip()]
-            if not pids:
-                return
-            for pid in pids:
-                try:
-                    # Skip background/daemon processes — only track interactive terminal sessions.
-                    # A controlling terminal (tty != '?') confirms the process is user-facing.
-                    tty = subprocess.run(
-                        ['ps', '-p', pid, '-o', 'tty='],
-                        capture_output=True, text=True, timeout=3
-                    ).stdout.strip()
-                    if tty == '?' or not tty:
-                        continue
-                    lsof = subprocess.run(
-                        ['lsof', '-a', '-p', pid, '-d', 'cwd', '-Fn'],
-                        capture_output=True, text=True, timeout=3
-                    )
-                    # lsof -Fn output: lines starting with 'n' are the name (path)
-                    cwd = next(
-                        (line[1:] for line in lsof.stdout.splitlines() if line.startswith('n')),
-                        ''
-                    )
-                    if cwd and cwd not in ('/', '/private'):
-                        # Use pid as a stable-enough stand-in for session_id when unknown
-                        synthetic_id = f'pid-{pid}'
-                        if self._register_session(synthetic_id, cwd):
-                            print(f'[claudecode-controller] discovered claude process pid={pid} cwd={cwd}', file=sys.stderr)
-                except Exception:
-                    pass
-        except Exception as e:
-            print(f'[claudecode-controller] process discovery failed: {e}', file=sys.stderr)
+        sessions = await self.list_terminal_sessions(filter='claude')
+        for s in sessions:
+            pid = s.get('pid')
+            cwd = s.get('cwd', '')
+            if pid and cwd:
+                synthetic_id = f'pid-{pid}'
+                if self._register_session(synthetic_id, cwd):
+                    print(f'[claudecode-controller] discovered claude process pid={pid} cwd={cwd}', file=sys.stderr)
 
     @staticmethod
     def _pid_session_alive(session_id: str) -> bool:
@@ -1093,7 +1073,7 @@ async def _session_heartbeat(client):
         await asyncio.sleep(300)
         if not client._initialized:
             continue
-        client._discover_active_processes()
+        await client._discover_active_processes()
         # Prune pid-* sessions whose process is gone and clear their iOS blocks
         dead = client._prune_dead_pid_sessions()
         for session_id in dead:

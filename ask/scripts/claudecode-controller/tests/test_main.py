@@ -54,6 +54,8 @@ class TestHarness:
         self._lock = threading.Lock()
         self._reader: Optional[threading.Thread] = None
         self._auto_respond = False  # when True, auto-ack all tools/call messages
+        # Per-tool mock responses: tool_name -> result dict returned to the script
+        self._tool_responses: dict = {}
 
     def start(self, wait_for_socket=True):
         env = os.environ.copy()
@@ -92,7 +94,11 @@ class TestHarness:
                 # This unblocks clear_block / emit_block calls that tests don't
                 # care about tracking individually.
                 if msg.get('method') == 'tools/call' and 'id' in msg and self._auto_respond:
-                    self.send_rpc_response(msg['id'], {'content': [{'type': 'text', 'text': 'ok'}]})
+                    tool_name = msg.get('params', {}).get('name', '')
+                    if tool_name in self._tool_responses:
+                        self.send_rpc_response(msg['id'], self._tool_responses[tool_name])
+                    else:
+                        self.send_rpc_response(msg['id'], {'content': [{'type': 'text', 'text': 'ok'}]})
             except json.JSONDecodeError:
                 pass
 
@@ -1090,6 +1096,113 @@ def test_startup_does_not_bump_last_seen():
     if os.path.exists(sessions_file): os.unlink(sessions_file)
 
 
+def test_list_terminal_sessions_discovery():
+    """list_terminal_sessions MCP tool is called during discovery with filter='claude'.
+    pid-* sessions from discovery are registered internally but not emitted as blocks
+    (they only surface when the user explicitly launches a session from that CWD)."""
+    print('\nTest 15: list_terminal_sessions called during discovery with correct filter')
+    h = TestHarness()
+    env = os.environ.copy()
+    env['ASK_SOCKET_PATH'] = TEST_SOCKET
+    env['ASK_SESSIONS_PATH'] = '/tmp/test-claudecode-sessions-discovery.json'
+    mock_sessions = {
+        'sessions': [
+            {'pid': 42000, 'name': 'claude', 'tty': 's009', 'cwd': '/Users/kevin/code/myproject'}
+        ]
+    }
+    h._tool_responses['list_terminal_sessions'] = mock_sessions
+    h.proc = subprocess.Popen(
+        [sys.executable, SCRIPT],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+    h._reader = threading.Thread(target=h._read_stdout, daemon=True)
+    h._reader.start()
+    h._wait_for_socket()
+
+    if not h.do_handshake():
+        h.stop(); return
+
+    # list_terminal_sessions should have been called during initialize()
+    lts_call = h.wait_for(
+        lambda m: m.get('method') == 'tools/call'
+                  and m.get('params', {}).get('name') == 'list_terminal_sessions',
+        timeout=3.0,
+        description='list_terminal_sessions tool call'
+    )
+    if lts_call:
+        ok('list_terminal_sessions tool call emitted during discovery')
+        args = lts_call.get('params', {}).get('arguments', {})
+        if args.get('filter') == 'claude':
+            ok('list_terminal_sessions called with filter="claude"')
+        else:
+            fail('list_terminal_sessions called with filter="claude"', f"got {args!r}")
+    else:
+        fail('list_terminal_sessions tool call emitted during discovery', 'not found in stdout')
+
+    # Discovered pid-* sessions are registered but NOT emitted as blocks unless the user
+    # explicitly launched the session (cwd must be in _recently_launched_cwds).
+    # Verify no spurious session block appeared for the discovered pid.
+    time.sleep(0.3)
+    with h._lock:
+        discovered_emits = [
+            m for m in h._stdout_lines
+            if is_session_emit(m)
+            and 'pid-42000' in m.get('params', {}).get('arguments', {}).get('payload', {}).get('session_id', '')
+        ]
+    if not discovered_emits:
+        ok('discovered pid-* session not emitted as block (requires explicit launch)')
+    else:
+        fail('discovered pid-* session not emitted as block', f'{len(discovered_emits)} unexpected emit(s)')
+
+    h.stop()
+    for f in ['/tmp/test-claudecode-sessions-discovery.json']:
+        if os.path.exists(f):
+            try: os.unlink(f)
+            except Exception: pass
+
+
+def test_list_terminal_sessions_empty_skips_registration():
+    """When list_terminal_sessions returns no sessions, no pid-* session is registered."""
+    print('\nTest 16: list_terminal_sessions returns empty → no pid-* sessions registered')
+    h = TestHarness()
+    env = os.environ.copy()
+    env['ASK_SOCKET_PATH'] = TEST_SOCKET
+    env['ASK_SESSIONS_PATH'] = '/tmp/test-claudecode-sessions-empty.json'
+    h._tool_responses['list_terminal_sessions'] = {'sessions': []}
+    h.proc = subprocess.Popen(
+        [sys.executable, SCRIPT],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+    h._reader = threading.Thread(target=h._read_stdout, daemon=True)
+    h._reader.start()
+    h._wait_for_socket()
+
+    if not h.do_handshake():
+        h.stop(); return
+
+    # Wait briefly; no session block should appear (only the tile)
+    time.sleep(0.5)
+    with h._lock:
+        session_emits = [m for m in h._stdout_lines if is_session_emit(m)]
+    if not session_emits:
+        ok('no session block emitted when list_terminal_sessions returns empty')
+    else:
+        fail('no session block emitted when list_terminal_sessions returns empty',
+             f'{len(session_emits)} unexpected emit(s)')
+
+    h.stop()
+    for f in ['/tmp/test-claudecode-sessions-empty.json']:
+        if os.path.exists(f):
+            try: os.unlink(f)
+            except Exception: pass
+
+
 # ─── Runner ───────────────────────────────────────────────────────────────────
 
 TESTS = [
@@ -1108,6 +1221,8 @@ TESTS = [
     test_pid_and_real_session_coexist,
     test_pid_sessions_not_persisted,
     test_startup_does_not_bump_last_seen,
+    test_list_terminal_sessions_discovery,
+    test_list_terminal_sessions_empty_skips_registration,
 ]
 
 if __name__ == '__main__':

@@ -156,7 +156,7 @@ class MCPClient:
         self._initialized = True
         print('[codex-controller] MCP initialized', file=sys.stderr)
         self._load_sessions()
-        self._discover_active_processes()
+        await self._discover_active_processes()
         self._prune_dead_pid_sessions()
         for session_id, info in list(self._sessions.items()):
             asyncio.create_task(
@@ -172,6 +172,18 @@ class MCPClient:
 
     async def clear_block(self, block_id):
         return await self._rpc('tools/call', {'name': 'clear_block', 'arguments': {'blockId': block_id}})
+
+    async def list_terminal_sessions(self, filter: str = '') -> list:
+        """Query the daemon for active terminal sessions on this Mac."""
+        args = {}
+        if filter:
+            args['filter'] = filter
+        try:
+            result = await self._rpc('tools/call', {'name': 'list_terminal_sessions', 'arguments': args})
+            return result.get('sessions', []) if isinstance(result, dict) else []
+        except Exception as e:
+            print(f'[codex-controller] list_terminal_sessions failed: {e}', file=sys.stderr)
+            return []
 
     async def _update_tile(self):
         # Count only sessions with an emitted block — excludes stale/filtered pid-* sessions
@@ -545,47 +557,18 @@ class MCPClient:
         except Exception as e:
             print(f'[codex-controller] session load failed: {e}', file=sys.stderr)
 
-    def _discover_active_processes(self):
+    async def _discover_active_processes(self):
+        """Scan for running codex processes via the list_terminal_sessions MCP tool."""
         if os.environ.get('ASK_SKIP_DISCOVERY'):
             return
-        """Scan for running codex processes and register their cwds as sessions."""
-        import subprocess
-        try:
-            # Match the codex binary directly — avoid matching other node processes
-            # that may reference 'codex' in their module paths (e.g. Claude Code)
-            ps = subprocess.run(
-                ['pgrep', '-f', r'(^|/)codex(\s|$)'],
-                capture_output=True, text=True, timeout=3
-            )
-            pids = [p.strip() for p in ps.stdout.splitlines() if p.strip()]
-            if not pids:
-                return
-            for pid in pids:
-                try:
-                    # Skip background/daemon processes — only track interactive terminal sessions.
-                    # A controlling terminal (tty != '?') confirms the process is user-facing.
-                    tty = subprocess.run(
-                        ['ps', '-p', pid, '-o', 'tty='],
-                        capture_output=True, text=True, timeout=3
-                    ).stdout.strip()
-                    if tty == '?' or not tty:
-                        continue
-                    lsof = subprocess.run(
-                        ['lsof', '-a', '-p', pid, '-d', 'cwd', '-Fn'],
-                        capture_output=True, text=True, timeout=3
-                    )
-                    cwd = next(
-                        (line[1:] for line in lsof.stdout.splitlines() if line.startswith('n')),
-                        ''
-                    )
-                    if cwd and cwd not in ('/', '/private'):
-                        synthetic_id = f'pid-{pid}'
-                        if self._register_session(synthetic_id, cwd):
-                            print(f'[codex-controller] discovered codex process pid={pid} cwd={cwd}', file=sys.stderr)
-                except Exception:
-                    pass
-        except Exception as e:
-            print(f'[codex-controller] process discovery failed: {e}', file=sys.stderr)
+        sessions = await self.list_terminal_sessions(filter='codex')
+        for s in sessions:
+            pid = s.get('pid')
+            cwd = s.get('cwd', '')
+            if pid and cwd:
+                synthetic_id = f'pid-{pid}'
+                if self._register_session(synthetic_id, cwd):
+                    print(f'[codex-controller] discovered codex process pid={pid} cwd={cwd}', file=sys.stderr)
 
     @staticmethod
     def _pid_session_alive(session_id: str) -> bool:
@@ -1077,7 +1060,7 @@ async def _session_heartbeat(client):
         await asyncio.sleep(300)
         if not client._initialized:
             continue
-        client._discover_active_processes()
+        await client._discover_active_processes()
         dead = client._prune_dead_pid_sessions()
         for session_id in dead:
             try:
