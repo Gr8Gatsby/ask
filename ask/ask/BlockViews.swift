@@ -1072,6 +1072,9 @@ struct AgentSessionBlockView: View {
     @State private var showCloseConfirmation = false
     @State private var isClosing = false
     @State private var closeTimedOut = false
+    /// Holds the last non-empty message we received. Never cleared when status
+    /// transitions to "working" or "waiting" so the user retains context.
+    @State private var lastSeenMessage: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: BlockStyle.innerSpacing + 2) {
@@ -1086,8 +1089,8 @@ struct AgentSessionBlockView: View {
                             .fontWeight(.semibold)
                             .foregroundStyle(.primary)
                             .lineLimit(1)
-                        if isCollapsed, let msg = payload.lastMessage, !msg.isEmpty {
-                            Text(msg)
+                        if isCollapsed, !lastSeenMessage.isEmpty {
+                            Text(lastSeenMessage)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
@@ -1157,9 +1160,10 @@ struct AgentSessionBlockView: View {
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
-                    } else if let msg = payload.lastMessage, !msg.isEmpty {
-                        ClaudeMarkdownView(text: msg)
+                    } else if !lastSeenMessage.isEmpty {
+                        ClaudeMarkdownView(text: lastSeenMessage)
                     } else if payload.isWorking == true {
+                        // No context yet — agent just started
                         HStack(spacing: 6) {
                             ProgressView()
                                 .scaleEffect(0.7)
@@ -1169,7 +1173,8 @@ struct AgentSessionBlockView: View {
                                 .foregroundStyle(.secondary)
                         }
                     } else {
-                        Text("Waiting for input…")
+                        // No context yet — session waiting for first input
+                        Text("Session started")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -1211,7 +1216,10 @@ struct AgentSessionBlockView: View {
                 // Chat input — hidden while closing
                 if !isClosing && !closeTimedOut {
                     HStack(alignment: .bottom, spacing: 8) {
-                        TextField(payload.placeholder ?? "Reply to \(payload.agentName ?? "Claude")…", text: $text, axis: .vertical)
+                        let inputPlaceholder = payload.isWorking == true
+                            ? "\(payload.agentName ?? "Claude") is working…"
+                            : (payload.placeholder ?? "Reply to \(payload.agentName ?? "Claude")…")
+                        TextField(inputPlaceholder, text: $text, axis: .vertical)
                             .textFieldStyle(.roundedBorder)
                             .font(.subheadline)
                             .lineLimit(1...6)
@@ -1232,7 +1240,15 @@ struct AgentSessionBlockView: View {
             }
         }
         .padding(.vertical, BlockStyle.blockVerticalPadding)
-        .onChange(of: payload.lastMessage) { _, _ in
+        .onAppear {
+            if let msg = payload.lastMessage, !msg.isEmpty {
+                lastSeenMessage = msg
+            }
+        }
+        .onChange(of: payload.lastMessage) { _, newMsg in
+            if let msg = newMsg, !msg.isEmpty {
+                lastSeenMessage = msg
+            }
             withAnimation { sentMessage = "" }
         }
     }
