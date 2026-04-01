@@ -22,6 +22,11 @@ struct MenuBarView: View {
                 Divider()
                 scriptUpdateBanner
             }
+            let blockedScripts = scriptManager.scripts.filter { $0.status == .missingDependencies && $0.isEnabled }
+            if !blockedScripts.isEmpty {
+                Divider()
+                missingDepsBanner(blockedScripts)
+            }
             Divider()
             scriptsSection
             Divider()
@@ -143,6 +148,46 @@ struct MenuBarView: View {
         }
     }
 
+    @ViewBuilder
+    private func missingDepsBanner(_ blocked: [ManagedScript]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.caption)
+                Text("\(blocked.count) script\(blocked.count == 1 ? "" : "s") need setup")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+            }
+            ForEach(blocked) { script in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(script.name)
+                        .font(.caption)
+                        .fontWeight(.medium)
+                    ForEach(script.missingDeps, id: \.id) { dep in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(dep.name) not found")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if let install = dep.install {
+                                Text(install)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                    .fontDesign(.monospaced)
+                            }
+                        }
+                    }
+                    Button("Retry") {
+                        scriptManager.retryDependencies(id: script.id)
+                    }
+                    .font(.caption)
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                }
+            }
+        }
+    }
+
     private var scriptsSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -197,6 +242,7 @@ struct MenuBarView: View {
 
     private var statusColor: Color {
         if !settings.isConfigured { return .orange }
+        if scriptManager.scripts.contains(where: { $0.status == .crashed || $0.status == .missingDependencies }) { return .orange }
         if scriptManager.scripts.contains(where: { $0.status == .running }) { return .green }
         return .secondary
     }
@@ -231,6 +277,10 @@ private struct ScriptRow: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.red)
+            } else if script.status == .missingDependencies {
+                Image(systemName: "wrench.and.screwdriver")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
             if script.lastEmitTime != nil {
                 let isActive = scriptManager.activeBlocks[script.id]?.isEmpty == false

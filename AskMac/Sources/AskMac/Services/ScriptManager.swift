@@ -7,6 +7,21 @@ import Observation
 
 // MARK: - Manifest
 
+struct ScriptDependency: Codable {
+    let id: String
+    let name: String
+    let check: String       // shell command; exit 0 = installed
+    let minVersion: String? // semver minimum, compared against stdout of check
+    let install: String?    // install command to surface to the user
+    let installURL: String? // URL for full setup instructions
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, check, install
+        case minVersion  = "min_version"
+        case installURL  = "install_url"
+    }
+}
+
 struct ScriptManifest: Codable {
     let id: String
     let name: String
@@ -17,11 +32,12 @@ struct ScriptManifest: Codable {
     let iconFile: String?   // relative path to an image file (SVG/PNG)
     let type: String?       // "tile" (default) or "feed"
     let schedule: String?   // cron expression, e.g. "0 9 * * *" (feed scripts only)
+    let requires: [ScriptDependency]?
 
     var isFeed: Bool { type == "feed" }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, version, description, entry, icon, type, schedule
+        case id, name, version, description, entry, icon, type, schedule, requires
         case iconFile = "icon_file"
     }
 }
@@ -39,16 +55,18 @@ struct ManagedScript: Identifiable {
     var isEnabled: Bool
     var lastError: String?  // last stderr output before most recent crash
     var lastEmitTime: Date? // last time this script emitted a block to CloudKit
+    var missingDeps: [ScriptDependency] = []
 
     enum ScriptStatus {
-        case starting, running, crashed, stopped
+        case starting, running, crashed, stopped, missingDependencies
 
         var label: String {
             switch self {
-            case .starting: "Starting"
-            case .running:  "Running"
-            case .crashed:  "Crashed"
-            case .stopped:  "Stopped"
+            case .starting:             "Starting"
+            case .running:              "Running"
+            case .crashed:              "Crashed"
+            case .stopped:              "Stopped"
+            case .missingDependencies:  "Missing dependencies"
             }
         }
     }
@@ -167,11 +185,11 @@ final class ScriptManager {
                 // Set up the cron schedule if not already scheduled
                 if feedScheduler.task(for: manifest.id) == nil {
                     feedScheduler.schedule(manifest: manifest, scriptDir: dir, settings: settings) { [weak self] m, d in
-                        self?.launchFeedRun(manifest: m, scriptDir: d)
+                        self?.launchFeedRunWithDepCheck(manifest: m, scriptDir: d)
                     }
                 }
                 // Trigger an immediate run
-                launchFeedRun(manifest: manifest, scriptDir: dir)
+                launchFeedRunWithDepCheck(manifest: manifest, scriptDir: dir)
             } else {
                 // Tile script: stop existing connection then re-launch
                 if !isNew, let conn = connections[manifest.id] {
@@ -179,7 +197,7 @@ final class ScriptManager {
                     connections.removeValue(forKey: manifest.id)
                     activeBlocks.removeValue(forKey: manifest.id)
                 }
-                launch(manifest: manifest, scriptDir: dir)
+                launchWithDepCheck(manifest: manifest, scriptDir: dir)
             }
             print("[ScriptManager] \(isNew ? "Loaded" : "Refreshed") script: \(manifest.id)")
         }
@@ -226,12 +244,22 @@ final class ScriptManager {
         if let cached = manifests[id] {
             if cached.manifest.isFeed {
                 feedScheduler.schedule(manifest: cached.manifest, scriptDir: cached.dir, settings: settings) { [weak self] m, d in
-                    self?.launchFeedRun(manifest: m, scriptDir: d)
+                    self?.launchFeedRunWithDepCheck(manifest: m, scriptDir: d)
                 }
-                launchFeedRun(manifest: cached.manifest, scriptDir: cached.dir)
+                launchFeedRunWithDepCheck(manifest: cached.manifest, scriptDir: cached.dir)
             } else {
-                launch(manifest: cached.manifest, scriptDir: cached.dir)
+                launchWithDepCheck(manifest: cached.manifest, scriptDir: cached.dir)
             }
+        }
+    }
+
+    func retryDependencies(id: String) {
+        guard let cached = manifests[id],
+              !settings.disabledScripts.contains(id) else { return }
+        if cached.manifest.isFeed {
+            launchFeedRunWithDepCheck(manifest: cached.manifest, scriptDir: cached.dir)
+        } else {
+            launchWithDepCheck(manifest: cached.manifest, scriptDir: cached.dir)
         }
     }
 
@@ -266,11 +294,11 @@ final class ScriptManager {
             if isEnabled {
                 if manifest.isFeed {
                     feedScheduler.schedule(manifest: manifest, scriptDir: dir, settings: settings) { [weak self] m, d in
-                        self?.launchFeedRun(manifest: m, scriptDir: d)
+                        self?.launchFeedRunWithDepCheck(manifest: m, scriptDir: d)
                     }
-                    launchFeedRun(manifest: manifest, scriptDir: dir)
+                    launchFeedRunWithDepCheck(manifest: manifest, scriptDir: dir)
                 } else {
-                    launch(manifest: manifest, scriptDir: dir)
+                    launchWithDepCheck(manifest: manifest, scriptDir: dir)
                 }
             } else {
                 upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .stopped, isEnabled: false)
@@ -470,6 +498,131 @@ final class ScriptManager {
             try? await Task.sleep(for: .seconds(delay))
             guard !self.settings.disabledScripts.contains(manifest.id) else { return }
             self.launch(manifest: manifest, scriptDir: scriptDir)
+        }
+    }
+
+    // MARK: - Dependency checking
+
+    private func launchWithDepCheck(manifest: ScriptManifest, scriptDir: URL) {
+        Task { @MainActor in
+            let failed = await checkDependencies(manifest)
+            guard !self.settings.disabledScripts.contains(manifest.id) else { return }
+            if !failed.isEmpty {
+                self.handleMissingDependencies(manifest: manifest, failed: failed)
+            } else {
+                self.clearMissingDepsState(manifest: manifest)
+                self.launch(manifest: manifest, scriptDir: scriptDir)
+            }
+        }
+    }
+
+    private func launchFeedRunWithDepCheck(manifest: ScriptManifest, scriptDir: URL) {
+        Task { @MainActor in
+            let failed = await checkDependencies(manifest)
+            guard !self.settings.disabledScripts.contains(manifest.id) else { return }
+            if !failed.isEmpty {
+                self.handleMissingDependencies(manifest: manifest, failed: failed)
+            } else {
+                self.clearMissingDepsState(manifest: manifest)
+                self.launchFeedRun(manifest: manifest, scriptDir: scriptDir)
+            }
+        }
+    }
+
+    private func checkDependencies(_ manifest: ScriptManifest) async -> [ScriptDependency] {
+        guard let requires = manifest.requires, !requires.isEmpty else { return [] }
+        var failed: [ScriptDependency] = []
+        for dep in requires {
+            let passed = await runDepCheck(dep)
+            if !passed { failed.append(dep) }
+        }
+        return failed
+    }
+
+    private func runDepCheck(_ dep: ScriptDependency) async -> Bool {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+                process.arguments = ["-l", "-c", dep.check]
+                let stdoutPipe = Pipe()
+                process.standardOutput = stdoutPipe
+                process.standardError = Pipe()
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                    guard process.terminationStatus == 0 else {
+                        continuation.resume(returning: false)
+                        return
+                    }
+                    if let minVersion = dep.minVersion {
+                        let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                        let output = String(data: data, encoding: .utf8) ?? ""
+                        continuation.resume(returning: ScriptManager.versionSatisfied(output: output, minVersion: minVersion))
+                    } else {
+                        continuation.resume(returning: true)
+                    }
+                } catch {
+                    continuation.resume(returning: false)
+                }
+            }
+        }
+    }
+
+    private static func versionSatisfied(output: String, minVersion: String) -> Bool {
+        let pattern = #"(\d+)\.(\d+)\.(\d+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: output, range: NSRange(output.startIndex..., in: output)),
+              match.numberOfRanges >= 4,
+              let r1 = Range(match.range(at: 1), in: output),
+              let r2 = Range(match.range(at: 2), in: output),
+              let r3 = Range(match.range(at: 3), in: output),
+              let foundMajor = Int(output[r1]),
+              let foundMinor = Int(output[r2]),
+              let foundPatch = Int(output[r3])
+        else { return true } // can't parse version — treat as satisfied
+
+        let parts = minVersion.split(separator: ".").compactMap { Int($0) }
+        guard parts.count >= 3 else { return true }
+        if foundMajor != parts[0] { return foundMajor > parts[0] }
+        if foundMinor != parts[1] { return foundMinor > parts[1] }
+        return foundPatch >= parts[2]
+    }
+
+    private func handleMissingDependencies(manifest: ScriptManifest, failed: [ScriptDependency]) {
+        let iconImage = manifests[manifest.id]?.icon
+        upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage,
+                     status: .missingDependencies, isEnabled: true)
+        if let idx = scripts.firstIndex(where: { $0.id == manifest.id }) {
+            scripts[idx].missingDeps = failed
+        }
+        let depNames = failed.map(\.name).joined(separator: ", ")
+        print("[ScriptManager] \(manifest.id): missing dependencies — \(depNames)")
+        let iconData  = iconImage.flatMap { ScriptManager.iconPNGBase64($0) }
+        let svgString = manifests[manifest.id]?.svgString
+        Task {
+            let bs = BlockService(cloudKit: cloudKit, machineID: machineID,
+                                  scriptID: manifest.id, scriptName: manifest.name,
+                                  scriptIcon: manifest.icon, scriptIconData: iconData,
+                                  scriptIconSVG: svgString)
+            let payload: [String: Any] = [
+                "label": "\(manifest.name) unavailable",
+                "value": "\(depNames) not installed",
+                "color": "orange"
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: payload),
+               let json = String(data: data, encoding: .utf8) {
+                try? await bs.emitBlock(blockID: "\(manifest.id)-missing-dep",
+                                        blockType: "status", payload: json,
+                                        expiresAt: Date().addingTimeInterval(86400))
+            }
+        }
+    }
+
+    private func clearMissingDepsState(manifest: ScriptManifest) {
+        if let idx = scripts.firstIndex(where: { $0.id == manifest.id }),
+           scripts[idx].status == .missingDependencies {
+            scripts[idx].missingDeps = []
         }
     }
 

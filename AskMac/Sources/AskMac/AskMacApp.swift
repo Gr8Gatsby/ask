@@ -78,12 +78,13 @@ struct AskMacApp: App {
         }
         .defaultSize(width: 720, height: 520)
         .defaultPosition(.center)
-
-        CommandGroup(after: .appInfo) {
-            Button("Check for Updates…") {
-                updater.checkForUpdates()
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    updater.checkForUpdates()
+                }
+                .disabled(!updater.canCheckForUpdates)
             }
-            .disabled(!updater.canCheckForUpdates)
         }
     }
 }
