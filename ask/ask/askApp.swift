@@ -56,25 +56,27 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let userInfo = response.notification.request.content.userInfo
         let id = response.notification.request.identifier
 
+        var scriptID: String?
+
         // CloudKit alert push — extract scriptID from record fields
         if let ckNote = CKNotification(fromRemoteNotificationDictionary: userInfo) as? CKQueryNotification,
-           let scriptID = ckNote.recordFields?["scriptID"] as? String {
+           let sid = ckNote.recordFields?["scriptID"] as? String {
+            scriptID = sid
+        }
+        // Local notification — identifier format: "ask-action-{scriptID}-{blockID}"
+        else if id.hasPrefix("ask-action-") {
+            let parts = id.dropFirst("ask-action-".count).split(separator: "-", maxSplits: 1)
+            scriptID = parts.first.map(String.init)
+        }
+
+        if let scriptID {
+            // Persist for cold-start: HomeView may not be in the hierarchy yet when this fires.
+            UserDefaults.standard.set(scriptID, forKey: "pendingNavigationScriptID")
             NotificationCenter.default.post(
                 name: .askNavigateToScript,
                 object: nil,
                 userInfo: ["scriptID": scriptID]
             )
-        }
-        // Local notification — identifier format: "ask-action-{scriptID}-{blockID}"
-        else if id.hasPrefix("ask-action-") {
-            let parts = id.dropFirst("ask-action-".count).split(separator: "-", maxSplits: 1)
-            if let scriptID = parts.first.map(String.init) {
-                NotificationCenter.default.post(
-                    name: .askNavigateToScript,
-                    object: nil,
-                    userInfo: ["scriptID": scriptID]
-                )
-            }
         }
         completionHandler()
     }

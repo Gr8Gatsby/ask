@@ -210,6 +210,12 @@ struct HomeView: View {
         .task {
             await cloudKit.checkAccountStatus()
             await load()
+            // Consume scriptID persisted by AppDelegate for cold-start navigation:
+            // the notification tap may fire before HomeView is in the hierarchy.
+            if let id = UserDefaults.standard.string(forKey: "pendingNavigationScriptID") {
+                UserDefaults.standard.removeObject(forKey: "pendingNavigationScriptID")
+                selectedScriptID = id
+            }
             startPolling()
         }
         .onDisappear { pollTask?.cancel() }
@@ -224,6 +230,7 @@ struct HomeView: View {
         .onReceive(NotificationCenter.default.publisher(for: .askNavigateToScript)) { notif in
             if let scriptID = notif.userInfo?["scriptID"] as? String {
                 selectedScriptID = scriptID
+                Task { await load() }
             }
         }
     }
@@ -698,6 +705,7 @@ struct ScriptDetailView: View {
     /// block (from burst polling before the script clears it) to prevent re-pushing.
     @State private var dismissedDetailBlockID: String? = nil
     @State private var showRepoPicker = false
+    @State private var keyboardVisible = false
 
     private var group: ScriptGroup {
         ScriptGroup(scriptID: scriptID, blocks: allBlocks.filter { $0.scriptID == scriptID && $0.blockType != .tile })
@@ -815,6 +823,12 @@ struct ScriptDetailView: View {
                 }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) { detailBottomBar }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                keyboardVisible = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                keyboardVisible = false
+            }
             .sheet(isPresented: $showRepoPicker) {
                 if let block = startSessionBlock, let payload = block.startSessionPayload {
                     RepoPickerSheet(repos: payload.repos) { repo in
@@ -910,20 +924,12 @@ struct ScriptDetailView: View {
         HStack {
             Spacer()
             HStack(spacing: 2) {
-                // Machine selector
-                if !machines.isEmpty {
-                    Menu {
-                        ForEach(machines) { machine in
-                            Button {
-                                Task { await onSelectMachine?(machine.id) }
-                            } label: {
-                                Label(machine.name, systemImage: machine.systemImage)
-                            }
-                        }
+                // Keyboard dismiss — shown only when keyboard is visible
+                if keyboardVisible {
+                    Button {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                     } label: {
-                        let offline = activeMachine?.connectionStatus == .offline
-                        Image(systemName: activeMachine?.systemImage ?? "desktopcomputer")
-                            .foregroundStyle(offline ? .secondary : .primary)
+                        Image(systemName: "keyboard.chevron.compact.down")
                             .padding(.horizontal, 12)
                             .padding(.vertical, 5)
                     }
