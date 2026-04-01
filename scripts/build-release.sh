@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
-# build-release.sh — Build, sign, notarize, and package AskMac for release.
+# build-release.sh — Build, sign, notarize, package, and publish AskMac.
 #
-# Produces two artifacts in build/:
-#   AskMac-{VERSION}-installer.dmg  — DMG containing PKG installer (first-time installs)
-#   AskMac-{VERSION}.dmg            — DMG containing .app only (Sparkle auto-updates)
+# Produces two artifacts and creates a GitHub Release:
+#   AskMac-{VERSION}-installer.dmg  — DMG containing PKG (first-time installs)
+#   AskMac-{VERSION}.dmg            — DMG containing .app (Sparkle auto-updates)
 #
 # Usage:
 #   ./scripts/build-release.sh [version]
 #
 # Prerequisites:
-#   brew install create-dmg
-#   Developer ID Application + Developer ID Installer certificates in Keychain
+#   brew install create-dmg gh
+#   Developer ID Application + Developer ID Installer certs in Keychain
 #   Sparkle tools at ./sparkle/bin/sign_update
 #   Environment variables: APPLE_ID, APPLE_ID_PASSWORD, APPLE_TEAM_ID
+#   gh CLI authenticated: gh auth status
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -44,8 +45,13 @@ done
 if ! command -v create-dmg &>/dev/null; then
     echo "ERROR: create-dmg not found. Run: brew install create-dmg"; exit 1
 fi
+if ! command -v gh &>/dev/null; then
+    echo "ERROR: gh not found. Run: brew install gh && gh auth login"; exit 1
+fi
 if [[ ! -f "$SPARKLE_SIGN" ]]; then
-    echo "ERROR: $SPARKLE_SIGN not found. Download Sparkle release and place bin/ at $REPO_ROOT/sparkle/"
+    echo "ERROR: $SPARKLE_SIGN not found."
+    echo "  Download Sparkle from https://github.com/sparkle-project/Sparkle/releases"
+    echo "  and place the bin/ directory at $REPO_ROOT/sparkle/"
     exit 1
 fi
 
@@ -77,8 +83,7 @@ echo "==> Bundling scripts into app…"
 BUNDLE_SCRIPTS="$APP_PATH/Contents/Resources/Scripts"
 mkdir -p "$BUNDLE_SCRIPTS"
 for script_dir in "$SCRIPTS_SRC"/*/; do
-    script_name="$(basename "$script_dir")"
-    cp -r "$script_dir" "$BUNDLE_SCRIPTS/$script_name"
+    cp -r "$script_dir" "$BUNDLE_SCRIPTS/$(basename "$script_dir")"
 done
 
 echo "==> Re-signing app after adding resources…"
@@ -88,26 +93,21 @@ codesign --force --deep \
     --options runtime \
     --entitlements "$ASKMAC_DIR/Sources/AskMac/AskMac.entitlements" \
     "$APP_PATH"
-
 codesign --verify --verbose=2 "$APP_PATH"
 
 # ── Build component PKGs ───────────────────────────────────────────────────────
 echo "==> Building component PKGs…"
 
-# App component
 pkgbuild \
     --component "$APP_PATH" \
     --install-location /Applications \
     --sign "$SIGN_PKG" \
     "$BUILD_DIR/pkgs/AskMac-app.pkg"
 
-# Script components (payload-free — postinstall copies from app bundle)
-declare -A SCRIPT_VERSIONS
 for script_dir in "$SCRIPTS_SRC"/*/; do
     script_name="$(basename "$script_dir")"
-    version=$(python3 -c "import json; d=json.load(open('$script_dir/manifest.json')); print(d.get('version','1.0'))")
-    SCRIPT_VERSIONS["$script_name"]="$version"
-
+    version=$(python3 -c \
+        "import json; d=json.load(open('$script_dir/manifest.json')); print(d.get('version','1.0'))")
     pkgbuild \
         --nopayload \
         --scripts "$INSTALLER_DIR/scripts/$script_name" \
@@ -119,16 +119,18 @@ done
 
 # ── Build distribution PKG ────────────────────────────────────────────────────
 echo "==> Building distribution PKG…"
-
-# Substitute version placeholders in distribution.xml
 DIST_XML="$BUILD_DIR/distribution.xml"
 cp "$INSTALLER_DIR/distribution.xml" "$DIST_XML"
-sed -i '' "s/ASKMAC_VERSION/$VERSION/g" "$DIST_XML"
-sed -i '' "s/BREW_MONITOR_VERSION/${SCRIPT_VERSIONS[brew-monitor]:-1.0}/g" "$DIST_XML"
-sed -i '' "s/CLAUDECODE_VERSION/${SCRIPT_VERSIONS[claudecode-controller]:-1.0}/g" "$DIST_XML"
-sed -i '' "s/CODEX_VERSION/${SCRIPT_VERSIONS[codex-controller]:-1.0}/g" "$DIST_XML"
-sed -i '' "s/GITHUB_VERSION/${SCRIPT_VERSIONS[github]:-1.0}/g" "$DIST_XML"
-sed -i '' "s/OLLAMA_VERSION/${SCRIPT_VERSIONS[ollama]:-1.0}/g" "$DIST_XML"
+
+get_ver() {
+    python3 -c "import json; d=json.load(open('$SCRIPTS_SRC/$1/manifest.json')); print(d.get('version','1.0'))"
+}
+sed -i '' "s/ASKMAC_VERSION/$VERSION/g"                       "$DIST_XML"
+sed -i '' "s/BREW_MONITOR_VERSION/$(get_ver brew-monitor)/g"  "$DIST_XML"
+sed -i '' "s/CLAUDECODE_VERSION/$(get_ver claudecode-controller)/g" "$DIST_XML"
+sed -i '' "s/CODEX_VERSION/$(get_ver codex-controller)/g"     "$DIST_XML"
+sed -i '' "s/GITHUB_VERSION/$(get_ver github)/g"              "$DIST_XML"
+sed -i '' "s/OLLAMA_VERSION/$(get_ver ollama)/g"              "$DIST_XML"
 
 PKG_PATH="$BUILD_DIR/AskMac-${VERSION}.pkg"
 productbuild \
@@ -137,17 +139,16 @@ productbuild \
     --sign "$SIGN_PKG" \
     "$PKG_PATH"
 
-# ── Notarize PKG ──────────────────────────────────────────────────────────────
+# ── Notarize + staple PKG ─────────────────────────────────────────────────────
 echo "==> Notarizing PKG…"
 xcrun notarytool submit "$PKG_PATH" \
     --apple-id "$APPLE_ID" \
     --password "$APPLE_ID_PASSWORD" \
     --team-id "$APPLE_TEAM_ID" \
     --wait
-
 xcrun stapler staple "$PKG_PATH"
 
-# ── Installer DMG (PKG inside) ────────────────────────────────────────────────
+# ── Installer DMG ─────────────────────────────────────────────────────────────
 echo "==> Creating installer DMG…"
 INSTALLER_DMG="$BUILD_DIR/AskMac-${VERSION}-installer.dmg"
 mkdir -p "$BUILD_DIR/installer-contents"
@@ -162,7 +163,7 @@ create-dmg \
     "$BUILD_DIR/installer-contents/"
 codesign --sign "$SIGN_APP" --timestamp "$INSTALLER_DMG"
 
-# ── Sparkle update DMG (.app inside) ──────────────────────────────────────────
+# ── Sparkle update DMG ────────────────────────────────────────────────────────
 echo "==> Creating Sparkle update DMG…"
 SPARKLE_DMG="$BUILD_DIR/AskMac-${VERSION}.dmg"
 create-dmg \
@@ -177,14 +178,12 @@ create-dmg \
     "$BUILD_DIR/export/"
 codesign --sign "$SIGN_APP" --timestamp "$SPARKLE_DMG"
 
-# ── Notarize Sparkle DMG ──────────────────────────────────────────────────────
 echo "==> Notarizing Sparkle DMG…"
 xcrun notarytool submit "$SPARKLE_DMG" \
     --apple-id "$APPLE_ID" \
     --password "$APPLE_ID_PASSWORD" \
     --team-id "$APPLE_TEAM_ID" \
     --wait
-
 xcrun stapler staple "$SPARKLE_DMG"
 
 # ── Sparkle signature ─────────────────────────────────────────────────────────
@@ -192,26 +191,47 @@ echo "==> Generating Sparkle EdDSA signature…"
 SIGNATURE=$("$SPARKLE_SIGN" "$SPARKLE_DMG")
 FILE_SIZE=$(stat -f%z "$SPARKLE_DMG")
 
+# ── Update appcast ────────────────────────────────────────────────────────────
+echo "==> Updating appcast.xml…"
+PUB_DATE=$(date -u '+%a, %d %b %Y %H:%M:%S +0000')
+DMG_NAME="AskMac-${VERSION}.dmg"
+
+python3 - <<PYEOF
+with open('docs/appcast.xml', 'r') as f:
+    content = f.read()
+new_item = """    <item>
+      <title>Version ${VERSION}</title>
+      <sparkle:version>${BUILD_NUMBER}</sparkle:version>
+      <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>${PUB_DATE}</pubDate>
+      <enclosure
+        url="https://github.com/Gr8Gatsby/ask/releases/download/v${VERSION}/${DMG_NAME}"
+        length="${FILE_SIZE}"
+        type="application/octet-stream"
+        sparkle:edSignature="${SIGNATURE}"
+      />
+    </item>"""
+marker = '    <!-- Release entries are prepended here by the release pipeline -->'
+content = content.replace(marker, marker + '\n' + new_item)
+with open('docs/appcast.xml', 'w') as f:
+    f.write(content)
+PYEOF
+
+git add docs/appcast.xml
+git commit -m "chore(release): update appcast for v${VERSION}"
+git push origin main
+
+# ── Publish GitHub Release ────────────────────────────────────────────────────
+echo "==> Creating GitHub Release v${VERSION}…"
+gh release create "v${VERSION}" \
+    --title "AskMac v${VERSION}" \
+    --notes-from-tag \
+    "$INSTALLER_DMG" \
+    "$SPARKLE_DMG"
+
 echo ""
-echo "✅ Build complete"
+echo "✅ Release complete"
 echo "   Installer DMG : $INSTALLER_DMG"
 echo "   Sparkle DMG   : $SPARKLE_DMG"
-echo ""
-echo "Add this entry to docs/appcast.xml:"
-echo "────────────────────────────────────────────────────────────────"
-cat <<APPCAST
-<item>
-  <title>Version ${VERSION}</title>
-  <sparkle:version>${BUILD_NUMBER}</sparkle:version>
-  <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
-  <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-  <pubDate>$(date -u '+%a, %d %b %Y %H:%M:%S +0000')</pubDate>
-  <enclosure
-    url="https://github.com/Gr8Gatsby/ask/releases/download/v${VERSION}/AskMac-${VERSION}.dmg"
-    length="${FILE_SIZE}"
-    type="application/octet-stream"
-    sparkle:edSignature="${SIGNATURE}"
-  />
-</item>
-APPCAST
-echo "────────────────────────────────────────────────────────────────"
+echo "   GitHub Release: https://github.com/Gr8Gatsby/ask/releases/tag/v${VERSION}"

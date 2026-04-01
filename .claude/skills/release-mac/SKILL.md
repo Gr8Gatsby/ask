@@ -79,9 +79,15 @@ Show the user:
 ```
 ✅ Tag v{version} pushed.
 
-GitHub Actions pipeline: https://github.com/Gr8Gatsby/ask/actions
-GitHub Releases: https://github.com/Gr8Gatsby/ask/releases
+CI validation running at: https://github.com/Gr8Gatsby/ask/actions
 
-The pipeline takes ~10–15 minutes. Monitor it at the link above.
-When complete, the release will appear at the releases page with both DMGs attached.
+Next step — run the local build script to sign, notarize, and publish:
+
+  export APPLE_ID="your@apple.id"
+  export APPLE_ID_PASSWORD="app-specific-password"
+  export APPLE_TEAM_ID="B5J28L8ARB"
+  ./scripts/build-release.sh {version}
+
+This will produce the installer DMG, Sparkle update DMG, update appcast.xml,
+and create the GitHub Release automatically via gh.
 ```

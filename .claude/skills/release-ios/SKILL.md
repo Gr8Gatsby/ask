@@ -76,10 +76,17 @@ Show the user:
 ```
 ✅ Tag ios-v{version} pushed.
 
-GitHub Actions pipeline: https://github.com/Gr8Gatsby/ask/actions
-App Store Connect: https://appstoreconnect.apple.com
+CI validation running at: https://github.com/Gr8Gatsby/ask/actions
 
-The pipeline takes ~5–10 minutes to upload. Apple processes the build
-after upload (~10–30 min). Once processed, the build appears in TestFlight
-for internal testers automatically.
+Next step — run the local release script to archive, sign, and upload to TestFlight:
+
+  export ASC_KEY_ID="your-key-id"
+  export ASC_ISSUER_ID="your-issuer-id"
+  ./scripts/release-ios.sh {version}
+
+The ASC API key must be at:
+  ~/.appstoreconnect/private_keys/AuthKey_{ASC_KEY_ID}.p8
+
+Upload takes ~5 min. Apple processes the build after upload (~10–30 min).
+Monitor: https://appstoreconnect.apple.com
 ```
