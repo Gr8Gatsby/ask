@@ -27,9 +27,10 @@ struct BlockPreviewView: View {
             case "picker":       PickerPreview(payload: payload, onRespond: onRespond)
             case "icon_card":    IconCardPreview(payload: payload)
             case "claude_message": ClaudeMessagePreview(payload: payload)
-            case "agent_session": AgentSessionPreview(payload: payload, onRespond: onRespond)
-            case "tile":         EmptyView() // drives home-screen tile only
-            default:             EmptyView()
+            case "agent_session":  AgentSessionPreview(payload: payload, onRespond: onRespond)
+            case "start_session":  StartSessionPreview(payload: payload)
+            case "tile":           EmptyView() // drives home-screen tile only
+            default:               EmptyView()
             }
         }
     }
@@ -480,8 +481,18 @@ private struct AgentSessionPreview: View {
         return Color(red: r, green: g, blue: b)
     }
 
+    private var project: String? { payload["project"] as? String }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            // Project / session label
+            if let proj = project, !proj.isEmpty {
+                Text(proj)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
             // Message / working state box
             Group {
                 if isWorking {
@@ -559,6 +570,35 @@ private struct ClaudeMessagePreview: View {
                     .font(.caption)
                     .foregroundStyle(.primary)
                     .lineLimit(4)
+            }
+        }
+        .padding(8)
+        .background(Color.secondary.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+}
+
+// MARK: - StartSession
+
+private struct StartSessionPreview: View {
+    let payload: [String: Any]
+
+    private var repoCount: Int {
+        (payload["repos"] as? [[String: Any]])?.count ?? 0
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "plus.circle")
+                .foregroundStyle(.secondary)
+            Text("Start Session")
+                .font(.subheadline)
+                .fontWeight(.medium)
+            Spacer()
+            if repoCount > 0 {
+                Text("\(repoCount) repos")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(8)

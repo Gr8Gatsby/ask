@@ -11,6 +11,7 @@ Protocol:
 import sys
 import json
 import asyncio
+import hashlib
 import os
 import time
 import uuid
@@ -37,6 +38,12 @@ class MCPClient:
         self._working_sessions: set = set()
         # (session_id, tool_name) -> [block_id, ...] — cleared when the tool runs
         self._tool_block_map = {}
+        # cwd -> tmux window target (e.g. "0:2") for sessions launched via tmux
+        self._pending_tmux_targets: dict = {}
+        # tmux_target -> asyncio.Task — background pane monitors
+        self._tmux_monitors: dict = {}
+        # CWDs the user explicitly launched via Start Session — pid-* sessions only surface for these
+        self._recently_launched_cwds: set = set()
         # Tile state
         self._active_confirmations = 0
         self._tile_body: Optional[str] = None
@@ -84,6 +91,7 @@ class MCPClient:
             asyncio.create_task(
                 self._emit_session_block(session_id, last_message=info.get('last_message', ''), touch_last_seen=False)
             )
+        asyncio.create_task(self._emit_start_session_block())
 
     async def emit_block(self, block_id, block_type, payload, ttl=None):
         args = {'blockId': block_id, 'blockType': block_type, 'payload': payload}
@@ -96,6 +104,8 @@ class MCPClient:
 
     async def _update_tile(self):
         """Re-emit the tile block reflecting current state."""
+        # Count only sessions with an emitted block — excludes stale/filtered pid-* sessions
+        n = sum(1 for info in self._sessions.values() if info.get('last_emitted'))
         if self._active_confirmations > 0:
             payload = {
                 'label': 'Approval needed',
@@ -104,9 +114,16 @@ class MCPClient:
             }
             if self._tile_body:
                 payload['body'] = self._tile_body
-        else:
+        elif n == 0:
             payload = {
-                'label': 'Ready',
+                'label': 'No sessions',
+                'status_color': 'blue',
+                'action_required': False,
+            }
+        else:
+            label = '1 session' if n == 1 else f'{n} sessions'
+            payload = {
+                'label': label,
                 'status_color': 'blue',
                 'action_required': False,
             }
@@ -188,17 +205,258 @@ class MCPClient:
     # ------------------------------------------------------------------
 
     def _session_block_id(self, session_id: str) -> str:
-        return f'claudecode-session-{session_id[:8]}'
+        # Use a hash so sessions with the same prefix don't collide.
+        digest = hashlib.sha256(session_id.encode()).hexdigest()[:8]
+        return f'claudecode-session-{digest}'
+
+    def _start_session_block_id(self) -> str:
+        return 'claudecode-start-session'
+
+    def _scan_git_repos(self) -> list:
+        """Return a sorted list of {name, path} dicts for local git repos."""
+        import subprocess
+        home = os.path.expanduser('~')
+        search_dirs = [
+            home,
+            os.path.join(home, 'Documents'),
+            os.path.join(home, 'code'),
+            os.path.join(home, 'Desktop'),
+            os.path.join(home, 'Developer'),
+            os.path.join(home, 'projects'),
+            os.path.join(home, 'src'),
+            os.path.join(home, 'repos'),
+        ]
+        repo_paths = set()
+        # Include recently-used CWDs from known sessions
+        for info in self._sessions.values():
+            cwd = info.get('cwd', '')
+            if cwd and os.path.isdir(cwd):
+                repo_paths.add(cwd)
+        # Scan common directories for .git folders
+        for base in search_dirs:
+            if not os.path.isdir(base):
+                continue
+            try:
+                result = subprocess.run(
+                    ['find', base, '-maxdepth', '3', '-name', '.git', '-type', 'd'],
+                    capture_output=True, text=True, timeout=10
+                )
+                for line in result.stdout.splitlines():
+                    repo_path = os.path.dirname(line.strip())
+                    if repo_path:
+                        repo_paths.add(repo_path)
+            except Exception:
+                pass
+        repos = []
+        for path in sorted(repo_paths):
+            parts = path.rstrip('/').split('/')
+            name = '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+            repos.append({'name': name, 'path': path})
+        repos.sort(key=lambda x: x['name'].lower())
+        return repos
+
+    async def _emit_start_session_block(self):
+        """Emit (or refresh) the start_session block containing the repo list."""
+        if not self._initialized:
+            return
+        block_id = self._start_session_block_id()
+        repos = self._scan_git_repos()
+        payload = {'repos': repos}
+        self._response_callbacks[block_id] = lambda v: self._on_start_session_reply(v)
+        try:
+            await self.emit_block(block_id, 'start_session', payload)
+        except Exception as e:
+            print(f'[claudecode-controller] start_session block emit failed: {e}', file=sys.stderr)
+
+    async def _on_start_session_reply(self, value: str):
+        """Called when the user picks a repo path from the iOS start-session sheet."""
+        # Re-register immediately so another session can be started right away
+        block_id = self._start_session_block_id()
+        self._response_callbacks[block_id] = lambda v: self._on_start_session_reply(v)
+        if value:
+            await self._launch_session(value.strip())
+
+    async def _launch_session(self, cwd: str):
+        """Launch a new claude session in cwd via tmux, falling back to Terminal.app."""
+        import shutil
+        self._recently_launched_cwds.add(cwd)
+        if shutil.which('tmux'):
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    'tmux', 'new-window', '-P', '-c', cwd, 'claude',
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                stdout, _ = await proc.communicate()
+                tmux_target = stdout.decode().strip()
+                if tmux_target:
+                    self._pending_tmux_targets[cwd] = tmux_target
+                    task = asyncio.create_task(self._monitor_tmux_pane(tmux_target))
+                    self._tmux_monitors[tmux_target] = task
+                    asyncio.create_task(self._delayed_discovery())
+                    print(f'[claudecode-controller] launched claude in tmux {tmux_target} at {cwd}', file=sys.stderr)
+                    return
+            except Exception as e:
+                print(f'[claudecode-controller] tmux launch failed: {e}, falling back to Terminal.app', file=sys.stderr)
+        # Terminal.app fallback
+        safe_cwd = cwd.replace('\\', '\\\\').replace('"', '\\"')
+        script = f'tell application "Terminal" to do script "cd \\"{safe_cwd}\\" && claude"'
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'osascript', '-e', script,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()
+            print(f'[claudecode-controller] launched claude in Terminal.app at {cwd}', file=sys.stderr)
+        except Exception as e:
+            print(f'[claudecode-controller] Terminal.app launch failed: {e}', file=sys.stderr)
+        asyncio.create_task(self._delayed_discovery())
+
+    async def _delayed_discovery(self):
+        """Re-run process discovery a few seconds after a launch to pick up new processes."""
+        await asyncio.sleep(4)
+        if not self._initialized:
+            return
+        self._discover_active_processes()
+        for session_id, info in list(self._sessions.items()):
+            if not info.get('last_emitted'):
+                asyncio.create_task(self._emit_session_block(session_id))
+
+    def _tmux_prompt_block_id(self, tmux_target: str) -> str:
+        safe = tmux_target.replace(':', '-').replace('.', '-')
+        return f'claudecode-tmux-prompt-{safe}'
+
+    @staticmethod
+    def _parse_tmux_prompt(content: str):
+        """Detect a numbered interactive menu in tmux pane output.
+        Returns (body, options) or None if no prompt found."""
+        import re
+        option_re = re.compile(r'^\s*>?\s*(\d+)[.)]\s+(.+)$')
+        footer_re = re.compile(r'press\s+enter|to\s+continue', re.IGNORECASE)
+        lines = content.splitlines()
+        options = []
+        body_lines = []
+        found_options = False
+        for line in lines:
+            m = option_re.match(line)
+            if m:
+                found_options = True
+                options.append(m.group(2).strip())
+            elif not found_options:
+                stripped = line.strip()
+                if stripped and not re.match(r'^[$%#>]\s', stripped):
+                    body_lines.append(stripped)
+        has_footer = any(footer_re.search(l) for l in lines)
+        if len(options) >= 2 and has_footer:
+            body = ' '.join(body_lines[-2:]) if body_lines else 'Choose an option'
+            return body, options
+        return None
+
+    async def _monitor_tmux_pane(self, tmux_target: str):
+        """Poll a tmux pane for interactive prompts and surface them to iOS."""
+        import hashlib as _hl
+        block_id = self._tmux_prompt_block_id(tmux_target)
+        last_hash = ''
+        poll_interval = 1
+        idle_streak = 0
+
+        while True:
+            await asyncio.sleep(poll_interval)
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    'tmux', 'capture-pane', '-p', '-t', tmux_target,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3)
+                content = stdout.decode()
+            except Exception:
+                break  # pane is gone
+
+            result = self._parse_tmux_prompt(content)
+            content_hash = _hl.md5(content.encode()).hexdigest()[:8]
+
+            if result:
+                idle_streak = 0
+                poll_interval = 1
+                if content_hash != last_hash:
+                    last_hash = content_hash
+                    body, options = result
+                    captured = (tmux_target, options, block_id)
+                    self._response_callbacks[block_id] = (
+                        lambda v, c=captured: self._on_tmux_prompt_reply(c[0], c[1], v, c[2])
+                    )
+                    payload = {'title': body, 'body': '', 'options': options}
+                    try:
+                        await self.emit_block(block_id, 'confirmation', payload, ttl=300)
+                        print(f'[claudecode-controller] tmux prompt surfaced for {tmux_target}', file=sys.stderr)
+                    except Exception as e:
+                        print(f'[claudecode-controller] tmux prompt emit failed: {e}', file=sys.stderr)
+            else:
+                if last_hash:
+                    last_hash = ''
+                    self._response_callbacks.pop(block_id, None)
+                    try:
+                        await self.clear_block(block_id)
+                    except Exception:
+                        pass
+                idle_streak += 1
+                if idle_streak > 30:
+                    poll_interval = 5  # slow down after startup phase
+
+        # Pane gone — clean up
+        self._tmux_monitors.pop(tmux_target, None)
+        self._response_callbacks.pop(block_id, None)
+        try:
+            await self.clear_block(block_id)
+        except Exception:
+            pass
+
+    async def _on_tmux_prompt_reply(self, tmux_target: str, options: list, value: str, block_id: str):
+        """Send the user's selection to the tmux pane."""
+        try:
+            idx = options.index(value)  # 0-based
+        except ValueError:
+            return
+        try:
+            for _ in range(idx):
+                p = await asyncio.create_subprocess_exec(
+                    'tmux', 'send-keys', '-t', tmux_target, 'Down',
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                )
+                await p.communicate()
+                await asyncio.sleep(0.05)
+            p = await asyncio.create_subprocess_exec(
+                'tmux', 'send-keys', '-t', tmux_target, 'Enter',
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+            await p.communicate()
+            await asyncio.sleep(0.4)
+            p = await asyncio.create_subprocess_exec(
+                'tmux', 'send-keys', '-t', tmux_target, 'Enter',
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+            await p.communicate()
+        except Exception as e:
+            print(f'[claudecode-controller] tmux prompt reply failed: {e}', file=sys.stderr)
+        self._response_callbacks.pop(block_id, None)
+        try:
+            await self.clear_block(block_id)
+        except Exception:
+            pass
 
     @staticmethod
     def _project_label(cwd: str, session_id: str) -> str:
-        """Human-readable label: last 2 path parts + short session ID."""
+        """Human-readable label: last 2 path parts + short session ID.
+        pid-* sessions show the full pid (e.g. pid-2605) to avoid ambiguity."""
         if cwd:
             parts = cwd.rstrip('/').split('/')
             path_label = '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
         else:
             path_label = 'Claude Code'
-        return f'{path_label} [{session_id[:6]}]'
+        short = session_id if session_id.startswith('pid-') else session_id[:6]
+        return f'{path_label} [{short}]'
 
     def _save_sessions(self):
         """Persist _sessions to disk so restarts can re-emit known sessions.
@@ -246,6 +504,14 @@ class MCPClient:
                 return
             for pid in pids:
                 try:
+                    # Skip background/daemon processes — only track interactive terminal sessions.
+                    # A controlling terminal (tty != '?') confirms the process is user-facing.
+                    tty = subprocess.run(
+                        ['ps', '-p', pid, '-o', 'tty='],
+                        capture_output=True, text=True, timeout=3
+                    ).stdout.strip()
+                    if tty == '?' or not tty:
+                        continue
                     lsof = subprocess.run(
                         ['lsof', '-a', '-p', pid, '-d', 'cwd', '-Fn'],
                         capture_output=True, text=True, timeout=3
@@ -293,7 +559,19 @@ class MCPClient:
         if session_id in self._sessions:
             return False
         project = self._project_label(cwd, session_id)
-        self._sessions[session_id] = {'cwd': cwd, 'project': project, 'last_seen': time.time()}
+        entry = {'cwd': cwd, 'project': project, 'last_seen': time.time()}
+        # If this session was launched via tmux, attach the window target for reply routing
+        tmux_target = self._pending_tmux_targets.pop(cwd, None)
+        if tmux_target:
+            entry['tmux_target'] = tmux_target
+        # When a hook-confirmed session registers, clear any pid-* placeholder for the same cwd
+        if not session_id.startswith('pid-'):
+            for sid in list(self._sessions.keys()):
+                if sid.startswith('pid-') and self._sessions[sid].get('cwd') == cwd:
+                    self._sessions.pop(sid)
+                    self._recently_launched_cwds.discard(cwd)
+                    asyncio.create_task(self.clear_block(self._session_block_id(sid)))
+        self._sessions[session_id] = entry
         self._save_sessions()
         return True
 
@@ -321,6 +599,12 @@ class MCPClient:
                 self._sessions[session_id]['project'] = self._project_label(cwd, session_id)
             self._sessions[session_id]['last_seen'] = time.time()
         self._working_sessions.discard(session_id)
+        # Cancel any tmux pane monitor for this session
+        tmux_target = self._sessions.get(session_id, {}).get('tmux_target')
+        if tmux_target:
+            task = self._tmux_monitors.pop(tmux_target, None)
+            if task:
+                task.cancel()
         print(f'[claudecode-controller] session stopped: {session_id}', file=sys.stderr)
         asyncio.create_task(self._emit_session_block(session_id, last_message=last_message))
 
@@ -329,6 +613,12 @@ class MCPClient:
 
         touch_last_seen=False during startup re-emit so that sessions whose
         last hook activity predates SESSION_TTL are not artificially kept alive."""
+        # pid-* sessions are background process discoveries; only surface ones the
+        # user explicitly launched via Start Session (cwd is in _recently_launched_cwds).
+        if session_id.startswith('pid-'):
+            cwd = self._sessions.get(session_id, {}).get('cwd', '')
+            if cwd not in self._recently_launched_cwds:
+                return
         if not self._initialized:
             print(f'[claudecode-controller] skipping session block — not yet initialized', file=sys.stderr)
             return
@@ -370,8 +660,107 @@ class MCPClient:
         if value:
             await self._route_to_terminal(session_id, value)
 
+    @staticmethod
+    def _strip_ansi(text: str) -> str:
+        import re
+        return re.sub(r'\x1b\[[0-9;]*[mGKHFJABCDsuhl]|\x1b\][^\x07]*\x07|\r', '', text)
+
+    @staticmethod
+    def _is_claude_idle(content: str) -> bool:
+        """True when Claude Code is at its input prompt (> on last non-empty line)."""
+        import re
+        clean = MCPClient._strip_ansi(content)
+        lines = [l for l in clean.splitlines() if l.strip()]
+        if not lines:
+            return False
+        last = lines[-1]
+        # Claude Code input prompt: line that is just "> " or "> <cursor>"
+        return bool(re.match(r'^\s*>\s*$', last))
+
+    @staticmethod
+    def _extract_response(content: str) -> str:
+        """Extract the most recent Claude Code response from pane content."""
+        import re
+        clean = MCPClient._strip_ansi(content)
+        lines = clean.splitlines()
+        # Bottom boundary: the trailing "> " prompt line(s)
+        bottom_idx = len(lines)
+        for i in range(len(lines) - 1, -1, -1):
+            if re.match(r'^\s*>\s*$', lines[i]):
+                bottom_idx = i
+            else:
+                break
+        candidate = lines[:bottom_idx]
+        # Remove trailing blank lines
+        while candidate and not candidate[-1].strip():
+            candidate.pop()
+        # Strip decorative lines
+        response_lines = [l for l in candidate if l.strip() and not re.match(r'^[-─━═╌╍\s]+$', l)]
+        return '\n'.join(response_lines[-40:]).strip()[:4000]
+
+    def _session_id_for_tmux(self, tmux_target: str) -> Optional[str]:
+        """Find the session_id that owns this tmux_target."""
+        for sid, info in self._sessions.items():
+            if info.get('tmux_target') == tmux_target:
+                return sid
+        return None
+
+    async def _capture_tmux_response(self, tmux_target: str, session_id: str):
+        """After routing a message, poll until Claude Code is idle, then emit last_message."""
+        # Wait for Claude Code to start processing
+        await asyncio.sleep(2)
+        prev_content = ''
+        stable_count = 0
+        for _ in range(180):  # max ~3 min
+            await asyncio.sleep(1)
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    'tmux', 'capture-pane', '-p', '-t', tmux_target,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3)
+                content = stdout.decode()
+            except Exception:
+                return  # pane gone
+
+            if self._is_claude_idle(content):
+                if content == prev_content:
+                    stable_count += 1
+                    if stable_count >= 2:
+                        response = self._extract_response(content)
+                        if response:
+                            print(f'[claudecode-controller] captured response for {session_id} ({len(response)} chars)', file=sys.stderr)
+                            asyncio.create_task(self._emit_session_block(session_id, last_message=response))
+                        return
+                else:
+                    stable_count = 0
+            else:
+                stable_count = 0
+            prev_content = content
+
     async def _route_to_terminal(self, session_id: str, text: str):
-        """Copy text to clipboard then paste into the terminal running this session."""
+        """Route text to the terminal running this session.
+        Uses tmux send-keys for tmux-launched sessions; clipboard+osascript otherwise."""
+        session = self._sessions.get(session_id, {})
+        tmux_target = session.get('tmux_target')
+        if tmux_target:
+            try:
+                p1 = await asyncio.create_subprocess_exec(
+                    'tmux', 'send-keys', '-t', tmux_target, '-l', text,
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                )
+                await p1.communicate()
+                p2 = await asyncio.create_subprocess_exec(
+                    'tmux', 'send-keys', '-t', tmux_target, 'Enter',
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                )
+                await p2.communicate()
+            except Exception as e:
+                print(f'[claudecode-controller] tmux send-keys failed: {e}', file=sys.stderr)
+            asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
+            return
+
         try:
             pbcopy = await asyncio.create_subprocess_exec(
                 'pbcopy',
@@ -443,10 +832,12 @@ if not didFocus and application "iTerm2" is running then
     set didFocus to true
 end if
 
-delay 0.3
+delay 0.4
 tell application "System Events"
+    -- Clear any partial input before pasting (Ctrl+U kills the line)
+    keystroke "u" using control down
     keystroke "v" using command down
-    delay 0.1
+    delay 0.4
     keystroke return
 end tell
 '''
@@ -702,6 +1093,7 @@ async def _session_heartbeat(client):
         await asyncio.sleep(300)
         if not client._initialized:
             continue
+        client._discover_active_processes()
         # Prune pid-* sessions whose process is gone and clear their iOS blocks
         dead = client._prune_dead_pid_sessions()
         for session_id in dead:
@@ -714,6 +1106,10 @@ async def _session_heartbeat(client):
                 await client._emit_session_block(session_id)
             except Exception as e:
                 print(f'[claudecode-controller] session heartbeat error for {session_id[:8]}: {e}', file=sys.stderr)
+        try:
+            await client._emit_start_session_block()
+        except Exception as e:
+            print(f'[claudecode-controller] start_session heartbeat error: {e}', file=sys.stderr)
 
 
 async def run():

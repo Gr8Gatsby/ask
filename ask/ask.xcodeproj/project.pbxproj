@@ -37,6 +37,14 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		0A1CCE6F2F7D01010088B284 /* Exceptions for "ask" folder in "AskMac" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				"ask-iOS.png",
+				"ask-macOS.png",
+			);
+			target = AA000007000000000000AA01 /* AskMac */;
+		};
 		0A99F1AB2F784290003B10BE /* Exceptions for "ask" folder in "ask" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -51,6 +59,7 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				0A99F1AB2F784290003B10BE /* Exceptions for "ask" folder in "ask" target */,
+				0A1CCE6F2F7D01010088B284 /* Exceptions for "ask" folder in "AskMac" target */,
 			);
 			path = ask;
 			sourceTree = "<group>";

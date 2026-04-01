@@ -20,6 +20,7 @@ enum RKBlockType: String, Codable {
     case list
     case detail
     case feedItem = "feed_item"
+    case startSession = "start_session"
 }
 
 // MARK: - Block payloads
@@ -173,6 +174,16 @@ struct RKInfoCardPayload: Codable {
     let pairs: [Pair]
 }
 
+struct RKRepo: Codable, Identifiable {
+    let name: String
+    let path: String
+    var id: String { path }
+}
+
+struct RKStartSessionPayload: Codable {
+    let repos: [RKRepo]
+}
+
 // MARK: - RKBlock model
 
 struct RKBlock: Identifiable {
@@ -193,7 +204,7 @@ struct RKBlock: Identifiable {
 
     var requiresResponse: Bool {
         switch blockType {
-        case .confirmation, .prompt, .chatPrompt, .picker, .list, .detail, .agentSession: return true
+        case .confirmation, .prompt, .chatPrompt, .picker, .list, .detail, .agentSession, .startSession: return true
         case .alert, .status, .infoCard, .iconCard, .claudeMessage, .tile, .countdown, .feedItem: return false
         }
     }
@@ -272,6 +283,11 @@ struct RKBlock: Identifiable {
     var feedItemPayload: RKFeedItemPayload? {
         guard blockType == .feedItem else { return nil }
         return try? JSONDecoder().decode(RKFeedItemPayload.self, from: payloadData)
+    }
+
+    var startSessionPayload: RKStartSessionPayload? {
+        guard blockType == .startSession else { return nil }
+        return try? JSONDecoder().decode(RKStartSessionPayload.self, from: payloadData)
     }
 
     /// payloadJSON with UTF-16 surrogate pairs decoded to real Unicode scalars, as UTF-8 Data.

@@ -192,8 +192,15 @@ struct HomeView: View {
                     allBlocks: blocks,
                     isWaiting: Date() < burstPollingUntil,
                     onRespond: { block, value in await respondToBlock(block, value: value) },
-                    errorMessage: responseErrorMessage
+                    errorMessage: responseErrorMessage,
+                    machines: machines,
+                    activeMachine: activeMachine,
+                    onSelectMachine: { machineID in
+                        activeMachineID = machineID
+                        await load()
+                    }
                 )
+                .task { await load() }
             }
         }
         .sheet(isPresented: $showSettings) {
@@ -675,6 +682,9 @@ struct ScriptDetailView: View {
     var isWaiting: Bool = false
     let onRespond: (RKBlock, String) async -> Void
     var errorMessage: String? = nil
+    var machines: [AskMachine] = []
+    var activeMachine: AskMachine? = nil
+    var onSelectMachine: ((String) async -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
@@ -687,6 +697,7 @@ struct ScriptDetailView: View {
     /// ID of a detail block the user just dismissed. We ignore re-appearances of this
     /// block (from burst polling before the script clears it) to prevent re-pushing.
     @State private var dismissedDetailBlockID: String? = nil
+    @State private var showRepoPicker = false
 
     private var group: ScriptGroup {
         ScriptGroup(scriptID: scriptID, blocks: allBlocks.filter { $0.scriptID == scriptID && $0.blockType != .tile })
@@ -716,9 +727,13 @@ struct ScriptDetailView: View {
         allBlocks.first(where: { $0.scriptID == scriptID && $0.scriptIconData != nil })?.scriptIconData
     }
 
+    private var startSessionBlock: RKBlock? {
+        group.blocks.first { $0.blockType == .startSession }
+    }
+
     /// Blocks shown in the main list — detail blocks are pushed; claudeMessage is inlined when chatPrompt or agentSession blocks exist.
     private var mainBlocks: [RKBlock] {
-        let all = group.blocks.filter { $0.blockType != .detail }
+        let all = group.blocks.filter { $0.blockType != .detail && $0.blockType != .startSession }
         let hasPrompt = all.contains(where: { $0.blockType == .chatPrompt })
         let hasSession = all.contains(where: { $0.blockType == .agentSession })
         guard hasPrompt || hasSession else { return all }
@@ -761,6 +776,11 @@ struct ScriptDetailView: View {
                             BlockView(block: block, onRespond: { value in
                                 await onRespond(block, value)
                             }, isWaiting: isWaiting)
+                        } else if block.blockType == .startSession,
+                                  let p = block.startSessionPayload {
+                            StartSessionBlockView(payload: p, onRespond: { value in
+                                await onRespond(block, value)
+                            })
                         } else if block.blockType == .chatPrompt, let p = block.chatPromptPayload {
                             ChatPromptBlockView(
                                 payload: p,
@@ -774,16 +794,9 @@ struct ScriptDetailView: View {
                         }
                     }
                 }
-                if mainBlocks.isEmpty {
-                    Section {
-                        Text("No active sessions")
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.vertical, 8)
-                    }
-                }
             }
             .listStyle(.insetGrouped)
+            .listSectionSpacing(.compact)
             .scrollContentBackground(.hidden)
             .background(useBrandColors ? (brandGroup.brandBackground ?? Color(.systemGroupedBackground)) : Color(.systemGroupedBackground))
             .navigationBarTitleDisplayMode(.inline)
@@ -800,8 +813,14 @@ struct ScriptDetailView: View {
                             .font(.headline)
                     }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) { detailBottomBar }
+            .sheet(isPresented: $showRepoPicker) {
+                if let block = startSessionBlock, let payload = block.startSessionPayload {
+                    RepoPickerSheet(repos: payload.repos) { repo in
+                        showRepoPicker = false
+                        Task { await onRespond(block, repo.path) }
+                    }
                 }
             }
             .navigationDestination(isPresented: $isShowingDetail) {
@@ -885,6 +904,75 @@ struct ScriptDetailView: View {
             }
         }
         .environment(\.colorScheme, useBrandColors ? (brandGroup.brandColorScheme ?? colorScheme) : colorScheme)
+    }
+
+    private var detailBottomBar: some View {
+        HStack {
+            Spacer()
+            HStack(spacing: 2) {
+                // Machine selector
+                if !machines.isEmpty {
+                    Menu {
+                        ForEach(machines) { machine in
+                            Button {
+                                Task { await onSelectMachine?(machine.id) }
+                            } label: {
+                                Label(machine.name, systemImage: machine.systemImage)
+                            }
+                        }
+                    } label: {
+                        let offline = activeMachine?.connectionStatus == .offline
+                        Image(systemName: activeMachine?.systemImage ?? "desktopcomputer")
+                            .foregroundStyle(offline ? .secondary : .primary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 5)
+                    }
+                }
+
+                // Home (not selected)
+                Button { dismiss() } label: {
+                    Text("Home")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                }
+                .buttonStyle(.plain)
+
+                // Script icon (selected state) — uses brand PNG, falls back to SF symbol
+                Button { } label: {
+                    ScriptIconView(
+                        svgString: scriptIconSVG,
+                        iconData: scriptIconData,
+                        sfSymbol: scriptIconSF
+                    )
+                    .frame(width: 20, height: 20)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(Color.primary.opacity(0.1), in: Capsule())
+                }
+                .buttonStyle(.plain)
+
+                // Plus button (start session)
+                if startSessionBlock != nil {
+                    Button { showRepoPicker = true } label: {
+                        Image(systemName: "plus")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 5)
+                    }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: Capsule())
+            .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+            Spacer()
+        }
+        .padding(.bottom, 16)
+        .padding(.top, 4)
     }
 
 }

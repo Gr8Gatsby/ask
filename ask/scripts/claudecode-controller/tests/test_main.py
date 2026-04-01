@@ -301,10 +301,10 @@ def test_tool_executed_emits_session():
             fail('session block has TTL ≥ 3600s', f"got {ttl!r}")
 
         block_id = args.get('blockId', '')
-        if 'session' in block_id and session_id[:8] in block_id:
-            ok(f'block_id contains session prefix ({block_id})')
+        if block_id.startswith('claudecode-session-'):
+            ok(f'block_id has correct claudecode-session-* format ({block_id})')
         else:
-            fail('block_id contains session prefix', f"got {block_id!r}")
+            fail('block_id has correct claudecode-session-* format', f"got {block_id!r}")
 
         h.send_rpc_response(call['id'], {'content': [{'type': 'text', 'text': 'ok'}]})
     else:
@@ -762,9 +762,173 @@ def test_permission_session_grouping():
     h.stop()
 
 
+def test_session_reply_routing():
+    """A user reply for session A must not route to session B."""
+    print('\nTest 10: session reply routes to the correct session only')
+    h = TestHarness()
+    h.start()
+    if not h.do_handshake():
+        h.stop(); return
+
+    # Use IDs with clearly distinct prefixes so block IDs never collide
+    sess_a = 'alpha-session-001-aaaa'
+    sess_b = 'bravo-session-002-bbbb'
+
+    # Register both sessions
+    for sid, cwd in [(sess_a, '/tmp/projectA'), (sess_b, '/tmp/projectB')]:
+        h.socket_send({'type': 'tool_executed', 'session_id': sid, 'tool_name': 'Read', 'cwd': cwd})
+        call = h.wait_for(lambda m, s=sid: is_session_emit(m) and
+                          m['params']['arguments']['payload'].get('session_id') == s, timeout=3.0)
+        if call:
+            h.send_rpc_response(call['id'], {'content': [{'type': 'text', 'text': 'ok'}]})
+        else:
+            fail(f'session block emitted for {sid[:8]}'); h.stop(); return
+
+    # Find block ID for session A
+    with h._lock:
+        emits = [m for m in h._stdout_lines if is_session_emit(m)]
+    block_a = next((m['params']['arguments']['blockId'] for m in emits
+                    if m['params']['arguments']['payload'].get('session_id') == sess_a), None)
+    block_b = next((m['params']['arguments']['blockId'] for m in emits
+                    if m['params']['arguments']['payload'].get('session_id') == sess_b), None)
+
+    if not block_a or not block_b or block_a == block_b:
+        fail('two distinct block IDs for two sessions', f'block_a={block_a}, block_b={block_b}')
+        h.stop(); return
+    ok(f'sessions have distinct block IDs ({block_a} vs {block_b})')
+
+    # Send a reply for session A's block — should trigger a re-emit for A only
+    baseline = h.message_count
+    h.proc.stdin.write((json.dumps({
+        'jsonrpc': '2.0', 'method': 'notifications/message',
+        'params': {'level': 'info', 'data': {'type': 'user_response',
+                                              'blockId': block_a, 'value': 'hello from iOS'}}
+    }) + '\n').encode())
+    h.proc.stdin.flush()
+    time.sleep(0.4)
+
+    # Session B's block should NOT have been re-emitted
+    with h._lock:
+        new_msgs = h._stdout_lines[baseline:]
+    b_re_emitted = any(
+        is_session_emit(m) and m['params']['arguments']['payload'].get('session_id') == sess_b
+        for m in new_msgs
+    )
+    if not b_re_emitted:
+        ok('reply for session A does not trigger re-emit of session B block')
+    else:
+        fail('reply for session A does not trigger re-emit of session B block',
+             'session B was re-emitted unexpectedly')
+
+    h.stop()
+
+
+def test_session_stop_isolation():
+    """Stopping session A must not affect the working state of session B."""
+    print('\nTest 11: session_stop only affects the stopped session')
+    h = TestHarness()
+    h.start()
+    if not h.do_handshake():
+        h.stop(); return
+
+    sess_a = 'stop-isolate-aaa-001'
+    sess_b = 'stop-isolate-bbb-002'
+
+    # Register both as working (tool_executed marks them working)
+    for sid, cwd in [(sess_a, '/tmp/pA'), (sess_b, '/tmp/pB')]:
+        h.socket_send({'type': 'tool_executed', 'session_id': sid, 'tool_name': 'Bash', 'cwd': cwd})
+        call = h.wait_for(lambda m, s=sid: is_session_emit(m) and
+                          m['params']['arguments']['payload'].get('session_id') == s, timeout=3.0)
+        if call:
+            h.send_rpc_response(call['id'], {'content': [{'type': 'text', 'text': 'ok'}]})
+
+    # Capture baseline before stop so we only inspect post-stop messages
+    baseline = h.message_count
+
+    # Stop session A
+    h.socket_send({'type': 'session_stop', 'session_id': sess_a,
+                   'cwd': '/tmp/pA', 'last_message': 'Done.'})
+    stop_emit = h.wait_for(lambda m: is_session_emit(m) and
+                           m['params']['arguments']['payload'].get('session_id') == sess_a and
+                           m['params']['arguments']['payload'].get('last_message') == 'Done.',
+                           timeout=3.0)
+    if stop_emit:
+        a_working = stop_emit['params']['arguments']['payload'].get('is_working', True)
+        if not a_working:
+            ok('stopped session A has is_working=false')
+        else:
+            fail('stopped session A has is_working=false', 'is_working was True')
+        h.send_rpc_response(stop_emit['id'], {'content': [{'type': 'text', 'text': 'ok'}]})
+    else:
+        fail('session_stop emits updated block for session A')
+
+    # Session B should NOT have been re-emitted with is_working=false after the stop
+    with h._lock:
+        b_stop_emits = [m for m in h._stdout_lines[baseline:]
+                        if is_session_emit(m) and
+                        m['params']['arguments']['payload'].get('session_id') == sess_b and
+                        not m['params']['arguments']['payload'].get('is_working', True)]
+    if not b_stop_emits:
+        ok('session B is not affected by session A stop')
+    else:
+        fail('session B is not affected by session A stop',
+             'session B received is_working=false emit')
+
+    h.stop()
+
+
+def test_pid_and_real_session_coexist():
+    """A pid-* discovered session and a real hook session for the same cwd
+    must have different block IDs and must not overwrite each other."""
+    print('\nTest 12: pid-* and real session for same cwd have distinct blocks')
+    h = TestHarness()
+    h.start()
+    if not h.do_handshake():
+        h.stop(); return
+
+    real_sid = 'aaaabbbb-cccc-dddd-eeee-ffffffffffff'
+    pid_sid = 'pid-12345'
+
+    # Register pid session first (simulating discovery)
+    h.socket_send({'type': 'tool_executed', 'session_id': pid_sid,
+                   'tool_name': 'Read', 'cwd': '/tmp/shared'})
+    pid_call = h.wait_for(lambda m: is_session_emit(m) and
+                          m['params']['arguments']['payload'].get('session_id') == pid_sid,
+                          timeout=3.0)
+    pid_block_id = None
+    if pid_call:
+        pid_block_id = pid_call['params']['arguments']['blockId']
+        h.send_rpc_response(pid_call['id'], {'content': [{'type': 'text', 'text': 'ok'}]})
+        ok(f'pid-* session emits block ({pid_block_id})')
+    else:
+        fail('pid-* session emits block'); h.stop(); return
+
+    # Register real session
+    h.socket_send({'type': 'tool_executed', 'session_id': real_sid,
+                   'tool_name': 'Read', 'cwd': '/tmp/shared'})
+    real_call = h.wait_for(lambda m: is_session_emit(m) and
+                           m['params']['arguments']['payload'].get('session_id') == real_sid,
+                           timeout=3.0)
+    real_block_id = None
+    if real_call:
+        real_block_id = real_call['params']['arguments']['blockId']
+        h.send_rpc_response(real_call['id'], {'content': [{'type': 'text', 'text': 'ok'}]})
+        ok(f'real session emits block ({real_block_id})')
+    else:
+        fail('real session emits block'); h.stop(); return
+
+    if pid_block_id != real_block_id:
+        ok('pid-* and real session have different block IDs (no overwrite)')
+    else:
+        fail('pid-* and real session have different block IDs',
+             f'both got {pid_block_id!r}')
+
+    h.stop()
+
+
 def test_pid_sessions_not_persisted():
     """pid-* sessions (process-discovery) must not be written to the sessions file."""
-    print('\nTest 10: pid-* sessions are not persisted to disk')
+    print('\nTest 13: pid-* sessions are not persisted to disk')
     import tempfile
 
     sessions_file = '/tmp/test-pid-sessions-persist.json'
@@ -847,7 +1011,7 @@ def test_pid_sessions_not_persisted():
 
 def test_startup_does_not_bump_last_seen():
     """Startup re-emit must NOT update last_seen so old sessions can expire."""
-    print('\nTest 11: startup re-emit preserves original last_seen')
+    print('\nTest 14: startup re-emit preserves original last_seen')
     import tempfile
 
     sessions_file = '/tmp/test-startup-last-seen.json'
@@ -939,6 +1103,9 @@ TESTS = [
     test_permission_block,
     test_permission_deny,
     test_permission_session_grouping,
+    test_session_reply_routing,
+    test_session_stop_isolation,
+    test_pid_and_real_session_coexist,
     test_pid_sessions_not_persisted,
     test_startup_does_not_bump_last_seen,
 ]

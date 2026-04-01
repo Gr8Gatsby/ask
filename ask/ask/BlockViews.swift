@@ -177,6 +177,10 @@ struct BlockView: View {
             EmptyView() // detail blocks are surfaced as navigation pushes in ScriptDetailView
         case .feedItem:
             EmptyView() // feed_item blocks are shown in FeedView, not in block detail
+        case .startSession:
+            if let p = block.startSessionPayload {
+                StartSessionBlockView(payload: p, onRespond: onRespond)
+            }
         }
     }
 
@@ -1072,11 +1076,12 @@ struct AgentSessionBlockView: View {
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) { isCollapsed.toggle() }
             } label: {
-                HStack(spacing: 6) {
-                    Text(String(payload.sessionId.prefix(8)))
+                HStack(alignment: .top, spacing: 6) {
+                    Text(payload.project)
                         .font(.subheadline)
                         .fontWeight(.semibold)
                         .foregroundStyle(.primary)
+                        .lineLimit(1)
                     if isCollapsed, let msg = payload.lastMessage, !msg.isEmpty {
                         Text(msg)
                             .font(.caption)
@@ -1188,6 +1193,93 @@ struct AgentSessionBlockView: View {
             responding = true
             await onRespond(answer)
             responding = false
+        }
+    }
+}
+
+// MARK: - StartSession
+
+struct StartSessionBlockView: View {
+    let payload: RKStartSessionPayload
+    let onRespond: (String) async -> Void
+
+    @State private var showPicker = false
+    @State private var launching = false
+
+    var body: some View {
+        Button {
+            showPicker = true
+        } label: {
+            HStack {
+                Image(systemName: "plus.circle.fill")
+                    .font(.body)
+                Text("Start Session")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                if launching {
+                    Spacer()
+                    ProgressView().scaleEffect(0.8)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.accentColor)
+        .padding(.vertical, 4)
+        .sheet(isPresented: $showPicker) {
+            RepoPickerSheet(repos: payload.repos) { repo in
+                showPicker = false
+                launching = true
+                Task {
+                    await onRespond(repo.path)
+                    try? await Task.sleep(for: .seconds(2))
+                    launching = false
+                }
+            }
+        }
+    }
+}
+
+struct RepoPickerSheet: View {
+    let repos: [RKRepo]
+    let onSelect: (RKRepo) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var search = ""
+
+    private var filtered: [RKRepo] {
+        guard !search.isEmpty else { return repos }
+        return repos.filter { $0.name.localizedCaseInsensitiveContains(search) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List(filtered) { repo in
+                Button {
+                    onSelect(repo)
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(repo.name)
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                            .foregroundStyle(.primary)
+                        Text(repo.path)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+            .searchable(text: $search, prompt: "Filter repos")
+            .navigationTitle("Choose a Repo")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
         }
     }
 }

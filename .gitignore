@@ -25,6 +25,11 @@ DerivedData/
 .claude/settings.json
 .claude/*.json
 
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
 # Credentials / secrets
 *.p8
 *.p12

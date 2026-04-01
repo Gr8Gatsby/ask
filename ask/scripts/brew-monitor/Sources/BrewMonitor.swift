@@ -72,8 +72,8 @@ actor BrewMonitor {
         // Also post confirmation so user can act from the home screen
         let stream = await mcp.responseStream(blockID: blockUpdates)
         try await mcp.emitBlock(blockUpdates, type: "confirmation", payload: [
-            "title":   "Homebrew",
-            "body":    "\(count) \(count == 1 ? "package" : "packages") available to upgrade.",
+            "title":   headline,
+            "body":    body,
             "options": ["Upgrade All", "Later"]
         ], ttl: 86400)
 

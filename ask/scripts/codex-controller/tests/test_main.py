@@ -293,10 +293,10 @@ def test_tool_executed_emits_session():
             fail('session block has TTL ≥ 3600s', f"got {ttl!r}")
 
         block_id = args.get('blockId', '')
-        if 'session' in block_id and session_id[:8] in block_id:
-            ok(f'block_id contains session prefix ({block_id})')
+        if block_id.startswith('codex-session-'):
+            ok(f'block_id has correct codex-session-* format ({block_id})')
         else:
-            fail('block_id contains session prefix', f"got {block_id!r}")
+            fail('block_id has correct codex-session-* format', f"got {block_id!r}")
 
         h.send_rpc_response(call['id'], {'content': [{'type': 'text', 'text': 'ok'}]})
     else:

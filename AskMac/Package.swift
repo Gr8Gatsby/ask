@@ -7,7 +7,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "AskMac",
-            path: "Sources/AskMac"
+            path: "Sources/AskMac",
+            resources: [.process("Assets.xcassets")]
         )
     ]
 )
