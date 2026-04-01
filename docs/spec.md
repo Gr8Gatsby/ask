@@ -485,6 +485,87 @@ A GitHub Actions workflow triggers on a version tag push (`v*`) and:
 
 ---
 
+## iOS Distribution (TestFlight)
+
+- The iOS app (`simple.ask`) is distributed via TestFlight using a GitHub Actions pipeline triggered by tags matching `ios-v*`
+- The pipeline archives the iOS app, exports it as an `.ipa` using the App Store distribution method, and uploads it to App Store Connect via the App Store Connect API
+- Once uploaded, the build is available in TestFlight for internal and external testing
+- iOS deployment target: iOS 26.0
+
+### iOS Release Pipeline
+
+Trigger: push to tags matching `ios-v*` (e.g. `ios-v1.0.0`)
+
+Steps:
+1. Import iOS Distribution certificate from secrets
+2. Install App Store provisioning profile
+3. `xcodebuild archive` the iOS app in Release configuration
+4. `xcodebuild -exportArchive` with `method: app-store-connect`
+5. Upload `.ipa` to App Store Connect via `xcrun altool` with API key authentication
+6. TestFlight build becomes available for testing
+
+### Required Secrets (iOS Pipeline)
+
+| Secret | Purpose |
+|---|---|
+| `IOS_DIST_CERT_P12` | Base64-encoded iOS Distribution certificate + private key |
+| `IOS_CERT_P12_PASSWORD` | P12 password |
+| `IOS_PROVISION_PROFILE` | Base64-encoded App Store provisioning profile (`.mobileprovision`) |
+| `ASC_KEY_ID` | App Store Connect API key ID |
+| `ASC_ISSUER_ID` | App Store Connect API issuer ID |
+| `ASC_PRIVATE_KEY` | App Store Connect API private key (`.p8` contents, base64-encoded) |
+
+---
+
+## Release Skills
+
+Claude Code slash commands that cover the full release lifecycle for both platforms independently.
+
+### `/prepare-release-mac`
+
+Prepares a Mac release:
+1. Verifies git is clean and on `main`
+2. Finds the last `v*` tag; shows all commits since then grouped by type
+3. Proposes a semantic version bump with reasoning
+4. Confirms version with user
+5. Writes release notes: a human-readable prose summary followed by a grouped commit list
+6. Presents notes for user review and editing
+7. Bumps `MARKETING_VERSION` in `AskMac/project.yml`
+8. Adds a changelog entry to `docs/spec.md`
+9. Commits the version bump
+
+### `/prepare-release-ios`
+
+Prepares an iOS release:
+1. Verifies git is clean and on `main`
+2. Finds the last `ios-v*` tag; shows all commits since then grouped by type
+3. Proposes a semantic version bump
+4. Confirms version with user
+5. Writes release notes in the same format (prose summary + grouped commit list)
+6. Bumps `MARKETING_VERSION` in the iOS Xcode project
+7. Adds a changelog entry to `docs/spec.md`
+8. Commits the version bump
+
+### `/release-mac`
+
+Cuts the Mac release:
+1. Reads current version from `AskMac/project.yml`
+2. Verifies git is clean and on `main`
+3. Confirms with user
+4. Creates annotated tag `v{version}` using the latest spec.md Mac changelog entry as the annotation body
+5. Pushes the tag — triggers the `release.yml` GitHub Actions pipeline
+
+### `/release-ios`
+
+Cuts the iOS TestFlight release:
+1. Reads current iOS marketing version from the Xcode project
+2. Verifies git is clean and on `main`
+3. Confirms with user
+4. Creates annotated tag `ios-v{version}` using the latest spec.md iOS changelog entry
+5. Pushes the tag — triggers the `ios-release.yml` pipeline
+
+---
+
 ## Constraints and Scope (v1)
 
 - Single iCloud account — no sharing between users
@@ -526,4 +607,5 @@ A GitHub Actions workflow triggers on a version tag push (`v*`) and:
 | 2026-04-01 | Script CloudKit emission indicator: each script row in the menu bar popover shows a cloud icon to the left of the toggle. The icon appears only after the script has emitted at least one block since app start. Green outline = script currently has active live blocks; charcoal outline = has emitted before but no active blocks now. |
 | 2026-04-01 | Push notification navigation fixes: (1) Cold-start: scriptID is persisted to UserDefaults on notification tap and consumed by HomeView after first load, so tapping a notification while the app is killed navigates correctly. (2) Block freshness: navigating via notification now triggers an immediate load so the confirmation block is visible without a race. (3) Subscription reliability: CloudKit subscriptions are re-saved on every launch so stale settings from previous installs are replaced. |
 | 2026-04-01 | Polling latency reduced: idle poll interval reduced from 30s to 5s. ScriptDetailView runs its own 5s poll loop while open so updates arrive even if HomeView's background poll is paused. |
+| 2026-04-01 | iOS TestFlight: GitHub Actions pipeline triggered by ios-v* tags; iOS Distribution cert + App Store provisioning profile + ASC API key auth; deployment target iOS 26.0. Release skills: /prepare-release-mac, /prepare-release-ios, /release-mac, /release-ios — version bump, prose+commit release notes, spec changelog, annotated tag creation. |
 | 2026-04-01 | Distribution: AskMac installer packaged as a PKG inside a DMG, distributed via GitHub Releases. PKG has required app component + optional per-script components (all unchecked by default). Sparkle 2.x integrated for silent app-only auto-updates via appcast. Bundled scripts in app bundle enable update detection: menu bar popover shows pending script updates and prompts user to apply. Xcode project generated via XcodeGen (project.yml). GitHub Actions release pipeline triggered on version tags. |
