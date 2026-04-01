@@ -93,6 +93,44 @@ Script exits 0                 →  Claude runs the command
 
 This is the core pattern repeated across all supervision scripts: detect something that needs human attention, emit a block, wait for a response, act on it.
 
+### Real example: Homebrew monitor
+
+Not every script needs a response. The `brew-monitor` script runs every 4 hours, checks for outdated packages, and keeps you informed without requiring any action on your part.
+
+```
+Every 4 hours: brew outdated  →  status block: "Checking for updates…"
+0 packages outdated           →  status block: "Homebrew up to date" (green)
+                              →  feed_item logged to Feed tab
+                              →  countdown: "Next check in 4h"
+4 packages outdated           →  confirmation block: "4 updates available"
+User taps "Upgrade All"       →  brew upgrade runs, status updates live
+                              →  alert: "Upgrade complete — 4 packages"
+```
+
+The feed and status blocks are purely ambient — they appear on your phone and expire on their own. No tap required. The confirmation only appears when there's something to act on.
+
+```python
+# Feed pattern: emit → expire → repeat. No response, no interaction.
+await client.emit_block('brew-status', 'status', {
+    'label': 'Homebrew up to date',
+    'icon': 'checkmark.circle',
+    'color': 'green',
+}, ttl=CHECK_INTERVAL)  # auto-expires before the next check
+
+await client.emit_block(f'brew-check-{uuid.uuid4()}', 'feed_item', {
+    'title': 'Homebrew check complete',
+    'body': 'All packages up to date.',
+    'icon': 'checkmark.circle.fill',
+})
+
+await client.emit_block('brew-next-check', 'countdown', {
+    'label': 'Next Homebrew check',
+    'time': next_check_timestamp,
+}, ttl=CHECK_INTERVAL + 300)
+```
+
+This is the other core pattern: **scheduled ambient reporting** — run on a timer, emit what happened, expire automatically. Your phone stays informed without demanding attention.
+
 ---
 
 ## Blocks
