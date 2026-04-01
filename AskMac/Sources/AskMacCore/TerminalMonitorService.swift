@@ -9,7 +9,9 @@ public struct TerminalSession: Sendable {
     public let cwd: String
     public let tabTitle: String?
 
-    public init(pid: Int, name: String, tty: String, cwd: String, tabTitle: String? = nil) {
+    // nonisolated overrides the project-wide @MainActor default so this struct
+    // can be constructed and read from any actor context (e.g. TerminalMonitorService).
+    public nonisolated init(pid: Int, name: String, tty: String, cwd: String, tabTitle: String? = nil) {
         self.pid = pid
         self.name = name
         self.tty = tty
@@ -18,7 +20,7 @@ public struct TerminalSession: Sendable {
     }
 
     /// JSON-serialisable dictionary matching the MCP response schema.
-    public var asDictionary: [String: Any] {
+    public nonisolated var asDictionary: [String: Any] {
         var d: [String: Any] = ["pid": pid, "name": name, "tty": tty, "cwd": cwd]
         if let t = tabTitle { d["tab_title"] = t }
         return d

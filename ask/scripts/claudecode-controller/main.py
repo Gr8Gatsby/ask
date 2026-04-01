@@ -23,7 +23,22 @@ sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)
 SOCKET_PATH    = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/sockets/claudecode-controller.sock'))
 BLOCK_TILE     = 'claudecode-controller-tile'
 SESSIONS_PATH  = os.environ.get('ASK_SESSIONS_PATH', os.path.expanduser('~/.ask/claudecode_sessions.json'))
+STATUS_PATH    = os.path.expanduser('~/.ask/status/claudecode-controller.json')
+LOG_PATH       = os.path.expanduser('~/.ask/logs/claudecode-controller.log')
 SESSION_TTL    = 3600  # seconds — block TTL and session load cutoff
+
+
+def _log(msg: str):
+    """Write a timestamped line to stderr and the log file."""
+    import datetime
+    line = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}"
+    print(line, file=sys.stderr)
+    try:
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        with open(LOG_PATH, 'a') as f:
+            f.write(line + '\n')
+    except Exception:
+        pass
 
 
 class MCPClient:
@@ -84,9 +99,22 @@ class MCPClient:
         # then scan for live claude processes to register fresh pid-* entries.
         self._load_sessions()
         await self._discover_active_processes()
-        # Prune any pid-* sessions whose process is no longer running (discovery may have
-        # registered them before we checked, or they died between pgrep and now).
         self._prune_dead_pid_sessions()
+        dead_real = await self._prune_dead_real_sessions()
+        for session_id in dead_real:
+            asyncio.create_task(self.clear_block(self._session_block_id(session_id)))
+        # Backfill TTYs immediately at startup (don't wait for heartbeat)
+        backfilled = False
+        for session_id, info in list(self._sessions.items()):
+            if not info.get('tty') and info.get('cwd'):
+                tty = await self._find_tty_for_cwd(info['cwd'], 'claude')
+                if tty:
+                    info['tty'] = tty
+                    backfilled = True
+                    print(f'[claudecode-controller] startup TTY backfill: {session_id} -> {tty}', file=sys.stderr)
+        if backfilled:
+            self._save_sessions()
+        self._write_status()
         for session_id, info in list(self._sessions.items()):
             asyncio.create_task(
                 self._emit_session_block(session_id, last_message=info.get('last_message', ''), touch_last_seen=False)
@@ -330,7 +358,7 @@ class MCPClient:
         await asyncio.sleep(4)
         if not self._initialized:
             return
-        self._discover_active_processes()
+        await self._discover_active_processes()
         for session_id, info in list(self._sessions.items()):
             if not info.get('last_emitted'):
                 asyncio.create_task(self._emit_session_block(session_id))
@@ -481,6 +509,40 @@ class MCPClient:
                 json.dump(to_save, f)
         except Exception as e:
             print(f'[claudecode-controller] session save failed: {e}', file=sys.stderr)
+        self._write_status()
+
+    def _write_status(self):
+        """Write a human-readable status file for AskMac diagnostics."""
+        try:
+            import subprocess
+            os.makedirs(os.path.dirname(STATUS_PATH), exist_ok=True)
+            sessions = []
+            for sid, info in self._sessions.items():
+                sessions.append({
+                    'session_id': sid,
+                    'project': info.get('project', ''),
+                    'cwd': info.get('cwd', ''),
+                    'tty': info.get('tty', ''),
+                    'last_seen': info.get('last_seen', 0),
+                })
+            # Live process scan so AskMac can show what's actually running
+            live = []
+            try:
+                r = subprocess.run(['ps', '-eo', 'pid,tty,comm'],
+                                   capture_output=True, text=True, timeout=3)
+                for line in r.stdout.splitlines()[1:]:
+                    parts = line.split()
+                    if len(parts) < 3:
+                        continue
+                    pid, tty, comm = parts[0], parts[1], ' '.join(parts[2:])
+                    if 'claude' in comm.lower() and tty != '??':
+                        live.append({'pid': pid, 'tty': tty, 'comm': comm})
+            except Exception:
+                pass
+            with open(STATUS_PATH, 'w') as f:
+                json.dump({'sessions': sessions, 'live_processes': live, 'updated_at': time.time()}, f, indent=2)
+        except Exception:
+            pass
 
     def _load_sessions(self):
         """Load persisted sessions, discarding any older than SESSION_TTL."""
@@ -534,6 +596,61 @@ class MCPClient:
             print(f'[claudecode-controller] pruned dead pid session {sid}', file=sys.stderr)
         return dead
 
+    async def _prune_dead_real_sessions(self):
+        """Remove hook-registered sessions whose CWD no longer has an active claude process.
+        Only prunes when list_terminal_sessions returns at least one result — if it returns
+        empty we can't tell 'no processes' from 'tool unavailable', so we skip pruning."""
+        active = await self.list_terminal_sessions(filter='claude')
+        if not active:
+            return []
+        active_cwds = {s.get('cwd') for s in active if s.get('cwd')}
+        dead = []
+        for session_id, info in list(self._sessions.items()):
+            if session_id.startswith('pid-'):
+                continue
+            cwd = info.get('cwd', '')
+            if cwd and cwd not in active_cwds:
+                self._sessions.pop(session_id, None)
+                self._working_sessions.discard(session_id)
+                dead.append(session_id)
+                print(f'[claudecode-controller] pruned dead session {session_id[:8]} ({cwd})', file=sys.stderr)
+        if dead:
+            self._save_sessions()
+        return dead
+
+    async def _find_tty_for_cwd(self, cwd: str, comm_filter: str):
+        """Find the TTY of a running process matching comm_filter in cwd via ps+lsof.
+        Returns the short TTY string (e.g. 's003') suitable for /dev/tty{short}."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'ps', '-eo', 'pid,tty,comm',
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+            )
+            stdout, _ = await proc.communicate()
+            candidates = []
+            for line in stdout.decode().splitlines()[1:]:
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                pid_str, tty, comm = parts[0], parts[1], ' '.join(parts[2:])
+                if comm_filter.lower() in comm.lower() and tty != '??':
+                    candidates.append((pid_str, tty))
+            for pid_str, tty in candidates:
+                try:
+                    lsof = await asyncio.create_subprocess_exec(
+                        'lsof', '-p', pid_str, '-a', '-d', 'cwd', '-Fn',
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+                    )
+                    out, _ = await lsof.communicate()
+                    for lline in out.decode().splitlines():
+                        if lline.startswith('n') and lline[1:] == cwd:
+                            return tty  # e.g. 's003'
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return None
+
     def _register_session(self, session_id: str, cwd: str):
         """Register a session if new; return True if it was new."""
         if session_id in self._sessions:
@@ -559,9 +676,13 @@ class MCPClient:
         """Called by PostToolUse — registers the session and emits an initial block."""
         session_id = msg.get('session_id', '')
         cwd = msg.get('cwd', '') or msg.get('tool_cwd', '')
+        tty = msg.get('tty')
         if not session_id:
             return
         is_new = self._register_session(session_id, cwd)
+        if tty and session_id in self._sessions:
+            self._sessions[session_id]['tty'] = tty
+            self._save_sessions()  # persist TTY immediately so it survives restarts
         self._working_sessions.add(session_id)
         if is_new:
             asyncio.create_task(self._emit_session_block(session_id))
@@ -603,6 +724,10 @@ class MCPClient:
             print(f'[claudecode-controller] skipping session block — not yet initialized', file=sys.stderr)
             return
         session = self._sessions.get(session_id, {})
+        if not session.get('tty'):
+            # Can't route replies without a TTY — don't surface this session on iOS
+            asyncio.create_task(self.clear_block(self._session_block_id(session_id)))
+            return
         project = session.get('project', 'Claude Code')
         cwd = session.get('cwd', '')
         block_id = self._session_block_id(session_id)
@@ -637,8 +762,71 @@ class MCPClient:
         block_id = self._session_block_id(session_id)
         # Re-register immediately so the user can reply again
         self._response_callbacks[block_id] = lambda v: self._on_session_reply(session_id, v)
-        if value:
+        if value == '__close_session__':
+            await self._close_session(session_id)
+        elif value:
             await self._route_to_terminal(session_id, value)
+
+    async def _close_session(self, session_id: str):
+        """Send Ctrl+C to the terminal running this session, then remove it."""
+        session = self._sessions.get(session_id, {})
+        tty_short = session.get('tty', '')
+        _log(f'[claudecode] close_session {session_id} tty={tty_short!r}')
+
+        if tty_short:
+            if tty_short.startswith('/dev/'):
+                full_tty = tty_short
+            elif tty_short.startswith('ttys') or tty_short.startswith('ttyp'):
+                full_tty = f'/dev/{tty_short}'
+            else:
+                full_tty = f'/dev/tty{tty_short}'
+            safe_tty = full_tty.replace('"', '\\"')
+            script = f'''
+set targetTTY to "{safe_tty}"
+tell application "Terminal"
+    repeat with w in every window
+        repeat with t in every tab of w
+            try
+                if tty of t is targetTTY then
+                    set selected tab of w to t
+                    set index of w to 1
+                    activate
+                    exit repeat
+                end if
+            end try
+        end repeat
+    end repeat
+end tell
+delay 0.3
+tell application "System Events"
+    keystroke "c" using control down
+end tell
+delay 0.5
+tell application "System Events"
+    keystroke "c" using control down
+end tell
+'''
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    'osascript', '-e', script,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, err = await asyncio.wait_for(proc.communicate(), timeout=8.0)
+                if err and err.strip():
+                    _log(f'[claudecode] close_session osascript error: {err.decode().strip()}')
+            except Exception as e:
+                _log(f'[claudecode] close_session failed: {e}')
+
+        # Remove from tracked sessions and clear the iOS block
+        self._sessions.pop(session_id, None)
+        self._working_sessions.discard(session_id)
+        self._save_sessions()
+        self._write_status()
+        block_id = self._session_block_id(session_id)
+        self._response_callbacks.pop(block_id, None)
+        asyncio.create_task(self.clear_block(block_id))
+        asyncio.create_task(self._update_tile())
 
     @staticmethod
     def _strip_ansi(text: str) -> str:
@@ -754,24 +942,50 @@ class MCPClient:
             return
 
         session = self._sessions.get(session_id, {})
-        project = session.get('project', '')
-        safe_project = project.replace('\\', '\\\\').replace('"', '\\"')
+        cwd = session.get('cwd', '')
+        _log(f'[claudecode] route session={session_id} cwd={cwd!r}')
 
-        # Try to focus the Terminal/iTerm2 window whose title contains the project name,
-        # then paste. Falls back to activating the app if no matching window found.
-        # Notes: use `windows` (not `every window`) and collect tabs/sessions into
-        # variables to avoid AppleScript class-vs-property parse errors (-2741).
-        script = f'''
-set projectName to "{safe_project}"
+        # Use the TTY captured at session registration time if available.
+        tty_short = session.get('tty')
+        _log(f'[claudecode] stored tty={tty_short!r}')
+
+        # Fall back to list_terminal_sessions, then ps+lsof.
+        if not tty_short:
+            try:
+                terminal_sessions = await self.list_terminal_sessions(filter='claude')
+                for s in terminal_sessions:
+                    if s.get('cwd') == cwd:
+                        tty_short = s.get('tty')
+                        _log(f'[claudecode] tty from list_terminal_sessions: {tty_short!r}')
+                        break
+            except Exception:
+                pass
+
+        if not tty_short and cwd:
+            tty_short = await self._find_tty_for_cwd(cwd, 'claude')
+            _log(f'[claudecode] tty from ps+lsof: {tty_short!r}')
+
+        if tty_short:
+            # Normalize TTY to full /dev/ path.
+            # Hooks store "ttys009"; list_terminal_sessions stores "s009"; handle both.
+            if tty_short.startswith('/dev/'):
+                full_tty = tty_short
+            elif tty_short.startswith('ttys') or tty_short.startswith('ttyp'):
+                full_tty = f'/dev/{tty_short}'
+            else:
+                full_tty = f'/dev/tty{tty_short}'
+            _log(f'[claudecode] routing via TTY: {full_tty}')
+            safe_tty = full_tty.replace('\\', '\\\\').replace('"', '\\"')
+            script = f'''
+set targetTTY to "{safe_tty}"
 set didFocus to false
 
 if application "Terminal" is running then
     tell application "Terminal"
-        repeat with w in windows
-            set tList to tabs of w
-            repeat with t in tList
+        repeat with w in every window
+            repeat with t in every tab of w
                 try
-                    if name of t contains projectName then
+                    if tty of t is targetTTY then
                         set selected tab of w to t
                         set index of w to 1
                         activate
@@ -787,25 +1001,35 @@ if application "Terminal" is running then
     set didFocus to true
 end if
 
-if not didFocus and application "iTerm2" is running then
-    tell application "iTerm2"
-        repeat with w in windows
-            set tList to tabs of w
-            repeat with t in tList
-                set sList to sessions of t
-                repeat with s in sList
-                    try
-                        if name of s contains projectName then
-                            select t
-                            activate
-                            set didFocus to true
-                            exit repeat
-                        end if
-                    end try
-                end repeat
-                if didFocus then exit repeat
-            end repeat
-            if didFocus then exit repeat
+delay 0.4
+tell application "System Events"
+    keystroke "u" using control down
+    keystroke "v" using command down
+    delay 0.4
+    keystroke return
+end tell
+'''
+        else:
+            # Fallback: match on window name (CWD path fragment).
+            # Note: Terminal.app tabs don't have a reliable name property — use window name.
+            parts = cwd.rstrip('/').split('/') if cwd else []
+            path_fragment = '/'.join(parts[-2:]) if len(parts) >= 2 else (parts[-1] if parts else '')
+            safe_path = path_fragment.replace('\\', '\\\\').replace('"', '\\"')
+            script = f'''
+set pathFragment to "{safe_path}"
+set didFocus to false
+
+if application "Terminal" is running then
+    tell application "Terminal"
+        repeat with w in every window
+            try
+                if name of w contains pathFragment then
+                    set index of w to 1
+                    activate
+                    set didFocus to true
+                    exit repeat
+                end if
+            end try
         end repeat
         if not didFocus then activate
     end tell
@@ -814,7 +1038,6 @@ end if
 
 delay 0.4
 tell application "System Events"
-    -- Clear any partial input before pasting (Ctrl+U kills the line)
     keystroke "u" using control down
     keystroke "v" using command down
     delay 0.4
@@ -828,10 +1051,12 @@ end tell
                 stderr=asyncio.subprocess.PIPE,
             )
             _, err = await asyncio.wait_for(proc.communicate(), timeout=8.0)
-            if err:
-                print(f'[claudecode-controller] osascript: {err.decode().strip()}', file=sys.stderr)
+            if err and err.strip():
+                _log(f'[claudecode] osascript error: {err.decode().strip()}')
+            else:
+                _log(f'[claudecode] osascript succeeded (rc={proc.returncode})')
         except Exception as e:
-            print(f'[claudecode-controller] _route_to_terminal failed: {e}', file=sys.stderr)
+            _log(f'[claudecode] _route_to_terminal exception: {e}')
 
     # ------------------------------------------------------------------
     # Unix socket server (hook scripts → main.py)
@@ -993,11 +1218,15 @@ end tell
         session_id = msg.get('session_id', '')
         tool_name = msg.get('tool_name', '')
         cwd = msg.get('cwd', '')
+        tty = msg.get('tty')
         if not session_id or not tool_name:
             return
         # Register session if new; refresh the block TTL on every tool use.
         # Rate-limit to once per 5 min — TTL is 1 hour so frequent refreshes are unnecessary.
         is_new = self._register_session(session_id, cwd)
+        if tty and session_id in self._sessions and not self._sessions[session_id].get('tty'):
+            self._sessions[session_id]['tty'] = tty
+            self._save_sessions()  # persist TTY immediately so it survives restarts
         if is_new:
             asyncio.create_task(self._emit_session_block(session_id))
         else:
@@ -1074,13 +1303,20 @@ async def _session_heartbeat(client):
         if not client._initialized:
             continue
         await client._discover_active_processes()
-        # Prune pid-* sessions whose process is gone and clear their iOS blocks
         dead = client._prune_dead_pid_sessions()
+        dead += await client._prune_dead_real_sessions()
         for session_id in dead:
             try:
                 await client.clear_block(client._session_block_id(session_id))
             except Exception:
                 pass
+        # Backfill TTY for sessions that don't have one yet
+        for session_id, info in list(client._sessions.items()):
+            if not info.get('tty') and info.get('cwd'):
+                tty = await client._find_tty_for_cwd(info['cwd'], 'claude')
+                if tty:
+                    info['tty'] = tty
+        client._write_status()
         for session_id in list(client._sessions.keys()):
             try:
                 await client._emit_session_block(session_id)

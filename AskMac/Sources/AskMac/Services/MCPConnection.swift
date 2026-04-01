@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(AskMacCore)
 import AskMacCore
+#endif
 
 // MARK: - LiveBlock
 

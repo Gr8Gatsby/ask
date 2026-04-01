@@ -15,10 +15,29 @@ struct SettingsView: View {
 
 // MARK: - General tab
 
+private struct AgentSession: Identifiable {
+    let id = UUID()
+    let controller: String
+    let sessionID: String
+    let project: String
+    let cwd: String
+    let tty: String
+}
+
+private struct LiveProcess: Identifiable {
+    let id = UUID()
+    let controller: String
+    let pid: String
+    let tty: String
+    let comm: String
+}
+
 private struct GeneralSettingsTab: View {
     @Environment(AppSettings.self) private var settings
 
     @State private var showVaultPicker = false
+    @State private var agentSessions: [AgentSession] = []
+    @State private var liveProcesses: [LiveProcess] = []
 
     private var appVersion: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
@@ -52,6 +71,61 @@ private struct GeneralSettingsTab: View {
                 Button("Change Vault Directory…") { showVaultPicker = true }
             }
 
+            Section {
+                if agentSessions.isEmpty {
+                    Text("No tracked sessions yet.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                } else {
+                    ForEach(agentSessions) { s in
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text(s.controller).font(.caption).fontWeight(.medium)
+                                Text(s.project).font(.caption).foregroundStyle(.secondary)
+                                Spacer()
+                                Text(s.tty.isEmpty ? "no TTY" : s.tty)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(s.tty.isEmpty ? .red : .secondary)
+                                    .textSelection(.enabled)
+                            }
+                            Text(s.cwd)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .textSelection(.enabled)
+                        }
+                        .padding(.vertical, 1)
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("Agent Sessions")
+                    Spacer()
+                    Button("Refresh") { refreshSessions() }
+                        .font(.caption)
+                }
+            }
+
+            Section("Live Processes") {
+                if liveProcesses.isEmpty {
+                    Text("No Claude or Codex processes found.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                } else {
+                    ForEach(liveProcesses) { p in
+                        HStack {
+                            Text(p.comm).font(.caption).fontWeight(.medium)
+                            Spacer()
+                            Text("PID \(p.pid)  TTY \(p.tty)")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+
             Section("About") {
                 LabeledContent("AskMac Version") {
                     Text(appVersion)
@@ -59,11 +133,10 @@ private struct GeneralSettingsTab: View {
                         .textSelection(.enabled)
                 }
             }
-
-
         }
         .formStyle(.grouped)
         .frame(minHeight: 240)
+        .onAppear { refreshSessions() }
         .fileImporter(
             isPresented: $showVaultPicker,
             allowedContentTypes: [.folder]
@@ -73,6 +146,42 @@ private struct GeneralSettingsTab: View {
                 settings.vaultPath = url
             }
         }
+    }
+
+    private func refreshSessions() {
+        let statusFiles: [(controller: String, path: String)] = [
+            ("Claude Code", NSHomeDirectory() + "/.ask/status/claudecode-controller.json"),
+            ("Codex",       NSHomeDirectory() + "/.ask/status/codex-controller.json"),
+        ]
+        var sessions: [AgentSession] = []
+        var procs: [LiveProcess] = []
+        for (controller, path) in statusFiles {
+            guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+            if let list = json["sessions"] as? [[String: Any]] {
+                for s in list {
+                    sessions.append(AgentSession(
+                        controller: controller,
+                        sessionID: s["session_id"] as? String ?? "",
+                        project:   s["project"]    as? String ?? "",
+                        cwd:       s["cwd"]        as? String ?? "",
+                        tty:       s["tty"]        as? String ?? ""
+                    ))
+                }
+            }
+            if let list = json["live_processes"] as? [[String: Any]] {
+                for p in list {
+                    procs.append(LiveProcess(
+                        controller: controller,
+                        pid:  p["pid"]  as? String ?? "",
+                        tty:  p["tty"]  as? String ?? "",
+                        comm: p["comm"] as? String ?? ""
+                    ))
+                }
+            }
+        }
+        agentSessions = sessions
+        liveProcesses = procs
     }
 }
 

@@ -29,6 +29,21 @@ SESSION_TTL    = 3600  # seconds — block TTL and session load cutoff
 CODEX_CONFIG_PATH = os.path.expanduser('~/.codex/config.toml')
 CODEX_HOOKS_PATH  = os.path.expanduser('~/.codex/hooks.json')
 SESSIONS_PATH     = os.environ.get('ASK_SESSIONS_PATH', os.path.expanduser('~/.ask/codex_sessions.json'))
+STATUS_PATH       = os.path.expanduser('~/.ask/status/codex-controller.json')
+LOG_PATH          = os.path.expanduser('~/.ask/logs/codex-controller.log')
+
+
+def _log(msg: str):
+    """Write a timestamped line to stderr and the log file."""
+    import datetime
+    line = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}"
+    print(line, file=sys.stderr)
+    try:
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        with open(LOG_PATH, 'a') as f:
+            f.write(line + '\n')
+    except Exception:
+        pass
 
 
 # ------------------------------------------------------------------
@@ -158,6 +173,21 @@ class MCPClient:
         self._load_sessions()
         await self._discover_active_processes()
         self._prune_dead_pid_sessions()
+        dead_real = await self._prune_dead_real_sessions()
+        for session_id in dead_real:
+            asyncio.create_task(self.clear_block(self._session_block_id(session_id)))
+        # Backfill TTYs immediately at startup (don't wait for heartbeat)
+        backfilled = False
+        for session_id, info in list(self._sessions.items()):
+            if not info.get('tty') and info.get('cwd'):
+                tty = await self._find_tty_for_cwd(info['cwd'], 'codex')
+                if tty:
+                    info['tty'] = tty
+                    backfilled = True
+                    print(f'[codex-controller] startup TTY backfill: {session_id} -> {tty}', file=sys.stderr)
+        if backfilled:
+            self._save_sessions()
+        self._write_status()
         for session_id, info in list(self._sessions.items()):
             asyncio.create_task(
                 self._emit_session_block(session_id, last_message=info.get('last_message', ''), touch_last_seen=False)
@@ -353,6 +383,23 @@ class MCPClient:
         """Launch a new codex session in cwd via tmux, falling back to Terminal.app."""
         import shutil
         self._recently_launched_cwds.add(cwd)
+
+        # Show a loading block on iOS immediately
+        parts = cwd.rstrip('/').split('/')
+        project_label = '/'.join(parts[-2:]) if len(parts) >= 2 else (parts[-1] or 'Codex')
+        loading_id = self._launching_block_id(cwd)
+        loading_payload = {
+            'session_id': loading_id,
+            'project': project_label,
+            'cwd': cwd,
+            'agent_name': 'Codex',
+            'brand_color': '#74AA9C',
+            'placeholder': 'Reply to Codex…',
+            'last_message': 'Starting Codex…',
+            'is_working': True,
+        }
+        asyncio.create_task(self.emit_block(loading_id, 'agent_session', loading_payload, ttl=120))
+
         if shutil.which('tmux'):
             try:
                 proc = await asyncio.create_subprocess_exec(
@@ -383,6 +430,7 @@ class MCPClient:
             print(f'[codex-controller] launched codex in Terminal.app at {cwd}', file=sys.stderr)
         except Exception as e:
             print(f'[codex-controller] Terminal.app launch failed: {e}', file=sys.stderr)
+        asyncio.create_task(self._monitor_terminal_app_launch(cwd))
         asyncio.create_task(self._delayed_discovery())
 
     async def _delayed_discovery(self):
@@ -390,7 +438,7 @@ class MCPClient:
         await asyncio.sleep(4)
         if not self._initialized:
             return
-        self._discover_active_processes()
+        await self._discover_active_processes()
         for session_id, info in list(self._sessions.items()):
             if not info.get('last_emitted'):
                 asyncio.create_task(self._emit_session_block(session_id))
@@ -398,6 +446,18 @@ class MCPClient:
     def _tmux_prompt_block_id(self, tmux_target: str) -> str:
         safe = tmux_target.replace(':', '-').replace('.', '-')
         return f'codex-tmux-prompt-{safe}'
+
+    @staticmethod
+    def _launching_block_id(cwd: str) -> str:
+        import hashlib
+        h = hashlib.md5(cwd.encode()).hexdigest()[:8]
+        return f'codex-launching-{h}'
+
+    @staticmethod
+    def _terminal_prompt_block_id(cwd: str) -> str:
+        import hashlib
+        h = hashlib.md5(cwd.encode()).hexdigest()[:8]
+        return f'codex-terminal-prompt-{h}'
 
     @staticmethod
     def _parse_tmux_prompt(content: str):
@@ -521,6 +581,158 @@ class MCPClient:
         except Exception:
             pass
 
+    async def _monitor_terminal_app_launch(self, cwd: str):
+        """Monitor a Terminal.app-launched Codex session for startup prompts.
+        Polls for the process TTY, then watches terminal history for numbered menus."""
+        prompt_block_id = self._terminal_prompt_block_id(cwd)
+        loading_block_id = self._launching_block_id(cwd)
+
+        # Wait for codex process to appear (up to 20s)
+        full_tty = None
+        for _ in range(20):
+            await asyncio.sleep(1)
+            tty_short = await self._find_tty_for_cwd(cwd, 'codex')
+            if tty_short:
+                if tty_short.startswith('/dev/'):
+                    full_tty = tty_short
+                elif tty_short.startswith('ttys') or tty_short.startswith('ttyp'):
+                    full_tty = f'/dev/{tty_short}'
+                else:
+                    full_tty = f'/dev/tty{tty_short}'
+                _log(f'[codex] terminal monitor found TTY: {full_tty}')
+                break
+
+        if not full_tty:
+            _log(f'[codex] terminal monitor: no TTY found for {cwd}')
+            asyncio.create_task(self.clear_block(loading_block_id))
+            return
+
+        safe_tty = full_tty.replace('"', '\\"')
+        read_script = f'''tell application "Terminal"
+    repeat with w in windows
+        set tabCount to count of tabs of w
+        repeat with i from 1 to tabCount
+            set t to tab i of w
+            try
+                if tty of t is "{safe_tty}" then
+                    return history of tab i of w
+                end if
+            end try
+        end repeat
+    end repeat
+    return ""
+end tell'''
+
+        import hashlib as _hl
+        last_hash = ''
+        no_prompt_streak = 0
+
+        for _ in range(120):
+            await asyncio.sleep(1)
+
+            # Stop if real session has registered for this cwd
+            if any(
+                info.get('cwd') == cwd and info.get('tty') and not info.get('session_id', '').startswith('launching-')
+                for info in self._sessions.values()
+            ):
+                self._response_callbacks.pop(prompt_block_id, None)
+                asyncio.create_task(self.clear_block(prompt_block_id))
+                return
+
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    'osascript', '-e', read_script,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+                content = MCPClient._strip_ansi(stdout.decode(errors='replace'))
+            except Exception:
+                continue
+
+            if not content.strip():
+                continue
+
+            result = self._parse_tmux_prompt(content)
+            content_hash = _hl.md5(content.encode()).hexdigest()[:8]
+
+            if result:
+                no_prompt_streak = 0
+                if content_hash != last_hash:
+                    last_hash = content_hash
+                    body, options = result
+                    captured = (full_tty, options, prompt_block_id)
+                    self._response_callbacks[prompt_block_id] = (
+                        lambda v, c=captured: self._on_terminal_prompt_reply(c[0], c[1], v, c[2])
+                    )
+                    payload = {'title': body, 'body': '', 'options': options}
+                    try:
+                        await self.emit_block(prompt_block_id, 'confirmation', payload, ttl=300)
+                        _log(f'[codex] terminal startup prompt surfaced for {full_tty}')
+                    except Exception as e:
+                        _log(f'[codex] terminal prompt emit failed: {e}')
+            else:
+                if last_hash:
+                    last_hash = ''
+                    self._response_callbacks.pop(prompt_block_id, None)
+                    asyncio.create_task(self.clear_block(prompt_block_id))
+                no_prompt_streak += 1
+                if no_prompt_streak >= 8:
+                    # 8s with no prompts after TTY found — startup complete
+                    break
+
+        self._response_callbacks.pop(prompt_block_id, None)
+        try:
+            await self.clear_block(prompt_block_id)
+        except Exception:
+            pass
+
+    async def _on_terminal_prompt_reply(self, full_tty: str, options: list, value: str, block_id: str):
+        """Send the user's menu selection to a Terminal.app tab via System Events."""
+        try:
+            idx = options.index(value)
+        except ValueError:
+            return
+        safe_tty = full_tty.replace('"', '\\"')
+        # Build the keystroke sequence: focus tab, send Down arrows, confirm twice
+        down_keys = '\n    '.join(['key code 125'] * idx) if idx else ''
+        focus_and_send = f'''set targetTTY to "{safe_tty}"
+tell application "Terminal"
+    repeat with w in every window
+        set tabCount to count of tabs of w
+        repeat with i from 1 to tabCount
+            set t to tab i of w
+            try
+                if tty of t is targetTTY then
+                    set selected tab of w to t
+                    set index of w to 1
+                    activate
+                end if
+            end try
+        end repeat
+    end repeat
+end tell
+delay 0.2
+tell application "System Events"
+    {down_keys}
+    key code 36
+    delay 0.4
+    key code 36
+end tell'''
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'osascript', '-e', focus_and_send,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
+            )
+            await proc.communicate()
+            _log(f'[codex] terminal prompt reply: option {idx} ({value})')
+        except Exception as e:
+            _log(f'[codex] terminal prompt reply failed: {e}')
+        self._response_callbacks.pop(block_id, None)
+        try:
+            await self.clear_block(block_id)
+        except Exception:
+            pass
+
     @staticmethod
     def _project_label(cwd: str, session_id: str) -> str:
         if cwd:
@@ -541,6 +753,40 @@ class MCPClient:
                 json.dump(to_save, f)
         except Exception as e:
             print(f'[codex-controller] session save failed: {e}', file=sys.stderr)
+        self._write_status()
+
+    def _write_status(self):
+        """Write a human-readable status file for AskMac diagnostics."""
+        try:
+            import subprocess
+            os.makedirs(os.path.dirname(STATUS_PATH), exist_ok=True)
+            sessions = []
+            for sid, info in self._sessions.items():
+                sessions.append({
+                    'session_id': sid,
+                    'project': info.get('project', ''),
+                    'cwd': info.get('cwd', ''),
+                    'tty': info.get('tty', ''),
+                    'last_seen': info.get('last_seen', 0),
+                })
+            # Live process scan so AskMac can show what's actually running
+            live = []
+            try:
+                r = subprocess.run(['ps', '-eo', 'pid,tty,comm'],
+                                   capture_output=True, text=True, timeout=3)
+                for line in r.stdout.splitlines()[1:]:
+                    parts = line.split()
+                    if len(parts) < 3:
+                        continue
+                    pid, tty, comm = parts[0], parts[1], ' '.join(parts[2:])
+                    if 'codex' in comm.lower() and tty != '??':
+                        live.append({'pid': pid, 'tty': tty, 'comm': comm})
+            except Exception:
+                pass
+            with open(STATUS_PATH, 'w') as f:
+                json.dump({'sessions': sessions, 'live_processes': live, 'updated_at': time.time()}, f, indent=2)
+        except Exception:
+            pass
 
     def _load_sessions(self):
         try:
@@ -561,14 +807,76 @@ class MCPClient:
         """Scan for running codex processes via the list_terminal_sessions MCP tool."""
         if os.environ.get('ASK_SKIP_DISCOVERY'):
             return
-        sessions = await self.list_terminal_sessions(filter='codex')
-        for s in sessions:
-            pid = s.get('pid')
-            cwd = s.get('cwd', '')
-            if pid and cwd:
-                synthetic_id = f'pid-{pid}'
-                if self._register_session(synthetic_id, cwd):
-                    print(f'[codex-controller] discovered codex process pid={pid} cwd={cwd}', file=sys.stderr)
+        # Try the MCP tool first, fall back to ps+lsof
+        mcp_ok = False
+        try:
+            sessions = await self.list_terminal_sessions(filter='codex')
+            if sessions:
+                mcp_ok = True
+                for s in sessions:
+                    pid = s.get('pid')
+                    cwd = s.get('cwd', '')
+                    tty = s.get('tty', '')
+                    if pid and cwd:
+                        synthetic_id = f'pid-{pid}'
+                        is_new = self._register_session(synthetic_id, cwd)
+                        if is_new:
+                            print(f'[codex-controller] discovered codex (mcp) pid={pid} cwd={cwd}', file=sys.stderr)
+                        if tty and synthetic_id in self._sessions and not self._sessions[synthetic_id].get('tty'):
+                            self._sessions[synthetic_id]['tty'] = tty
+                            self._save_sessions()
+        except Exception:
+            pass
+        if not mcp_ok:
+            await self._discover_via_ps()
+
+    async def _discover_via_ps(self):
+        """Scan ps+lsof directly for codex processes — fallback when MCP tool is unavailable."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'ps', '-eo', 'pid,tty,comm',
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+            )
+            stdout, _ = await proc.communicate()
+            candidates = []
+            for line in stdout.decode().splitlines()[1:]:
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                pid_str, tty, comm = parts[0], parts[1], ' '.join(parts[2:])
+                if 'codex' in comm.lower() and tty != '??':
+                    candidates.append((pid_str, tty))
+        except Exception:
+            return
+
+        for pid_str, tty_short in candidates:
+            synthetic_id = f'pid-{pid_str}'
+            # Update TTY if session already tracked without one
+            if synthetic_id in self._sessions:
+                if tty_short and not self._sessions[synthetic_id].get('tty'):
+                    self._sessions[synthetic_id]['tty'] = tty_short
+                    self._save_sessions()
+                continue
+            # Get cwd via lsof
+            try:
+                lsof = await asyncio.create_subprocess_exec(
+                    'lsof', '-p', pid_str, '-a', '-d', 'cwd', '-Fn',
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+                )
+                out, _ = await lsof.communicate()
+                cwd = None
+                for lline in out.decode().splitlines():
+                    if lline.startswith('n') and lline[1:].startswith('/'):
+                        cwd = lline[1:]
+                        break
+                if cwd:
+                    if self._register_session(synthetic_id, cwd):
+                        if synthetic_id in self._sessions:
+                            self._sessions[synthetic_id]['tty'] = tty_short
+                            self._save_sessions()
+                        _log(f'[codex] ps-discovered: pid={pid_str} cwd={cwd} tty={tty_short}')
+            except Exception:
+                pass
 
     @staticmethod
     def _pid_session_alive(session_id: str) -> bool:
@@ -591,6 +899,59 @@ class MCPClient:
             print(f'[codex-controller] pruned dead pid session {sid}', file=sys.stderr)
         return dead
 
+    async def _prune_dead_real_sessions(self):
+        """Remove hook-registered sessions whose CWD no longer has an active codex process."""
+        active = await self.list_terminal_sessions(filter='codex')
+        if not active:
+            return []
+        active_cwds = {s.get('cwd') for s in active if s.get('cwd')}
+        dead = []
+        for session_id, info in list(self._sessions.items()):
+            if session_id.startswith('pid-'):
+                continue
+            cwd = info.get('cwd', '')
+            if cwd and cwd not in active_cwds:
+                self._sessions.pop(session_id, None)
+                self._working_sessions.discard(session_id)
+                dead.append(session_id)
+                print(f'[codex-controller] pruned dead session {session_id[:8]} ({cwd})', file=sys.stderr)
+        if dead:
+            self._save_sessions()
+        return dead
+
+    async def _find_tty_for_cwd(self, cwd: str, comm_filter: str):
+        """Find the TTY of a running process matching comm_filter in cwd via ps+lsof.
+        Returns the short TTY string (e.g. 's003') suitable for /dev/tty{short}."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'ps', '-eo', 'pid,tty,comm',
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+            )
+            stdout, _ = await proc.communicate()
+            candidates = []
+            for line in stdout.decode().splitlines()[1:]:
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                pid_str, tty, comm = parts[0], parts[1], ' '.join(parts[2:])
+                if comm_filter.lower() in comm.lower() and tty != '??':
+                    candidates.append((pid_str, tty))
+            for pid_str, tty in candidates:
+                try:
+                    lsof = await asyncio.create_subprocess_exec(
+                        'lsof', '-p', pid_str, '-a', '-d', 'cwd', '-Fn',
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+                    )
+                    out, _ = await lsof.communicate()
+                    for lline in out.decode().splitlines():
+                        if lline.startswith('n') and lline[1:] == cwd:
+                            return tty  # e.g. 's003'
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return None
+
     def _register_session(self, session_id: str, cwd: str):
         if session_id in self._sessions:
             return False
@@ -612,11 +973,19 @@ class MCPClient:
     def _handle_session_active(self, msg):
         session_id = msg.get('session_id', '')
         cwd = msg.get('cwd', '') or msg.get('tool_cwd', '')
+        tty = msg.get('tty')
         if not session_id:
             return
         is_new = self._register_session(session_id, cwd)
+        if tty and session_id in self._sessions:
+            self._sessions[session_id]['tty'] = tty
+            self._save_sessions()  # persist TTY immediately so it survives restarts
         self._working_sessions.add(session_id)
         if is_new:
+            if cwd:
+                # Clear loading placeholder and startup prompt blocks
+                asyncio.create_task(self.clear_block(self._launching_block_id(cwd)))
+                asyncio.create_task(self.clear_block(self._terminal_prompt_block_id(cwd)))
             asyncio.create_task(self._emit_session_block(session_id))
 
     def _handle_session_stop(self, msg):
@@ -644,14 +1013,14 @@ class MCPClient:
     async def _emit_session_block(self, session_id: str, last_message: str = '', touch_last_seen: bool = True):
         """touch_last_seen=False during startup re-emit so sessions past SESSION_TTL
         are not artificially kept alive across restarts."""
-        if session_id.startswith('pid-'):
-            cwd = self._sessions.get(session_id, {}).get('cwd', '')
-            if cwd not in self._recently_launched_cwds:
-                return
         if not self._initialized:
             print(f'[codex-controller] skipping session block — not yet initialized', file=sys.stderr)
             return
         session = self._sessions.get(session_id, {})
+        if not session.get('tty'):
+            # Can't route replies without a TTY — don't surface this session on iOS
+            asyncio.create_task(self.clear_block(self._session_block_id(session_id)))
+            return
         project = session.get('project', 'Codex')
         cwd = session.get('cwd', '')
         block_id = self._session_block_id(session_id)
@@ -683,8 +1052,71 @@ class MCPClient:
     async def _on_session_reply(self, session_id: str, value: str):
         block_id = self._session_block_id(session_id)
         self._response_callbacks[block_id] = lambda v: self._on_session_reply(session_id, v)
-        if value:
+        if value == '__close_session__':
+            await self._close_session(session_id)
+        elif value:
             await self._route_to_terminal(session_id, value)
+
+    async def _close_session(self, session_id: str):
+        """Send Ctrl+C to the terminal running this session, then remove it."""
+        session = self._sessions.get(session_id, {})
+        tty_short = session.get('tty', '')
+        _log(f'[codex] close_session {session_id} tty={tty_short!r}')
+
+        if tty_short:
+            if tty_short.startswith('/dev/'):
+                full_tty = tty_short
+            elif tty_short.startswith('ttys') or tty_short.startswith('ttyp'):
+                full_tty = f'/dev/{tty_short}'
+            else:
+                full_tty = f'/dev/tty{tty_short}'
+            safe_tty = full_tty.replace('"', '\\"')
+            script = f'''
+set targetTTY to "{safe_tty}"
+tell application "Terminal"
+    repeat with w in every window
+        repeat with t in every tab of w
+            try
+                if tty of t is targetTTY then
+                    set selected tab of w to t
+                    set index of w to 1
+                    activate
+                    exit repeat
+                end if
+            end try
+        end repeat
+    end repeat
+end tell
+delay 0.3
+tell application "System Events"
+    keystroke "c" using control down
+end tell
+delay 0.5
+tell application "System Events"
+    keystroke "c" using control down
+end tell
+'''
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    'osascript', '-e', script,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, err = await asyncio.wait_for(proc.communicate(), timeout=8.0)
+                if err and err.strip():
+                    _log(f'[codex] close_session osascript error: {err.decode().strip()}')
+            except Exception as e:
+                _log(f'[codex] close_session failed: {e}')
+
+        # Remove from tracked sessions and clear the iOS block
+        self._sessions.pop(session_id, None)
+        self._working_sessions.discard(session_id)
+        self._save_sessions()
+        self._write_status()
+        block_id = self._session_block_id(session_id)
+        self._response_callbacks.pop(block_id, None)
+        asyncio.create_task(self.clear_block(block_id))
+        asyncio.create_task(self._update_tile())
 
     @staticmethod
     def _strip_ansi(text: str) -> str:
@@ -693,31 +1125,63 @@ class MCPClient:
 
     @staticmethod
     def _is_codex_idle(content: str) -> bool:
-        """True when Codex is at its input prompt (^C quit footer visible)."""
+        """True when Codex shows its idle footer (⌃C quit visible).
+        Terminal.app history uses U+2303 (⌃) not literal caret."""
         import re
-        return bool(re.search(r'\^C\s+quit', content))
+        return bool(re.search(r'[⌃\^]C\s+quit', content))
 
     @staticmethod
     def _extract_response(content: str) -> str:
-        """Extract the most recent Codex response from pane content."""
+        """Extract Codex's response from terminal history.
+
+        Codex renders responses as:
+          > First line of response
+            continuation line (indented, no > prefix)
+            ...
+        User input shows as: | user typed text  (or • text)
+        Status bar: ... ^C quit ...
+
+        Strategy: trim at the LAST status bar (history may have multiple
+        sessions), trim any pending user input line just above it, then
+        take from the last '> ' line (inclusive) to the end.
+        """
         import re
         clean = MCPClient._strip_ansi(content)
         lines = clean.splitlines()
-        # Bottom boundary: first ^C quit line
-        bottom_idx = next(
-            (i for i, l in enumerate(lines) if re.search(r'\^C\s+quit', l)),
-            len(lines)
-        )
-        # Top boundary: last prompt/input line above the response
-        # Look for a line that looks like a user prompt divider (blank line or "> " prompt)
-        candidate = lines[:bottom_idx]
-        # Strip trailing blank lines above ^C quit
-        while candidate and not candidate[-1].strip():
-            candidate.pop()
-        # Remove lines that are purely decorative (box-drawing, all dashes, etc.)
-        response_lines = [l for l in candidate if l.strip() and not re.match(r'^[-─━═╌╍\s]+$', l)]
-        # Return last 40 lines, trimmed
-        return '\n'.join(response_lines[-40:]).strip()[:4000]
+
+        # Trim at the LAST idle status bar — search from end so older sessions
+        # earlier in history don't confuse us.
+        for i in range(len(lines) - 1, -1, -1):
+            if re.search(r'[⌃\^]C\s+quit', lines[i]):
+                lines = lines[:i]
+                break
+
+        # Remove any current user-input line sitting just above the status bar
+        # (Codex shows what the user is typing with | or • prefix)
+        for i in range(len(lines) - 1, max(len(lines) - 6, -1), -1):
+            stripped = lines[i].strip()
+            if stripped and (stripped.startswith('| ') or stripped.startswith('• ')
+                             or stripped.startswith('● ')):
+                lines = lines[:i]
+                break
+
+        # Find the last "> " prefixed line — the start of Codex's last response
+        last_response_start = None
+        for i in range(len(lines) - 1, -1, -1):
+            stripped = lines[i].strip()
+            if stripped.startswith('> ') and len(stripped) > 2:
+                last_response_start = i
+                break
+
+        if last_response_start is None:
+            return ''
+
+        # Include the "> " line itself (strip its prefix) plus all continuation lines
+        response_lines = [l.rstrip() for l in lines[last_response_start:]]
+        if response_lines and response_lines[0].strip().startswith('> '):
+            response_lines[0] = response_lines[0].strip()[2:]
+
+        return '\n'.join(response_lines).strip()[:4000]
 
     def _session_id_for_tmux(self, tmux_target: str) -> Optional[str]:
         """Find the session_id that owns this tmux_target."""
@@ -782,80 +1246,107 @@ class MCPClient:
             asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
             return
 
-        try:
-            pbcopy = await asyncio.create_subprocess_exec(
-                'pbcopy',
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await pbcopy.communicate(input=text.encode('utf-8'))
-        except Exception as e:
-            print(f'[codex-controller] pbcopy failed: {e}', file=sys.stderr)
-            return
+        # Use the TTY captured at session registration time if available.
+        cwd = session.get('cwd', '')
+        tty_short = session.get('tty')
+        _log(f'[codex] route session={session_id} cwd={cwd!r} stored_tty={tty_short!r}')
 
-        session = self._sessions.get(session_id, {})
-        project = session.get('project', '')
-        safe_project = project.replace('\\', '\\\\').replace('"', '\\"')
+        # Fall back to list_terminal_sessions, then ps+lsof.
+        if not tty_short:
+            try:
+                terminal_sessions = await self.list_terminal_sessions(filter='codex')
+                for s in terminal_sessions:
+                    if s.get('cwd') == cwd:
+                        tty_short = s.get('tty')
+                        _log(f'[codex] tty from list_terminal_sessions: {tty_short!r}')
+                        break
+            except Exception:
+                pass
 
-        script = f'''
-set projectName to "{safe_project}"
-set didFocus to false
+        if not tty_short and cwd:
+            tty_short = await self._find_tty_for_cwd(cwd, 'codex')
+            _log(f'[codex] tty from ps+lsof: {tty_short!r}')
 
+        # Normalize TTY to full /dev/ path.
+        if tty_short:
+            if tty_short.startswith('/dev/'):
+                full_tty = tty_short
+            elif tty_short.startswith('ttys') or tty_short.startswith('ttyp'):
+                full_tty = f'/dev/{tty_short}'
+            else:
+                full_tty = f'/dev/tty{tty_short}'
+        else:
+            full_tty = None
+
+        # Escape text for AppleScript string literal
+        safe_text = text.replace('\\', '\\\\').replace('"', '\\"')
+
+        if full_tty:
+            _log(f'[codex] routing via TTY: {full_tty}')
+            safe_tty = full_tty.replace('\\', '\\\\').replace('"', '\\"')
+            # Use "do script in tab" — sends text directly to the tab by TTY, no focus needed.
+            script = f'''set targetTTY to "{safe_tty}"
+set inputText to "{safe_text}"
+set foundTab to false
 if application "Terminal" is running then
     tell application "Terminal"
         repeat with w in windows
-            set tList to tabs of w
-            repeat with t in tList
+            set tabCount to count of tabs of w
+            repeat with i from 1 to tabCount
+                set t to tab i of w
                 try
-                    if name of t contains projectName then
-                        set selected tab of w to t
-                        set index of w to 1
-                        activate
-                        set didFocus to true
+                    if tty of t is targetTTY then
+                        do script inputText in tab i of w
+                        set foundTab to true
                         exit repeat
                     end if
                 end try
             end repeat
-            if didFocus then exit repeat
+            if foundTab then exit repeat
         end repeat
-        if not didFocus then activate
     end tell
-    set didFocus to true
 end if
-
-if not didFocus and application "iTerm2" is running then
-    tell application "iTerm2"
-        repeat with w in windows
-            set tList to tabs of w
-            repeat with t in tList
-                set sList to sessions of t
-                repeat with s in sList
-                    try
-                        if name of s contains projectName then
-                            select t
-                            activate
-                            set didFocus to true
-                            exit repeat
-                        end if
-                    end try
-                end repeat
-                if didFocus then exit repeat
-            end repeat
-            if didFocus then exit repeat
+if not foundTab then
+    error "No Terminal tab found for TTY " & targetTTY
+end if'''
+        else:
+            # Fallback: match by CWD path in window title, paste via clipboard
+            _log(f'[codex] routing via window title fallback (no TTY)')
+            parts = cwd.rstrip('/').split('/') if cwd else []
+            path_fragment = '/'.join(parts[-2:]) if len(parts) >= 2 else (parts[-1] if parts else '')
+            safe_path = path_fragment.replace('\\', '\\\\').replace('"', '\\"')
+            try:
+                pbcopy = await asyncio.create_subprocess_exec(
+                    'pbcopy', stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                )
+                await pbcopy.communicate(input=text.encode('utf-8'))
+            except Exception as e:
+                _log(f'[codex] pbcopy failed: {e}')
+                return
+            script = f'''set pathFragment to "{safe_path}"
+set foundWindow to false
+if application "Terminal" is running then
+    tell application "Terminal"
+        repeat with w in every window
+            try
+                if name of w contains pathFragment then
+                    set index of w to 1
+                    activate
+                    set foundWindow to true
+                    exit repeat
+                end if
+            end try
         end repeat
-        if not didFocus then activate
+        if not foundWindow then activate
     end tell
-    set didFocus to true
 end if
-
 delay 0.4
 tell application "System Events"
     keystroke "v" using command down
     delay 0.4
     keystroke return
-end tell
-'''
+end tell'''
         try:
             proc = await asyncio.create_subprocess_exec(
                 'osascript', '-e', script,
@@ -863,10 +1354,73 @@ end tell
                 stderr=asyncio.subprocess.PIPE,
             )
             _, err = await asyncio.wait_for(proc.communicate(), timeout=8.0)
-            if err:
-                print(f'[codex-controller] osascript: {err.decode().strip()}', file=sys.stderr)
+            err_str = err.decode().strip() if err else ''
+            if proc.returncode != 0 or err_str:
+                _log(f'[codex] osascript error (rc={proc.returncode}): {err_str}')
+            else:
+                _log(f'[codex] osascript succeeded — message delivered to terminal')
+                if full_tty:
+                    asyncio.create_task(self._capture_terminal_response(session_id, full_tty))
         except Exception as e:
-            print(f'[codex-controller] _route_to_terminal failed: {e}', file=sys.stderr)
+            _log(f'[codex] _route_to_terminal exception: {e}')
+
+    async def _capture_terminal_response(self, session_id: str, full_tty: str):
+        """Poll Terminal.app tab contents until Codex finishes responding, then emit."""
+        await asyncio.sleep(2)  # let Codex start processing
+        self._working_sessions.add(session_id)
+        asyncio.create_task(self._emit_session_block(session_id))
+
+        safe_tty = full_tty.replace('"', '\\"')
+        # Use history (full buffer) with explicit index — 'contents of t' in a
+        # repeat loop returns the object reference, not the text.
+        read_script = f'''
+tell application "Terminal"
+    repeat with w in windows
+        set tabCount to count of tabs of w
+        repeat with i from 1 to tabCount
+            set t to tab i of w
+            try
+                if tty of t is "{safe_tty}" then
+                    return history of tab i of w
+                end if
+            end try
+        end repeat
+    end repeat
+    return ""
+end tell
+'''
+        prev_content = ''
+        stable_count = 0
+        for _ in range(180):  # max ~3 min
+            await asyncio.sleep(1)
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    'osascript', '-e', read_script,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+                content = stdout.decode()
+            except Exception:
+                break
+
+            if self._is_codex_idle(content):
+                if content == prev_content:
+                    stable_count += 1
+                    if stable_count >= 2:
+                        self._working_sessions.discard(session_id)
+                        response = self._extract_response(content)
+                        if response:
+                            _log(f'[codex] captured response for {session_id} ({len(response)} chars)')
+                            asyncio.create_task(self._emit_session_block(session_id, last_message=response))
+                        return
+                else:
+                    stable_count = 0
+            else:
+                stable_count = 0
+            prev_content = content
+
+        self._working_sessions.discard(session_id)
 
     # ------------------------------------------------------------------
     # Unix socket server (hook scripts → main.py)
@@ -1009,9 +1563,12 @@ end tell
         session_id = msg.get('session_id', '')
         tool_name = msg.get('tool_name', '') or msg.get('tool', '')
         cwd = msg.get('cwd', '')
+        tty = msg.get('tty')
         if not session_id or not tool_name:
             return
         is_new = self._register_session(session_id, cwd)
+        if tty and session_id in self._sessions and not self._sessions[session_id].get('tty'):
+            self._sessions[session_id]['tty'] = tty
         if is_new:
             asyncio.create_task(self._emit_session_block(session_id))
         else:
@@ -1062,11 +1619,19 @@ async def _session_heartbeat(client):
             continue
         await client._discover_active_processes()
         dead = client._prune_dead_pid_sessions()
+        dead += await client._prune_dead_real_sessions()
         for session_id in dead:
             try:
                 await client.clear_block(client._session_block_id(session_id))
             except Exception:
                 pass
+        # Backfill TTY for sessions that don't have one yet
+        for session_id, info in list(client._sessions.items()):
+            if not info.get('tty') and info.get('cwd'):
+                tty = await client._find_tty_for_cwd(info['cwd'], 'codex')
+                if tty:
+                    info['tty'] = tty
+        client._write_status()
         for session_id in list(client._sessions.keys()):
             try:
                 await client._emit_session_block(session_id)

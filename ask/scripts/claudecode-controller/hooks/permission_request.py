@@ -11,6 +11,31 @@ import os
 
 SOCKET_PATH = os.path.expanduser('~/.ask/sockets/claudecode-controller.sock')
 
+
+def _get_tty():
+    """Walk the process parent chain to find the TTY of the terminal."""
+    try:
+        import subprocess
+        pid = os.getpid()
+        for _ in range(8):
+            r = subprocess.run(
+                ['ps', '-p', str(pid), '-o', 'ppid=,tty='],
+                capture_output=True, text=True, timeout=2
+            )
+            parts = r.stdout.strip().split()
+            if len(parts) < 2:
+                break
+            ppid_str, tty = parts[0], parts[1]
+            if tty not in ('??', ''):
+                return tty  # e.g. "s003"
+            pid = int(ppid_str)
+            if pid <= 1:
+                break
+    except Exception:
+        pass
+    return None
+
+
 data = json.load(sys.stdin)
 tool = data.get('tool_name', 'Unknown')
 session = data.get('session_id', '')
@@ -77,7 +102,8 @@ try:
         'preview': preview,
         'options': options,
         'session_id': session,
-        'suggestions': suggestions_map
+        'suggestions': suggestions_map,
+        'tty': _get_tty(),
     }).encode()
     sock.sendall(request)
     sock.shutdown(socket.SHUT_WR)

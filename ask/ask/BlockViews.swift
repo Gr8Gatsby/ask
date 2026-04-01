@@ -1069,43 +1069,95 @@ struct AgentSessionBlockView: View {
     @State private var responding = false
     @State private var sentMessage = ""
     @State private var isCollapsed = false
+    @State private var showCloseConfirmation = false
+    @State private var isClosing = false
+    @State private var closeTimedOut = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: BlockStyle.innerSpacing + 2) {
             // Session header with collapse toggle
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { isCollapsed.toggle() }
-            } label: {
-                HStack(alignment: .center, spacing: 6) {
-                    Text(payload.project)
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    if isCollapsed, let msg = payload.lastMessage, !msg.isEmpty {
-                        Text(msg)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+            HStack(alignment: .center, spacing: 6) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { isCollapsed.toggle() }
+                } label: {
+                    HStack(alignment: .center, spacing: 6) {
+                        Text(payload.project)
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.primary)
                             .lineLimit(1)
-                            .truncationMode(.tail)
-                    } else if isCollapsed, payload.isWorking == true {
-                        Text("\(payload.agentName ?? "Claude") is working…")
+                        if isCollapsed, let msg = payload.lastMessage, !msg.isEmpty {
+                            Text(msg)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        } else if isCollapsed, payload.isWorking == true {
+                            Text("\(payload.agentName ?? "Claude") is working…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: isCollapsed ? "chevron.down" : "chevron.up")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    Spacer()
-                    Image(systemName: isCollapsed ? "chevron.down" : "chevron.up")
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    showCloseConfirmation = true
+                } label: {
+                    Image(systemName: "xmark")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(isClosing ? .clear : .secondary)
+                        .padding(.leading, 4)
+                }
+                .buttonStyle(.plain)
+                .disabled(isClosing)
+                .confirmationDialog(
+                    "Close \(payload.agentName ?? "Session")?",
+                    isPresented: $showCloseConfirmation,
+                    titleVisibility: .visible
+                ) {
+                    Button("Close Session", role: .destructive) {
+                        isClosing = true
+                        closeTimedOut = false
+                        Task {
+                            await onRespond("__close_session__")
+                            // 30-second timeout: if block hasn't been cleared, show error
+                            try? await Task.sleep(for: .seconds(30))
+                            if isClosing {
+                                closeTimedOut = true
+                                isClosing = false
+                            }
+                        }
+                    }
+                } message: {
+                    Text("This will send Ctrl+C to the terminal and end the \(payload.project) session.")
                 }
             }
-            .buttonStyle(.plain)
             .padding(.bottom, isCollapsed ? 0 : -4)
 
             if !isCollapsed {
-                // Last agent message (or working indicator)
+                // Status area
                 Group {
-                    if let msg = payload.lastMessage, !msg.isEmpty {
+                    if isClosing {
+                        HStack(spacing: 6) {
+                            ProgressView().scaleEffect(0.7)
+                            Text("Closing session…")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if closeTimedOut {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundStyle(.orange)
+                            Text("Session may not have closed — check the terminal.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if let msg = payload.lastMessage, !msg.isEmpty {
                         ClaudeMarkdownView(text: msg)
                     } else if payload.isWorking == true {
                         HStack(spacing: 6) {
@@ -1128,7 +1180,7 @@ struct AgentSessionBlockView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
                 // Sent message bubble
-                if !sentMessage.isEmpty {
+                if !sentMessage.isEmpty && !isClosing && !closeTimedOut {
                     VStack(alignment: .trailing, spacing: 2) {
                         HStack {
                             Spacer(minLength: 40)
@@ -1156,24 +1208,26 @@ struct AgentSessionBlockView: View {
                     .transition(.opacity)
                 }
 
-                // Chat input
-                HStack(alignment: .bottom, spacing: 8) {
-                    TextField(payload.placeholder ?? "Reply to \(payload.agentName ?? "Claude")…", text: $text, axis: .vertical)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.subheadline)
-                        .lineLimit(1...6)
-                        .disabled(responding)
-                        .onSubmit { submit() }
+                // Chat input — hidden while closing
+                if !isClosing && !closeTimedOut {
+                    HStack(alignment: .bottom, spacing: 8) {
+                        TextField(payload.placeholder ?? "Reply to \(payload.agentName ?? "Claude")…", text: $text, axis: .vertical)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.subheadline)
+                            .lineLimit(1...6)
+                            .disabled(responding)
+                            .onSubmit { submit() }
 
-                    Button { submit() } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.title3)
-                            .foregroundStyle(
-                                text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                    ? Color.secondary : Color.accentColor
-                            )
+                        Button { submit() } label: {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.title3)
+                                .foregroundStyle(
+                                    text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                        ? Color.secondary : Color.accentColor
+                                )
+                        }
+                        .disabled(responding || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
-                    .disabled(responding || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }

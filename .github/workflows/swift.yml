@@ -1,7 +1,4 @@
-# This workflow will build a Swift project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-swift
-
-name: Swift
+name: CI
 
 on:
   push:
@@ -10,13 +7,31 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build:
-
+  swift:
+    name: Swift build & test
     runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: AskMac
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
-      run: swift build -v
-    - name: Run tests
-      run: swift test -v
+      - uses: actions/checkout@v4
+      - name: Build
+        run: swift build -v
+      - name: Test
+        run: swift test -v
+
+  python:
+    name: Python tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test claudecode-controller
+        run: python -m pytest ask/scripts/claudecode-controller/tests/ -v
+      - name: Test codex-controller
+        run: python -m pytest ask/scripts/codex-controller/tests/ -v

@@ -79,6 +79,11 @@
 			path = ../AskMac/Sources/AskMac;
 			sourceTree = SOURCE_ROOT;
 		};
+		AA000003000000000000AA01 /* ../AskMac/Sources/AskMacCore */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ../AskMac/Sources/AskMacCore;
+			sourceTree = SOURCE_ROOT;
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -120,6 +125,7 @@
 				0A99F19C2F784290003B10BE /* askTests */,
 				0A99F1A62F784290003B10BE /* askUITests */,
 				AA000002000000000000AA01 /* ../AskMac/Sources/AskMac */,
+				AA000003000000000000AA01 /* ../AskMac/Sources/AskMacCore */,
 				0A99F1892F78428F003B10BE /* Products */,
 				0A99F2202F795B0D003B10BE /* PlaywriteNGModern-Regular.ttf */,
 			);
@@ -221,6 +227,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				AA000002000000000000AA01 /* ../AskMac/Sources/AskMac */,
+				AA000003000000000000AA01 /* ../AskMac/Sources/AskMacCore */,
 			);
 			name = AskMac;
 			packageProductDependencies = (

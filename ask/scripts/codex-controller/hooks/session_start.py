@@ -11,6 +11,31 @@ import os
 
 SOCKET_PATH = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/sockets/codex-controller.sock'))
 
+
+def _get_tty():
+    """Walk the process parent chain to find the TTY of the terminal."""
+    try:
+        import subprocess
+        pid = os.getpid()
+        for _ in range(8):
+            r = subprocess.run(
+                ['ps', '-p', str(pid), '-o', 'ppid=,tty='],
+                capture_output=True, text=True, timeout=2
+            )
+            parts = r.stdout.strip().split()
+            if len(parts) < 2:
+                break
+            ppid_str, tty = parts[0], parts[1]
+            if tty not in ('??', ''):
+                return tty  # e.g. "s003"
+            pid = int(ppid_str)
+            if pid <= 1:
+                break
+    except Exception:
+        pass
+    return None
+
+
 data = json.load(sys.stdin)
 session_id = data.get('session_id', '')
 cwd = data.get('cwd', '')
@@ -26,6 +51,7 @@ try:
         'type': 'session_active',
         'session_id': session_id,
         'cwd': cwd,
+        'tty': _get_tty(),
     }).encode())
     sock.close()
 except Exception:
