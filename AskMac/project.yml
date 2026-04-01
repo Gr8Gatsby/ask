@@ -1,0 +1,80 @@
+name: AskMac
+options:
+  bundleIdPrefix: com.kevinhill
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: true
+
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: "2.6.0"
+
+settings:
+  base:
+    DEVELOPMENT_TEAM: B5J28L8ARB
+    SWIFT_VERSION: "5.10"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    ENABLE_HARDENED_RUNTIME: YES
+
+targets:
+  AskMacCore:
+    type: framework
+    platform: macOS
+    sources:
+      - path: Sources/AskMacCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kevinhill.askmaccore
+        SKIP_INSTALL: YES
+        CODE_SIGN_STYLE: Automatic
+        DEFINES_MODULE: YES
+    scheme:
+      testTargets:
+        - AskMacTests
+
+  AskMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/AskMac
+        excludes:
+          - "**/*.entitlements"
+    entitlements:
+      path: Sources/AskMac/AskMac.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kevinhill.askmac
+        INFOPLIST_FILE: Sources/AskMac/Info.plist
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "Developer ID Application"
+        CODE_SIGN_ENTITLEMENTS: Sources/AskMac/AskMac.entitlements
+      configs:
+        Release:
+          CODE_SIGN_IDENTITY: "Developer ID Application"
+    dependencies:
+      - target: AskMacCore
+        embed: true
+      - package: Sparkle
+        product: Sparkle
+
+  AskMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/AskMacTests
+    dependencies:
+      - target: AskMacCore
+
+schemes:
+  AskMac:
+    build:
+      targets:
+        AskMac: all
+        AskMacCore: [build]
+        AskMacTests: [test]
+    archive:
+      config: Release

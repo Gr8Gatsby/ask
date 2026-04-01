@@ -15,6 +15,18 @@ DerivedData/
 *.ipa
 *.dSYM
 *.dSYM.zip
+*.dmg
+*.xcarchive
+
+# Release build output
+build/
+
+# Keychain files (created during CI signing)
+*.keychain
+*.keychain-db
+
+# Sparkle tools (downloaded locally, not committed)
+sparkle/
 
 # Swift Package Manager
 .build/

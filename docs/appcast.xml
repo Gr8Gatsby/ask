@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>AskMac Updates</title>
+    <link>https://raw.githubusercontent.com/Gr8Gatsby/ask/main/docs/appcast.xml</link>
+    <description>AskMac release history</description>
+    <language>en</language>
+    <!-- Release entries are prepended here by the release pipeline -->
+  </channel>
+</rss>

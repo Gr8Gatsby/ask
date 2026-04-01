@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Installs the codex-controller script into the user's AskMac Scripts Vault.
+set -euo pipefail
+
+SCRIPT_ID="codex-controller"
+APP_BUNDLE="$2/Applications/AskMac.app"
+BUNDLED_SCRIPT="$APP_BUNDLE/Contents/Resources/Scripts/$SCRIPT_ID"
+
+LOGGED_IN_USER=$(stat -f "%Su" /dev/console)
+USER_HOME=$(eval echo ~"$LOGGED_IN_USER")
+VAULT="$USER_HOME/.ask/scripts"
+
+if [[ ! -d "$APP_BUNDLE" ]]; then
+    echo "ERROR: AskMac.app not found at $APP_BUNDLE" >&2
+    exit 1
+fi
+
+if [[ ! -d "$BUNDLED_SCRIPT" ]]; then
+    echo "ERROR: Bundled script not found at $BUNDLED_SCRIPT" >&2
+    exit 1
+fi
+
+mkdir -p "$VAULT/$SCRIPT_ID"
+cp -r "$BUNDLED_SCRIPT/." "$VAULT/$SCRIPT_ID/"
+chown -R "$LOGGED_IN_USER" "$VAULT/$SCRIPT_ID"
+
+echo "Installed $SCRIPT_ID to $VAULT/$SCRIPT_ID"

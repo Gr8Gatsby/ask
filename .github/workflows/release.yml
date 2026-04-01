@@ -1,0 +1,298 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    name: Build, sign, notarize, and release AskMac
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # ── Signing setup ──────────────────────────────────────────────────────
+      - name: Import Developer ID certificates
+        env:
+          CERT_P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+          CERT_P12_PASSWORD: ${{ secrets.CERT_P12_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/release.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          echo "$CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$CERT_P12_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/pkgbuild \
+            -T /usr/bin/productbuild \
+            -T /usr/bin/xcodebuild
+          rm "$RUNNER_TEMP/cert.p12"
+
+          security list-keychains -d user -s "$KEYCHAIN_PATH" \
+            "$(security list-keychains -d user | tr -d '"')"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+      # ── Generate Xcode project ─────────────────────────────────────────────
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: AskMac
+        run: xcodegen generate
+
+      # ── Archive + export ───────────────────────────────────────────────────
+      - name: Archive
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          xcodebuild archive \
+            -project AskMac/AskMac.xcodeproj \
+            -scheme AskMac \
+            -configuration Release \
+            -archivePath "$RUNNER_TEMP/AskMac.xcarchive" \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            MARKETING_VERSION="$VERSION"
+
+      - name: Export app bundle
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/AskMac.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist AskMac/ExportOptions.plist
+
+      # ── Bundle scripts into app ────────────────────────────────────────────
+      - name: Bundle scripts into app
+        run: |
+          APP_PATH="$RUNNER_TEMP/export/AskMac.app"
+          BUNDLE_SCRIPTS="$APP_PATH/Contents/Resources/Scripts"
+          mkdir -p "$BUNDLE_SCRIPTS"
+          for script_dir in ask/scripts/*/; do
+            script_name="$(basename "$script_dir")"
+            cp -r "$script_dir" "$BUNDLE_SCRIPTS/$script_name"
+          done
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+
+      - name: Re-sign app after bundling scripts
+        run: |
+          codesign --force --deep \
+            --sign "Developer ID Application" \
+            --timestamp \
+            --options runtime \
+            --entitlements AskMac/Sources/AskMac/AskMac.entitlements \
+            "$APP_PATH"
+
+      # ── Component PKGs ─────────────────────────────────────────────────────
+      - name: Build component PKGs
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/pkgs"
+
+          pkgbuild \
+            --component "$APP_PATH" \
+            --install-location /Applications \
+            --sign "Developer ID Installer" \
+            "$RUNNER_TEMP/pkgs/AskMac-app.pkg"
+
+          for script_dir in ask/scripts/*/; do
+            script_name="$(basename "$script_dir")"
+            version=$(python3 -c \
+              "import json; d=json.load(open('${script_dir}manifest.json')); print(d.get('version','1.0'))")
+            pkgbuild \
+              --nopayload \
+              --scripts "installer/scripts/$script_name" \
+              --identifier "com.kevinhill.askmac.script.$script_name" \
+              --version "$version" \
+              --sign "Developer ID Installer" \
+              "$RUNNER_TEMP/pkgs/script-${script_name}.pkg"
+          done
+
+      # ── Distribution PKG ───────────────────────────────────────────────────
+      - name: Build distribution PKG
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          DIST_XML="$RUNNER_TEMP/distribution.xml"
+          cp installer/distribution.xml "$DIST_XML"
+
+          get_ver() {
+            python3 -c \
+              "import json; d=json.load(open('ask/scripts/$1/manifest.json')); print(d.get('version','1.0'))"
+          }
+
+          sed -i '' "s/ASKMAC_VERSION/$VERSION/g" "$DIST_XML"
+          sed -i '' "s/BREW_MONITOR_VERSION/$(get_ver brew-monitor)/g" "$DIST_XML"
+          sed -i '' "s/CLAUDECODE_VERSION/$(get_ver claudecode-controller)/g" "$DIST_XML"
+          sed -i '' "s/CODEX_VERSION/$(get_ver codex-controller)/g" "$DIST_XML"
+          sed -i '' "s/GITHUB_VERSION/$(get_ver github)/g" "$DIST_XML"
+          sed -i '' "s/OLLAMA_VERSION/$(get_ver ollama)/g" "$DIST_XML"
+
+          PKG_PATH="$RUNNER_TEMP/AskMac-${VERSION}.pkg"
+          productbuild \
+            --distribution "$DIST_XML" \
+            --package-path "$RUNNER_TEMP/pkgs" \
+            --sign "Developer ID Installer" \
+            "$PKG_PATH"
+          echo "PKG_PATH=$PKG_PATH" >> "$GITHUB_ENV"
+
+      # ── Notarize PKG ───────────────────────────────────────────────────────
+      - name: Notarize installer PKG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcrun notarytool submit "$PKG_PATH" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$PKG_PATH"
+
+      # ── Installer DMG (wraps PKG) ──────────────────────────────────────────
+      - name: Create installer DMG
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          brew install create-dmg
+          mkdir -p "$RUNNER_TEMP/installer-contents"
+          cp "$PKG_PATH" "$RUNNER_TEMP/installer-contents/"
+
+          INSTALLER_DMG="$RUNNER_TEMP/AskMac-${VERSION}-installer.dmg"
+          create-dmg \
+            --volname "Install AskMac $VERSION" \
+            --window-pos 200 120 \
+            --window-size 500 300 \
+            --icon-size 100 \
+            --icon "AskMac-${VERSION}.pkg" 250 130 \
+            "$INSTALLER_DMG" \
+            "$RUNNER_TEMP/installer-contents/"
+          codesign --sign "Developer ID Application" --timestamp "$INSTALLER_DMG"
+          echo "INSTALLER_DMG=$INSTALLER_DMG" >> "$GITHUB_ENV"
+
+      # ── Sparkle update DMG (.app only) ─────────────────────────────────────
+      - name: Create Sparkle update DMG
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          SPARKLE_DMG="$RUNNER_TEMP/AskMac-${VERSION}.dmg"
+          create-dmg \
+            --volname "AskMac $VERSION" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "AskMac.app" 175 190 \
+            --hide-extension "AskMac.app" \
+            --app-drop-link 425 190 \
+            "$SPARKLE_DMG" \
+            "$RUNNER_TEMP/export/"
+          codesign --sign "Developer ID Application" --timestamp "$SPARKLE_DMG"
+          echo "SPARKLE_DMG=$SPARKLE_DMG" >> "$GITHUB_ENV"
+
+      - name: Notarize Sparkle DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcrun notarytool submit "$SPARKLE_DMG" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$SPARKLE_DMG"
+
+      # ── Sparkle signature ──────────────────────────────────────────────────
+      - name: Download Sparkle tools
+        run: |
+          SPARKLE_VERSION="2.6.4"
+          curl -L \
+            "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz" \
+            -o "$RUNNER_TEMP/sparkle.tar.xz"
+          mkdir -p "$RUNNER_TEMP/sparkle"
+          tar -xf "$RUNNER_TEMP/sparkle.tar.xz" -C "$RUNNER_TEMP/sparkle"
+
+      - name: Generate Sparkle EdDSA signature
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          echo "$SPARKLE_PRIVATE_KEY" | base64 --decode > "$RUNNER_TEMP/sparkle_key"
+          SIGNATURE=$("$RUNNER_TEMP/sparkle/bin/sign_update" \
+            "$SPARKLE_DMG" --ed-key-file "$RUNNER_TEMP/sparkle_key")
+          rm "$RUNNER_TEMP/sparkle_key"
+          FILE_SIZE=$(stat -f%z "$SPARKLE_DMG")
+          echo "SPARKLE_SIGNATURE=$SIGNATURE" >> "$GITHUB_ENV"
+          echo "DMG_SIZE=$FILE_SIZE" >> "$GITHUB_ENV"
+
+      # ── Update appcast ─────────────────────────────────────────────────────
+      - name: Update appcast.xml
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          DMG_NAME="AskMac-${VERSION}.dmg"
+          PUB_DATE=$(date -u '+%a, %d %b %Y %H:%M:%S +0000')
+
+          python3 - <<PYEOF
+          import re
+          with open('docs/appcast.xml', 'r') as f:
+              content = f.read()
+          new_item = """    <item>
+      <title>Version ${VERSION}</title>
+      <sparkle:version>${GITHUB_RUN_NUMBER}</sparkle:version>
+      <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>${PUB_DATE}</pubDate>
+      <enclosure
+        url="https://github.com/Gr8Gatsby/ask/releases/download/v${VERSION}/${DMG_NAME}"
+        length="${DMG_SIZE}"
+        type="application/octet-stream"
+        sparkle:edSignature="${SPARKLE_SIGNATURE}"
+      />
+    </item>"""
+          marker = '    <!-- Release entries are prepended here by the release pipeline -->'
+          content = content.replace(marker, marker + '\n' + new_item)
+          with open('docs/appcast.xml', 'w') as f:
+              f.write(content)
+          PYEOF
+
+      - name: Commit updated appcast
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/appcast.xml
+          git commit -m "chore(release): update appcast for v${{ steps.version.outputs.VERSION }}"
+          git push origin HEAD:main
+
+      # ── Create GitHub Release ──────────────────────────────────────────────
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          gh release create "v${VERSION}" \
+            --title "AskMac v${VERSION}" \
+            --notes-from-tag \
+            "$INSTALLER_DMG" \
+            "$SPARKLE_DMG"
+
+      # ── Cleanup ────────────────────────────────────────────────────────────
+      - name: Remove temporary keychain
+        if: always()
+        run: security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true

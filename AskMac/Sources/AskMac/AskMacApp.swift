@@ -2,6 +2,8 @@ import SwiftUI
 
 @main
 struct AskMacApp: App {
+    @StateObject private var updater = AppUpdater()
+
     private let settings = AppSettings()
     private let cloudKit = CloudKitService()
 
@@ -10,6 +12,7 @@ struct AskMacApp: App {
     @State private var actionHistory: ActionHistoryService
     @State private var scriptManager: ScriptManager
     @State private var responsePoller: ResponsePoller
+    @State private var scriptUpdater = ScriptUpdateService()
 
     init() {
         let s = settings
@@ -45,6 +48,8 @@ struct AskMacApp: App {
                 .environment(messageWatcher)
                 .environment(scriptManager)
                 .environment(actionHistory)
+                .environment(scriptUpdater)
+                .onAppear { scriptUpdater.checkForUpdates() }
         } label: {
             MenuBarLabel(hasActiveScripts: scriptManager.scripts.contains { $0.status == .running })
         }
@@ -73,6 +78,13 @@ struct AskMacApp: App {
         }
         .defaultSize(width: 720, height: 520)
         .defaultPosition(.center)
+
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") {
+                updater.checkForUpdates()
+            }
+            .disabled(!updater.canCheckForUpdates)
+        }
     }
 }
 

@@ -4,6 +4,9 @@ import PackageDescription
 let package = Package(
     name: "AskMac",
     platforms: [.macOS(.v14)],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0")
+    ],
     targets: [
         .target(
             name: "AskMacCore",
@@ -11,7 +14,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "AskMac",
-            dependencies: ["AskMacCore"],
+            dependencies: [
+                "AskMacCore",
+                .product(name: "Sparkle", package: "Sparkle")
+            ],
             path: "Sources/AskMac",
             resources: [.process("Assets.xcassets")]
         ),

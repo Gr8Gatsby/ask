@@ -5,6 +5,7 @@ struct MenuBarView: View {
     @Environment(HeartbeatService.self) private var heartbeat
     @Environment(MessageWatcherService.self) private var messageWatcher
     @Environment(ScriptManager.self) private var scriptManager
+    @Environment(ScriptUpdateService.self) private var scriptUpdater
 
     @Environment(\.openWindow) private var openWindow
 
@@ -16,6 +17,10 @@ struct MenuBarView: View {
             if !heartbeat.connectedDevices.isEmpty {
                 Divider()
                 devicesSection
+            }
+            if scriptUpdater.showUpdatePrompt {
+                Divider()
+                scriptUpdateBanner
             }
             Divider()
             scriptsSection
@@ -102,6 +107,39 @@ struct MenuBarView: View {
                     .labelsHidden()
                 }
             }
+        }
+    }
+
+    private var scriptUpdateBanner: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .foregroundStyle(.blue)
+                    .font(.caption)
+                Text("\(scriptUpdater.pendingUpdates.count) script update\(scriptUpdater.pendingUpdates.count == 1 ? "" : "s") available")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                Spacer()
+                Button {
+                    scriptUpdater.dismissUpdates()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            ForEach(scriptUpdater.pendingUpdates) { update in
+                Text(update.displayDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Button("Update All") {
+                scriptUpdater.applyUpdates(scriptUpdater.pendingUpdates)
+            }
+            .font(.caption)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.mini)
         }
     }
 

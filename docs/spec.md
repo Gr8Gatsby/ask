@@ -384,6 +384,107 @@ AskSession status updated to "active"; iOS view dismisses; session list refreshe
 
 ---
 
+## AskMac Distribution and Auto-Updates
+
+### Distribution Format
+
+- First-time install: a disk image (DMG) containing a macOS installer package (`.pkg`), distributed via GitHub Releases
+- The PKG runs in macOS Installer.app, which presents a "Customize" step where optional script components can be individually selected or deselected
+- Auto-updates (via Sparkle): a DMG containing just the `.app`, delivered silently in the background
+- Each GitHub Release includes both artifacts: `AskMac-{version}-installer.dmg` and `AskMac-{version}.dmg`
+
+### Auto-Updates (Sparkle)
+
+- AskMac integrates the Sparkle 2.x framework for automatic update checking and delivery
+- Sparkle is added as a Swift Package Manager dependency
+- An appcast XML feed is published at a stable URL (`https://raw.githubusercontent.com/Gr8Gatsby/ask/main/docs/appcast.xml`) that Sparkle polls to discover new releases
+- Each appcast entry contains: version, minimum macOS requirement, download URL, file size, and a cryptographic EdDSA signature over the download
+- The EdDSA public key used to verify update signatures is embedded in the app bundle at build time
+- The app checks for updates automatically on launch (at most once per day) and on demand via a "Check for Updates…" menu command
+- When an update is available, Sparkle presents its standard update UI showing the release notes; the user can install immediately, skip this version, or be reminded later
+- Sparkle downloads and installs the update in the background; the app relaunches into the new version
+- Release notes for each version are included in the appcast entry
+
+### Code Signing
+
+- AskMac is signed with a Developer ID Application certificate for distribution outside the Mac App Store
+- The `.app` bundle, all embedded frameworks (including Sparkle), and any helper executables are signed before packaging
+- The DMG is signed after creation
+- Bundle identifier: `com.kevinhill.askmac`
+- Apple Developer Team ID: `B5J28L8ARB`
+
+### Notarization and Stapling
+
+- After signing, the DMG is submitted to Apple's notarization service (`xcrun notarytool`)
+- Notarization confirms the binary is free of known malware and is properly signed with a Developer ID certificate
+- After notarization, the ticket is stapled to the DMG so Gatekeeper can verify it offline
+- No release is published until notarization and stapling succeed
+
+### Release Pipeline
+
+A GitHub Actions workflow triggers on a version tag push (`v*`) and:
+
+1. Builds the AskMac app bundle in release configuration using the Xcode project
+2. Signs the app bundle and embedded frameworks with the Developer ID certificate
+3. Packages the signed app into a DMG
+4. Signs the DMG
+5. Submits to Apple notarization and waits for approval
+6. Staples the notarization ticket to the DMG
+7. Generates the Sparkle EdDSA signature for the DMG
+8. Updates the appcast XML with the new release entry
+9. Creates a GitHub Release and attaches the notarized DMG
+10. Commits and pushes the updated appcast
+
+### Script Bundling and Installation
+
+**PKG component structure**
+
+| Component | Required | Default |
+|---|---|---|
+| AskMac application | Yes | always installed |
+| Homebrew Monitor (brew-monitor) | No | unchecked |
+| Claude Code Controller (claudecode-controller) | No | unchecked |
+| Codex Controller (codex-controller) | No | unchecked |
+| Git Repos (github) | No | unchecked |
+| Ollama (ollama) | No | unchecked |
+
+**Bundled scripts**
+- All scripts from `ask/scripts/` are bundled inside `AskMac.app/Contents/Resources/Scripts/` at build time
+- Each script's `manifest.json` declares its version
+
+**PKG script installation**
+- Each optional script component's postinstall script copies files from the installed app bundle to `~/.ask/scripts/{script-id}/`
+- The vault directory is created if it does not exist
+- Scripts the user unchecked at the Customize step are not installed
+
+**Script update detection**
+- On each launch the app compares each bundled script's `manifest.json` version against the version already in the vault (`~/.ask/scripts/{id}/manifest.json`)
+- If a bundled version is newer than the installed version, the script is added to a pending updates list
+- When updates are available, the menu bar popover shows a "Script updates available" banner
+- Tapping the banner shows which scripts have updates; the user may apply all or skip individually
+- Scripts not present in the vault (never installed) are not shown as updates
+
+---
+
+### Required Secrets (GitHub Actions)
+
+| Secret | Purpose |
+|---|---|
+| `DEVELOPER_ID_CERT_P12` | Base64-encoded Developer ID Application certificate + private key |
+| `CERT_P12_PASSWORD` | Password for the P12 certificate |
+| `APPLE_ID` | Apple ID email for notarization |
+| `APPLE_ID_PASSWORD` | App-specific password for notarization |
+| `APPLE_TEAM_ID` | Apple Developer Team ID (`B5J28L8ARB`) |
+| `SPARKLE_PRIVATE_KEY` | EdDSA private key for signing Sparkle update artifacts |
+
+### One-Time Setup
+
+- Generate a Sparkle EdDSA key pair using Sparkle's `generate_keys` tool; the private key is stored in the macOS Keychain (and as a GitHub secret for CI); the public key is embedded in `Info.plist` as `SUPublicEDKey`
+- The Xcode project is generated from `AskMac/project.yml` using XcodeGen (`brew install xcodegen && xcodegen generate`)
+- Developer ID Application certificate must be present in the local Keychain for local release builds
+
+---
+
 ## Constraints and Scope (v1)
 
 - Single iCloud account — no sharing between users
@@ -425,3 +526,4 @@ AskSession status updated to "active"; iOS view dismisses; session list refreshe
 | 2026-04-01 | Script CloudKit emission indicator: each script row in the menu bar popover shows a cloud icon to the left of the toggle. The icon appears only after the script has emitted at least one block since app start. Green outline = script currently has active live blocks; charcoal outline = has emitted before but no active blocks now. |
 | 2026-04-01 | Push notification navigation fixes: (1) Cold-start: scriptID is persisted to UserDefaults on notification tap and consumed by HomeView after first load, so tapping a notification while the app is killed navigates correctly. (2) Block freshness: navigating via notification now triggers an immediate load so the confirmation block is visible without a race. (3) Subscription reliability: CloudKit subscriptions are re-saved on every launch so stale settings from previous installs are replaced. |
 | 2026-04-01 | Polling latency reduced: idle poll interval reduced from 30s to 5s. ScriptDetailView runs its own 5s poll loop while open so updates arrive even if HomeView's background poll is paused. |
+| 2026-04-01 | Distribution: AskMac installer packaged as a PKG inside a DMG, distributed via GitHub Releases. PKG has required app component + optional per-script components (all unchecked by default). Sparkle 2.x integrated for silent app-only auto-updates via appcast. Bundled scripts in app bundle enable update detection: menu bar popover shows pending script updates and prompts user to apply. Xcode project generated via XcodeGen (project.yml). GitHub Actions release pipeline triggered on version tags. |
