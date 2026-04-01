@@ -20,7 +20,7 @@ final class ResponsePoller {
         pollTask = Task {
             while !Task.isCancelled {
                 await poll(scriptManager: scriptManager)
-                try? await Task.sleep(for: .seconds(2))
+                try? await Task.sleep(for: .seconds(1))
             }
         }
     }

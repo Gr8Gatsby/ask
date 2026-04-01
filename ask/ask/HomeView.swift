@@ -205,7 +205,7 @@ struct HomeView: View {
                     // arrive even if HomeView's poll loop was paused by onDisappear.
                     await load()
                     while !Task.isCancelled {
-                        try? await Task.sleep(for: .seconds(5))
+                        try? await Task.sleep(for: .seconds(3))
                         guard !Task.isCancelled else { break }
                         await load()
                     }
@@ -457,7 +457,7 @@ struct HomeView: View {
                 if Date() < burstPollingUntil {
                     interval = 1.0   // just responded — fast burst
                 } else {
-                    interval = 5.0   // default — keep UI fresh
+                    interval = 3.0   // default — keep UI fresh
                 }
                 try? await Task.sleep(for: .seconds(interval))
                 guard !Task.isCancelled else { break }
@@ -526,7 +526,7 @@ struct HomeView: View {
             }
         }
 
-        burstPollingUntil = Date().addingTimeInterval(10)
+        burstPollingUntil = Date().addingTimeInterval(20)
 
         do {
             try await cloudKit.postResponse(
