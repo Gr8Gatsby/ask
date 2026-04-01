@@ -51,8 +51,27 @@ private struct GeneralSettingsTab: View {
         Form {
             Section("Machine") {
                 LabeledContent("Name") {
-                    TextField("Machine name", text: $settings.machineName)
-                        .multilineTextAlignment(.trailing)
+                    HStack(spacing: 6) {
+                        TextField(AppSettings.defaultMachineName, text: $settings.machineName)
+                            .multilineTextAlignment(.trailing)
+                            .onAppear {
+                                // Heal any empty name persisted by an older build
+                                if settings.machineName.isEmpty {
+                                    settings.machineName = AppSettings.defaultMachineName
+                                }
+                            }
+                        if settings.machineName != AppSettings.defaultMachineName {
+                            Button {
+                                settings.machineName = AppSettings.defaultMachineName
+                            } label: {
+                                Image(systemName: "arrow.counterclockwise")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Reset to Mac computer name")
+                        }
+                    }
                 }
                 LabeledContent("Machine ID") {
                     Text(settings.machineID)

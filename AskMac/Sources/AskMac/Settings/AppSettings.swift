@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SystemConfiguration
 
 @Observable
 final class AppSettings {
@@ -37,6 +38,15 @@ final class AppSettings {
         !machineName.isEmpty
     }
 
+    /// The Mac's computer name as set in System Settings › General › About.
+    /// This is the same name shown in Finder and About This Mac.
+    static var defaultMachineName: String {
+        if let cfName = SCDynamicStoreCopyComputerName(nil, nil) {
+            return cfName as String
+        }
+        return Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
 
@@ -51,9 +61,9 @@ final class AppSettings {
 
         let storedName = defaults.string(forKey: Key.machineName) ?? ""
         if storedName.isEmpty {
-            let hostname = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
-            self.machineName = hostname
-            defaults.set(hostname, forKey: Key.machineName)
+            let name = AppSettings.defaultMachineName
+            self.machineName = name
+            defaults.set(name, forKey: Key.machineName)
         } else {
             self.machineName = storedName
         }
