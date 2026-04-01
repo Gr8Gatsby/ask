@@ -1,9 +1,18 @@
 {
   "id": "ollama",
   "name": "Ollama",
-  "version": "1.0",
+  "version": "1.1",
   "description": "Chat with locally installed Ollama models and manage Ollama updates",
   "entry": "main.py",
   "icon": "cpu",
-  "icon_file": "icon.svg"
+  "icon_file": "icon.svg",
+  "requires": [
+    {
+      "id": "ollama",
+      "name": "Ollama",
+      "check": "ollama --version",
+      "install": "brew install ollama",
+      "install_url": "https://ollama.com"
+    }
+  ]
 }

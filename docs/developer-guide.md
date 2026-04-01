@@ -98,6 +98,42 @@ my-script/
 | `icon` | — | SF Symbol name. Fallback icon if no SVG. |
 | `icon_file` | — | SVG file (32×32 recommended). Rendered in iOS app and Mac Settings. |
 | `schedule` | — | Cron expression. AskMac fires the script at this time if it's a feed-style check. |
+| `requires` | — | Array of dependency declarations (see below). Checked before the script is spawned. |
+
+### Declaring dependencies
+
+Scripts that require external tools (Claude Code, Codex, Homebrew, etc.) should declare them in `requires`. AskMac checks each dependency before spawning the process and shows install instructions if any are missing — the script will not silently crash.
+
+```json
+{
+  "id": "claudecode-controller",
+  "requires": [
+    {
+      "id": "claude",
+      "name": "Claude Code",
+      "check": "claude --version",
+      "min_version": "1.0.0",
+      "install": "npm install -g @anthropic-ai/claude-code",
+      "install_url": "https://claude.ai/code"
+    }
+  ]
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `id` | ✅ | Stable identifier (used for deduplication) |
+| `name` | ✅ | Human-readable name shown in the menu bar popover |
+| `check` | ✅ | Shell command run in the user's login shell to test presence (exit 0 = installed) |
+| `min_version` | — | Minimum semver version. Parsed from stdout of `check`; omit if version doesn't matter. |
+| `install` | — | Install command to display to the user (`brew install …`, `npm install -g …`) |
+| `install_url` | — | Link to full setup instructions |
+
+If any dependency fails:
+- The script is held in `missingDependencies` status (not spawned, no crash)
+- The menu bar popover shows which tool is missing and how to install it
+- AskMac emits a `status` block to the iPhone: `"<script name> unavailable — <dep name> not installed"`
+- A "Retry" button re-checks all dependencies without restarting AskMac
 
 ### The MCP client
 

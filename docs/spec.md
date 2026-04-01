@@ -466,6 +466,60 @@ A GitHub Actions workflow triggers on a version tag push (`v*`) and:
 
 ---
 
+### Script Dependency Checking
+
+Scripts may declare external tool dependencies in `manifest.json` using a `requires` array. AskMac checks these before spawning the script process so the user sees a clear message instead of a cryptic crash.
+
+**Manifest declaration:**
+
+```json
+{
+  "requires": [
+    {
+      "id": "claude",
+      "name": "Claude Code",
+      "check": "claude --version",
+      "min_version": "1.0.0",
+      "install": "npm install -g @anthropic-ai/claude-code",
+      "install_url": "https://claude.ai/code"
+    },
+    {
+      "id": "codex",
+      "name": "OpenAI Codex CLI",
+      "check": "codex --version",
+      "install": "npm install -g @openai/codex"
+    }
+  ]
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `id` | ✅ | Stable identifier used for deduplication |
+| `name` | ✅ | Display name shown in the UI and error messages |
+| `check` | ✅ | Shell command to detect if the tool is installed (exit 0 = present) |
+| `min_version` | — | Minimum acceptable version string (compared against stdout of `check`) |
+| `install` | — | Install command to show the user |
+| `install_url` | — | URL for full setup instructions |
+
+**Checking behavior:**
+- AskMac runs each `check` command in the user's login shell (`/bin/zsh -l -c "{check}"`) before launching the script
+- The check is re-run each time the script is (re)started
+- If any dependency fails: the script is placed in `missingDependencies` status and not spawned
+- The menu bar popover shows the script name, which dependency failed, and the `install` command if provided
+- If `install_url` is set, the menu bar item includes a link to the setup instructions
+- AskMac emits a `status` block on behalf of the blocked script: `"{name} unavailable — {dep.name} not installed"`
+
+**Version checking:**
+- If `min_version` is set, AskMac captures stdout of the `check` command and looks for a semver-like version string using a regex (`\d+\.\d+\.\d+`)
+- The first match is compared numerically against `min_version`; if the installed version is older, the dependency is treated as failing
+- If the version cannot be parsed from stdout, the check passes (presence-only)
+
+**Retry:**
+- The user can tap "Retry" in the menu bar popover after installing the missing tool; AskMac re-runs all dependency checks and spawns the script if they pass
+
+---
+
 ### Required Secrets (GitHub Actions)
 
 | Secret | Purpose |
@@ -609,3 +663,4 @@ Cuts the iOS TestFlight release:
 | 2026-04-01 | Polling latency reduced: idle poll interval reduced from 30s to 5s. ScriptDetailView runs its own 5s poll loop while open so updates arrive even if HomeView's background poll is paused. |
 | 2026-04-01 | iOS TestFlight: GitHub Actions pipeline triggered by ios-v* tags; iOS Distribution cert + App Store provisioning profile + ASC API key auth; deployment target iOS 26.0. Release skills: /prepare-release-mac, /prepare-release-ios, /release-mac, /release-ios — version bump, prose+commit release notes, spec changelog, annotated tag creation. |
 | 2026-04-01 | Distribution: AskMac installer packaged as a PKG inside a DMG, distributed via GitHub Releases. PKG has required app component + optional per-script components (all unchecked by default). Sparkle 2.x integrated for silent app-only auto-updates via appcast. Bundled scripts in app bundle enable update detection: menu bar popover shows pending script updates and prompts user to apply. Xcode project generated via XcodeGen (project.yml). GitHub Actions release pipeline triggered on version tags. |
+| 2026-04-01 | Script dependency checking: manifest.json `requires` array declares external tool dependencies (name, check command, min version, install instructions). AskMac checks deps before spawning a script; failed scripts enter missingDependencies status with install instructions shown in the menu bar popover and a status block emitted to iPhone. claudecode-controller, codex-controller, and ollama manifests updated with requires declarations. |
