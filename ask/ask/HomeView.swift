@@ -200,7 +200,16 @@ struct HomeView: View {
                         await load()
                     }
                 )
-                .task { await load() }
+                .task {
+                    // Poll continuously while the detail view is open, so updates
+                    // arrive even if HomeView's poll loop was paused by onDisappear.
+                    await load()
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: .seconds(5))
+                        guard !Task.isCancelled else { break }
+                        await load()
+                    }
+                }
             }
         }
         .sheet(isPresented: $showSettings) {
@@ -447,10 +456,8 @@ struct HomeView: View {
                 let interval: Double
                 if Date() < burstPollingUntil {
                     interval = 1.0   // just responded — fast burst
-                } else if !actionGroups.isEmpty {
-                    interval = 5.0   // action pending — poll quickly
                 } else {
-                    interval = 30.0  // idle
+                    interval = 5.0   // default — keep UI fresh
                 }
                 try? await Task.sleep(for: .seconds(interval))
                 guard !Task.isCancelled else { break }
