@@ -92,6 +92,11 @@ struct HomeView: View {
     @State private var lastHeartbeatAt: Date = .distantPast
     @State private var notifiedBlockIDs: Set<String> = []
     @State private var burstPollingUntil: Date = .distantPast
+    /// Cached script icons — available immediately on launch for the loading scene.
+    @State private var iconCache = ScriptIconCache()
+    /// Controls the loading icon overlay — kept true briefly after hasLoaded
+    /// so exit animations can complete before the overlay is removed.
+    @State private var showLoadingOverlay = true
     @State private var responseErrorMessage: String?
     @State private var queuedMessage: String?
     @State private var deviceEnabled: Bool = true
@@ -132,8 +137,8 @@ struct HomeView: View {
                 if cloudKit.accountStatus == .noAccount || cloudKit.accountStatus == .restricted {
                     iCloudSignInState
                 } else if !hasLoaded {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // Empty view — the loading overlay is shown via .overlay below
+                    Color.clear
                 } else if machines.isEmpty {
                     emptyState
                 } else if !deviceEnabled {
@@ -147,6 +152,34 @@ struct HomeView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbar }
             .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
+            .overlay {
+                // Loading icon overlay — visible until the first load completes
+                // and exit animations finish. Shown whether or not we have
+                // cached data (falls back to a plain spinner if cache is empty).
+                if showLoadingOverlay {
+                    if iconCache.entries.isEmpty {
+                        ProgressView()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color(.systemBackground))
+                    } else {
+                        ScriptLoadingView(
+                            entries: iconCache.entries,
+                            loadedIDs: Set(scriptGroups.map(\.scriptID)),
+                            hasLoaded: hasLoaded
+                        )
+                        .background(hasLoaded ? .clear : Color(.systemBackground))
+                        .animation(.easeOut(duration: 0.3), value: hasLoaded)
+                    }
+                }
+            }
+            .onChange(of: hasLoaded) { _, loaded in
+                guard loaded else { return }
+                // Keep overlay alive long enough for icon exit animations (~0.7 s),
+                // then remove it entirely so it doesn't intercept touches.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+                    showLoadingOverlay = false
+                }
+            }
             .sheet(isPresented: $showQueueReview) {
                 QueueReviewSheet(isPresented: $showQueueReview)
                     .environment(cloudKit)
@@ -403,6 +436,10 @@ struct HomeView: View {
             lastHeartbeatAt = Date()
         }
         hasLoaded = true
+        // Update the icon cache so the next launch has fresh data
+        iconCache.update(from: scriptGroups.map {
+            (id: $0.scriptID, name: $0.name, sfSymbol: $0.icon, iconData: $0.iconData)
+        })
         notifyNewActionGroups()
     }
 
