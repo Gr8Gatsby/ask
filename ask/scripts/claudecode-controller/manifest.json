@@ -1,7 +1,7 @@
 {
   "id": "claudecode-controller",
   "name": "Claude Code",
-  "version": "2.13.9",
+  "version": "2.13.10",
   "description": "Claude Code session supervisor — routes permissions and notifications to iPhone",
   "entry": "main.py",
   "icon": "sparkles",
@@ -10,7 +10,7 @@
     {
       "id": "claude",
       "name": "Claude Code",
-      "check": "claude --version",
+      "check": "PATH=\"$HOME/.local/bin:$HOME/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\" claude --version",
       "min_version": "1.0.0",
       "install": "npm install -g @anthropic-ai/claude-code",
       "install_url": "https://claude.ai/code"
