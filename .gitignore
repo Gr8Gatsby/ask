@@ -42,6 +42,9 @@ __pycache__/
 *.py[cod]
 *.pyo
 
+# Local Playwright state
+.playwright-mcp/
+
 # Credentials / secrets
 *.p8
 *.p12
