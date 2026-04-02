@@ -49,7 +49,7 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: "Developer ID Application: Kevin Hill (B5J28L8ARB)"
-        PROVISIONING_PROFILE_SPECIFIER: "bfd14ab6-5e47-4f32-a4e3-6b4a5a589025"
+        PROVISIONING_PROFILE_SPECIFIER: "3d8eba74-9533-4611-a8ca-8daa06284a2c"
         CODE_SIGN_ENTITLEMENTS: Sources/AskMac/AskMac.entitlements
     dependencies:
       - target: AskMacCore
