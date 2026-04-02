@@ -10,7 +10,6 @@
 	<array>
 		<string>CloudKit</string>
 	</array>
-	<!-- Required for CloudKit outbound connections under hardened runtime -->
 	<key>com.apple.security.network.client</key>
 	<true/>
 </dict>
