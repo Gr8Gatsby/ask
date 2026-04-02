@@ -1064,6 +1064,24 @@ private struct MachineDetailView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            Section("Diagnostics") {
+                LabeledContent("Machine ID") {
+                    Text(settings.machineID)
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                        .textSelection(.enabled)
+                }
+                LabeledContent("Container") {
+                    Text("iCloud.simple.ask")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
+                LabeledContent("Database") {
+                    Text("Private")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
+            }
         }
         .formStyle(.grouped)
         .navigationTitle("Cloud")

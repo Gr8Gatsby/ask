@@ -18,6 +18,7 @@ final class CloudKitService {
     init() {
         self.container = CKContainer(identifier: CKSchema.containerID)
         self.database = container.privateCloudDatabase
+        logger.info("CloudKitService init — container: \(CKSchema.containerID)")
     }
 
     // MARK: - Account
@@ -25,7 +26,8 @@ final class CloudKitService {
     func checkAccountStatus() async {
         do {
             accountStatus = try await container.accountStatus()
-            logger.info("iCloud account status: \(self.accountStatus.rawValue)")
+            let token = try? await container.userRecordID()
+            logger.info("iCloud account status: \(self.accountStatus.rawValue) — userRecordID: \(token?.recordName ?? "nil")")
         } catch {
             accountStatus = .couldNotDetermine
             logger.error("iCloud account status check failed: \(error)")
@@ -36,10 +38,12 @@ final class CloudKitService {
 
     /// Creates or updates the Machine record for this installation.
     func saveMachine(_ machine: MachineRecord) async throws {
+        logger.info("saveMachine — machineID: \(machine.machineID) name: \(machine.name)")
         let record = existingRecord(named: machine.machineID, type: CKSchema.RecordType.machine)
         let updated = machine.applying(to: record)
         let saved = try await save(updated)
         cachedRecords[machine.machineID] = saved
+        logger.info("saveMachine — saved OK, recordName: \(saved.recordID.recordName) zone: \(saved.recordID.zoneID.zoneName)")
     }
 
     // MARK: - Events
@@ -364,6 +368,7 @@ final class CloudKitService {
                 logger.error("Save returned no result for \(record.recordType)/\(record.recordID.recordName)")
                 throw err
             }
+            logger.debug("Save OK — \(record.recordType)/\(saved.recordID.recordName)")
             return saved
         } catch {
             logger.error("CloudKit save failed [\(record.recordType)/\(record.recordID.recordName)]: \(error)")
