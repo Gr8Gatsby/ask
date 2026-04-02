@@ -1,43 +1,95 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-// MARK: - Sidebar selection
+// MARK: - SVG dark-mode helper
 
-private enum SidebarItem: Hashable {
-    case feed
-    case machine
-    case script(String)
+/// Rewrites dark/black fill and stroke values to white so an SVG icon
+/// renders legibly on dark brand card backgrounds.
+private func svgToWhite(_ svg: String) -> NSImage? {
+    var s = svg
+    s = s.replacingOccurrences(of: "currentColor", with: "white", options: .caseInsensitive)
+    let darkColors = ["#000000", "#000", "black", "#111111", "#111",
+                      "#1a1a1a", "#222222", "#222", "#333333", "#333"]
+    for color in darkColors {
+        for attr in ["fill", "stroke"] {
+            s = s.replacingOccurrences(of: "\(attr)=\"\(color)\"", with: "\(attr)=\"white\"", options: .caseInsensitive)
+            s = s.replacingOccurrences(of: "\(attr)='\(color)'",  with: "\(attr)='white'",  options: .caseInsensitive)
+            s = s.replacingOccurrences(of: "\(attr):\(color)",    with: "\(attr):white",    options: .caseInsensitive)
+            s = s.replacingOccurrences(of: "\(attr): \(color)",   with: "\(attr): white",   options: .caseInsensitive)
+        }
+    }
+    guard let data = s.data(using: .utf8) else { return nil }
+    return NSImage(data: data)
 }
 
-// MARK: - Mac Scripts Home
+// MARK: - Top-level tab
+
+private enum MacTab: String, CaseIterable {
+    case scripts, feed, machine
+
+    var label: String {
+        switch self {
+        case .scripts: "Scripts"
+        case .feed:    "Feed"
+        case .machine: "Machine"
+        }
+    }
+}
+
+// MARK: - Mac main window
 
 struct MacScriptsView: View {
     @Environment(ScriptManager.self) private var scriptManager
     @Environment(ActionHistoryService.self) private var actionHistory
     @Environment(AppSettings.self) private var settings
 
-    @State private var selectedItem: SidebarItem? = nil
+    @State private var activeTab: MacTab = .scripts
+
+    var body: some View {
+        Group {
+            switch activeTab {
+            case .scripts:
+                ScriptsTabView()
+                    .environment(scriptManager)
+            case .feed:
+                MacFeedView()
+                    .environment(actionHistory)
+            case .machine:
+                MachineDetailView()
+                    .environment(settings)
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Picker("", selection: $activeTab) {
+                    ForEach(MacTab.allCases, id: \.self) { tab in
+                        Text(tab.label).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+            }
+            if activeTab == .scripts {
+                ToolbarItem(placement: .automatic) {
+                    Button { scriptManager.reload() } label: {
+                        Label("Reload Scripts", systemImage: "arrow.clockwise")
+                    }
+                    .help("Scan for new scripts and start any that aren't running yet")
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Scripts tab (sidebar + detail)
+
+private struct ScriptsTabView: View {
+    @Environment(ScriptManager.self) private var scriptManager
+    @State private var selectedScriptID: String?
 
     var body: some View {
         NavigationSplitView {
-            sidebar
-        } detail: {
-            detail
-        }
-    }
-
-    // MARK: Sidebar
-
-    private var sidebar: some View {
-        List(selection: $selectedItem) {
-            Section {
-                Label("Feed", systemImage: "clock.arrow.circlepath")
-                    .tag(SidebarItem.feed)
-                Label("Machine", systemImage: "desktopcomputer")
-                    .tag(SidebarItem.machine)
-            }
-
-            Section("Scripts") {
+            List(selection: $selectedScriptID) {
                 if scriptManager.scripts.isEmpty {
                     Text("No scripts found in vault directory.")
                         .foregroundStyle(.secondary)
@@ -46,52 +98,24 @@ struct MacScriptsView: View {
                 } else {
                     ForEach(scriptManager.scripts) { script in
                         ScriptSidebarRow(script: script, scriptManager: scriptManager)
-                            .tag(SidebarItem.script(script.id))
+                            .tag(script.id)
                     }
                 }
             }
-        }
-        .navigationTitle("Ask")
-        .listStyle(.sidebar)
-        .navigationSplitViewColumnWidth(min: 220, ideal: 240)
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Button { scriptManager.reload() } label: {
-                    Label("Reload Scripts", systemImage: "arrow.clockwise")
-                }
-                .help("Scan for new scripts and start any that aren't running yet")
-            }
-        }
-    }
-
-    // MARK: Detail
-
-    @ViewBuilder
-    private var detail: some View {
-        switch selectedItem {
-        case .feed:
-            MacFeedView()
-                .environment(actionHistory)
-        case .machine:
-            MachineDetailView()
-                .environment(settings)
-        case .script(let id):
-            if let script = scriptManager.scripts.first(where: { $0.id == id }) {
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 220, ideal: 240)
+        } detail: {
+            if let id = selectedScriptID,
+               let script = scriptManager.scripts.first(where: { $0.id == id }) {
                 ScriptDetailView(script: script, scriptManager: scriptManager)
             } else {
-                placeholder
+                ContentUnavailableView(
+                    "Select a Script",
+                    systemImage: "terminal",
+                    description: Text("Choose a script from the sidebar to view its active blocks.")
+                )
             }
-        case nil:
-            placeholder
         }
-    }
-
-    private var placeholder: some View {
-        ContentUnavailableView(
-            "Select a Script",
-            systemImage: "terminal",
-            description: Text("Choose a script from the sidebar to view its active blocks.")
-        )
     }
 }
 
@@ -165,24 +189,7 @@ private struct ScriptSidebarRow: View {
 
     private var effectiveIcon: NSImage? {
         guard colorScheme == .dark, let svg = script.svgString else { return script.iconImage }
-        return darkModeImage(from: svg) ?? script.iconImage
-    }
-
-    private func darkModeImage(from svg: String) -> NSImage? {
-        var s = svg
-        s = s.replacingOccurrences(of: "currentColor", with: "white", options: .caseInsensitive)
-        let darkColors = ["#000000", "#000", "black", "#111111", "#111",
-                          "#1a1a1a", "#222222", "#222", "#333333", "#333"]
-        for color in darkColors {
-            for attr in ["fill", "stroke"] {
-                s = s.replacingOccurrences(of: "\(attr)=\"\(color)\"", with: "\(attr)=\"white\"", options: .caseInsensitive)
-                s = s.replacingOccurrences(of: "\(attr)='\(color)'", with: "\(attr)='white'", options: .caseInsensitive)
-                s = s.replacingOccurrences(of: "\(attr):\(color)", with: "\(attr):white", options: .caseInsensitive)
-                s = s.replacingOccurrences(of: "\(attr): \(color)", with: "\(attr): white", options: .caseInsensitive)
-            }
-        }
-        guard let data = s.data(using: .utf8) else { return nil }
-        return NSImage(data: data)
+        return svgToWhite(svg) ?? script.iconImage
     }
 }
 
@@ -317,7 +324,9 @@ private struct ScriptDetailView: View {
         }
         .background(brandBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .environment(\.colorScheme, brandColorScheme ?? .light)
+        .ifLet(brandColorScheme) { view, scheme in
+            view.environment(\.colorScheme, scheme)
+        }
     }
 
     // MARK: Badges
@@ -463,7 +472,7 @@ private struct ScriptDetailView: View {
 
     @ViewBuilder
     private var scriptIcon: some View {
-        if let img = script.iconImage {
+        if let img = cardIcon {
             Image(nsImage: img)
                 .resizable()
                 .scaledToFit()
@@ -474,6 +483,15 @@ private struct ScriptDetailView: View {
                 .font(.largeTitle)
                 .foregroundStyle(script.isEnabled ? brandForegroundPrimary : brandForegroundTertiary)
         }
+    }
+
+    /// Icon image adapted for the card's brand color scheme.
+    /// Dark brand cards (e.g. GitHub) get SVG strokes recoloured to white.
+    private var cardIcon: NSImage? {
+        if brandColorScheme == .dark, let svg = script.svgString {
+            return svgToWhite(svg) ?? script.iconImage
+        }
+        return script.iconImage
     }
 
     // MARK: Crash banner
@@ -765,5 +783,19 @@ private extension String {
 private extension URL {
     var abbreviatingWithTildeInPath: String {
         path.abbreviatingWithTildeInPath()
+    }
+}
+
+// MARK: - View helpers
+
+private extension View {
+    /// Applies a transform only when the optional value is non-nil.
+    @ViewBuilder
+    func ifLet<T>(_ value: T?, transform: (Self, T) -> some View) -> some View {
+        if let value {
+            transform(self, value)
+        } else {
+            self
+        }
     }
 }

@@ -64,7 +64,7 @@ struct AskMacApp: App {
         .windowResizability(.contentSize)
         .defaultSize(width: 400, height: 560)
 
-        Window("Scripts", id: "scripts") {
+        Window("Ask", id: "scripts") {
             MacScriptsView()
                 .environment(settings)
                 .environment(scriptManager)
