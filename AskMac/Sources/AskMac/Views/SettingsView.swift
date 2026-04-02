@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 private enum SidebarItem: Hashable {
     case feed
+    case machine
     case script(String)
 }
 
@@ -16,17 +17,12 @@ struct MacScriptsView: View {
     @Environment(AppSettings.self) private var settings
 
     @State private var selectedItem: SidebarItem? = nil
-    @State private var showingSettings = false
 
     var body: some View {
         NavigationSplitView {
             sidebar
         } detail: {
             detail
-        }
-        .sheet(isPresented: $showingSettings) {
-            GeneralSettingsView()
-                .environment(settings)
         }
     }
 
@@ -37,6 +33,8 @@ struct MacScriptsView: View {
             Section {
                 Label("Feed", systemImage: "clock.arrow.circlepath")
                     .tag(SidebarItem.feed)
+                Label("Machine", systemImage: "desktopcomputer")
+                    .tag(SidebarItem.machine)
             }
 
             Section("Scripts") {
@@ -63,12 +61,6 @@ struct MacScriptsView: View {
                 }
                 .help("Scan for new scripts and start any that aren't running yet")
             }
-            ToolbarItem(placement: .automatic) {
-                Button { showingSettings = true } label: {
-                    Label("Settings", systemImage: "gearshape")
-                }
-                .help("General settings")
-            }
         }
     }
 
@@ -80,18 +72,21 @@ struct MacScriptsView: View {
         case .feed:
             MacFeedView()
                 .environment(actionHistory)
+        case .machine:
+            MachineDetailView()
+                .environment(settings)
         case .script(let id):
             if let script = scriptManager.scripts.first(where: { $0.id == id }) {
                 ScriptDetailView(script: script, scriptManager: scriptManager)
             } else {
-                scriptPlaceholder
+                placeholder
             }
         case nil:
-            scriptPlaceholder
+            placeholder
         }
     }
 
-    private var scriptPlaceholder: some View {
+    private var placeholder: some View {
         ContentUnavailableView(
             "Select a Script",
             systemImage: "terminal",
@@ -205,14 +200,10 @@ private struct ScriptDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                scriptHeader
-
-                Divider()
+                scriptCard
 
                 if script.status == .crashed, let error = script.lastError {
                     crashBanner(error)
-                } else if script.status == .missingDependencies && !script.missingDeps.isEmpty {
-                    missingDepsBanner
                 }
 
                 if liveBlocks.isEmpty {
@@ -222,7 +213,7 @@ private struct ScriptDetailView: View {
                         description: Text("This script hasn't emitted any blocks yet.")
                     )
                     .frame(maxWidth: .infinity)
-                    .padding(.top, 20)
+                    .padding(.top, 8)
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(liveBlocks) { block in
@@ -240,62 +231,235 @@ private struct ScriptDetailView: View {
             .padding(20)
         }
         .navigationTitle(script.name)
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Toggle(script.isEnabled ? "Enabled" : "Disabled", isOn: Binding(
+    }
+
+    // MARK: Script card
+
+    private var scriptCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header: icon + info + toggle
+            HStack(alignment: .center, spacing: 14) {
+                scriptIcon
+                    .frame(width: 48, height: 48)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(script.name)
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(brandForegroundPrimary)
+
+                        if let version = script.version {
+                            Text("v\(version)")
+                                .font(.caption)
+                                .foregroundStyle(brandForegroundSecondary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(brandForegroundSecondary.opacity(0.15))
+                                .clipShape(Capsule())
+                        }
+
+                        typeBadge
+                    }
+
+                    if let desc = script.description {
+                        Text(desc)
+                            .font(.subheadline)
+                            .foregroundStyle(brandForegroundSecondary)
+                            .lineLimit(2)
+                    }
+
+                    HStack(spacing: 8) {
+                        Text(script.id)
+                            .font(.caption)
+                            .foregroundStyle(brandForegroundTertiary)
+                            .fontDesign(.monospaced)
+
+                        if let schedule = script.schedule {
+                            HStack(spacing: 3) {
+                                Image(systemName: "clock")
+                                    .font(.caption2)
+                                Text(schedule)
+                                    .font(.caption2)
+                                    .fontDesign(.monospaced)
+                            }
+                            .foregroundStyle(brandForegroundTertiary)
+                        }
+
+                        Spacer()
+
+                        statusBadge
+                    }
+                }
+
+                Spacer()
+
+                Toggle("", isOn: Binding(
                     get: { script.isEnabled },
                     set: { enabled in
                         if enabled { scriptManager.enableScript(id: script.id) }
                         else { scriptManager.disableScript(id: script.id) }
                     }
                 ))
+                .labelsHidden()
                 .toggleStyle(.switch)
-                .controlSize(.small)
+                .controlSize(.regular)
             }
+            .padding(16)
+
+            // Dependencies section
+            if !script.requires.isEmpty {
+                Divider()
+                    .opacity(0.3)
+                dependenciesSection
+                    .padding(16)
+            }
+        }
+        .background(brandBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .environment(\.colorScheme, brandColorScheme ?? .light)
+    }
+
+    // MARK: Badges
+
+    @ViewBuilder
+    private var typeBadge: some View {
+        let isFeed = script.scriptType == "feed"
+        Text(isFeed ? "Feed" : "Tile")
+            .font(.caption2)
+            .fontWeight(.medium)
+            .foregroundStyle(brandAccent ?? brandForegroundSecondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background((brandAccent ?? brandForegroundSecondary).opacity(0.15))
+            .clipShape(Capsule())
+    }
+
+    private var statusBadge: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 6, height: 6)
+            Text(script.status.label)
+                .font(.caption)
+                .foregroundStyle(brandForegroundSecondary)
         }
     }
 
-    private var scriptHeader: some View {
-        HStack(alignment: .center, spacing: 14) {
-            scriptIcon
-                .frame(width: 40, height: 40)
+    private var statusColor: Color {
+        switch script.status {
+        case .running:              .green
+        case .crashed:              .red
+        case .missingDependencies:  .orange
+        case .starting:             .yellow
+        case .stopped:              .secondary
+        }
+    }
 
-            VStack(alignment: .leading, spacing: 4) {
+    // MARK: Dependencies
+
+    private var dependenciesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Dependencies")
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundStyle(brandForegroundTertiary)
+                .textCase(.uppercase)
+                .tracking(0.5)
+
+            ForEach(script.requires, id: \.id) { dep in
+                let isMissing = script.missingDeps.contains { $0.id == dep.id }
                 HStack(spacing: 8) {
-                    Text(script.name)
-                        .font(.title2)
-                        .fontWeight(.semibold)
-
-                    if let version = script.version {
-                        Text("v\(version)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.secondary.opacity(0.12))
-                            .clipShape(Capsule())
-                    }
-                }
-
-                HStack(spacing: 6) {
-                    Text(script.id)
+                    Image(systemName: isMissing ? "xmark.circle.fill" : "checkmark.circle.fill")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fontDesign(.monospaced)
+                        .foregroundStyle(isMissing ? .red : .green)
 
-                    if let desc = script.description {
-                        Text("·")
-                            .foregroundStyle(.tertiary)
-                        Text(desc)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(dep.name)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .fontWeight(.medium)
+                            .foregroundStyle(brandForegroundPrimary)
+                        if isMissing, let install = dep.install {
+                            Text(install)
+                                .font(.caption2)
+                                .foregroundStyle(brandForegroundTertiary)
+                                .fontDesign(.monospaced)
+                        } else if !isMissing {
+                            Text("Installed")
+                                .font(.caption2)
+                                .foregroundStyle(brandForegroundTertiary)
+                        }
+                    }
+
+                    Spacer()
+
+                    if isMissing {
+                        Button("Retry") {
+                            scriptManager.retryDependencies(id: script.id)
+                        }
+                        .font(.caption2)
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
                     }
                 }
             }
-
-            Spacer()
         }
     }
+
+    // MARK: Brand colors
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var brandBackground: Color {
+        switch script.id {
+        case "claudecode-controller":
+            return colorScheme == .dark
+                ? Color(red: 0.15, green: 0.13, blue: 0.11)
+                : Color(red: 250/255, green: 249/255, blue: 245/255)
+        case "github":
+            return Color(red: 0x24/255, green: 0x29/255, blue: 0x2F/255)
+        default:
+            return Color.secondary.opacity(0.07)
+        }
+    }
+
+    private var brandColorScheme: ColorScheme? {
+        switch script.id {
+        case "github": .dark
+        default: nil
+        }
+    }
+
+    private var brandAccent: Color? {
+        switch script.id {
+        case "claudecode-controller": Color(red: 202/255, green: 124/255, blue: 94/255)
+        case "github":               Color(red: 0x09/255, green: 0x69/255, blue: 0xDA/255)
+        default: nil
+        }
+    }
+
+    private var brandForegroundPrimary: Color {
+        switch script.id {
+        case "github": .white
+        default: .primary
+        }
+    }
+
+    private var brandForegroundSecondary: Color {
+        switch script.id {
+        case "github": Color(.secondaryLabelColor).opacity(0.85)
+        default: .secondary
+        }
+    }
+
+    private var brandForegroundTertiary: Color {
+        switch script.id {
+        case "github": Color(.tertiaryLabelColor)
+        default: Color(.tertiaryLabelColor)
+        }
+    }
+
+    // MARK: Icon
 
     @ViewBuilder
     private var scriptIcon: some View {
@@ -308,9 +472,11 @@ private struct ScriptDetailView: View {
         } else {
             Image(systemName: script.icon ?? "terminal.fill")
                 .font(.largeTitle)
-                .foregroundStyle(script.isEnabled ? .primary : .tertiary)
+                .foregroundStyle(script.isEnabled ? brandForegroundPrimary : brandForegroundTertiary)
         }
     }
+
+    // MARK: Crash banner
 
     private func crashBanner(_ error: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
@@ -332,42 +498,6 @@ private struct ScriptDetailView: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.red.opacity(0.07))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private var missingDepsBanner: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "wrench.and.screwdriver.fill")
-                    .foregroundStyle(.orange)
-                    .font(.caption)
-                Text("Missing dependencies")
-                    .font(.caption)
-                    .fontWeight(.medium)
-            }
-            ForEach(script.missingDeps, id: \.id) { dep in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(dep.name) not found")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if let install = dep.install {
-                        Text(install)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .fontDesign(.monospaced)
-                    }
-                }
-            }
-            Button("Retry") {
-                scriptManager.retryDependencies(id: script.id)
-            }
-            .font(.caption)
-            .buttonStyle(.bordered)
-            .controlSize(.mini)
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.07))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
@@ -434,11 +564,10 @@ private struct FeedEventRow: View {
     }
 }
 
-// MARK: - General settings sheet
+// MARK: - Machine detail view
 
-struct GeneralSettingsView: View {
+private struct MachineDetailView: View {
     @Environment(AppSettings.self) private var settings
-    @Environment(\.dismiss) private var dismiss
 
     @State private var showVaultPicker = false
     @State private var agentSessions: [AgentSession] = []
@@ -453,114 +582,112 @@ struct GeneralSettingsView: View {
     var body: some View {
         @Bindable var settings = settings
 
-        VStack(spacing: 0) {
-            Form {
-                Section("Machine") {
-                    LabeledContent("Name") {
-                        HStack(spacing: 6) {
-                            TextField(AppSettings.defaultMachineName, text: $settings.machineName)
-                                .multilineTextAlignment(.trailing)
-                                .onAppear {
-                                    if settings.machineName.isEmpty {
-                                        settings.machineName = AppSettings.defaultMachineName
-                                    }
-                                }
-                            if settings.machineName != AppSettings.defaultMachineName {
-                                Button {
+        Form {
+            Section("Machine") {
+                LabeledContent("Name") {
+                    HStack(spacing: 6) {
+                        TextField(AppSettings.defaultMachineName, text: $settings.machineName)
+                            .multilineTextAlignment(.trailing)
+                            .onAppear {
+                                if settings.machineName.isEmpty {
                                     settings.machineName = AppSettings.defaultMachineName
-                                } label: {
-                                    Image(systemName: "arrow.counterclockwise")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
                                 }
-                                .buttonStyle(.plain)
-                                .help("Reset to Mac computer name")
                             }
-                        }
-                    }
-                    LabeledContent("Machine ID") {
-                        Text(settings.machineID)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                }
-
-                Section("Scripts Vault") {
-                    LabeledContent("Directory") {
-                        Text(settings.vaultPath?.abbreviatingWithTildeInPath ?? "Not set")
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    Button("Change Vault Directory…") { showVaultPicker = true }
-                }
-
-                Section {
-                    if agentSessions.isEmpty {
-                        Text("No tracked sessions yet.")
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
-                    } else {
-                        ForEach(agentSessions) { s in
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack {
-                                    Text(s.controller).font(.caption).fontWeight(.medium)
-                                    Text(s.project).font(.caption).foregroundStyle(.secondary)
-                                    Spacer()
-                                    Text(s.tty.isEmpty ? "no TTY" : s.tty)
-                                        .font(.caption.monospaced())
-                                        .foregroundStyle(s.tty.isEmpty ? .red : .secondary)
-                                        .textSelection(.enabled)
-                                }
-                                Text(s.cwd)
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                    .textSelection(.enabled)
-                            }
-                            .padding(.vertical, 1)
-                        }
-                    }
-                } header: {
-                    HStack {
-                        Text("Agent Sessions")
-                        Spacer()
-                        Button("Refresh") { refreshSessions() }
-                            .font(.caption)
-                    }
-                }
-
-                Section("Live Processes") {
-                    if liveProcesses.isEmpty {
-                        Text("No Claude or Codex processes found.")
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
-                    } else {
-                        ForEach(liveProcesses) { p in
-                            HStack {
-                                Text(p.comm).font(.caption).fontWeight(.medium)
-                                Spacer()
-                                Text("PID \(p.pid)  TTY \(p.tty)")
-                                    .font(.caption.monospaced())
+                        if settings.machineName != AppSettings.defaultMachineName {
+                            Button {
+                                settings.machineName = AppSettings.defaultMachineName
+                            } label: {
+                                Image(systemName: "arrow.counterclockwise")
+                                    .font(.caption)
                                     .foregroundStyle(.secondary)
-                                    .textSelection(.enabled)
                             }
+                            .buttonStyle(.plain)
+                            .help("Reset to Mac computer name")
                         }
                     }
                 }
+                LabeledContent("Machine ID") {
+                    Text(settings.machineID)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
 
-                Section("About") {
-                    LabeledContent("AskMac Version") {
-                        Text(appVersion)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
+            Section("Scripts Vault") {
+                LabeledContent("Directory") {
+                    Text(settings.vaultPath?.abbreviatingWithTildeInPath ?? "Not set")
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Button("Change Vault Directory…") { showVaultPicker = true }
+            }
+
+            Section {
+                if agentSessions.isEmpty {
+                    Text("No tracked sessions yet.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                } else {
+                    ForEach(agentSessions) { s in
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text(s.controller).font(.caption).fontWeight(.medium)
+                                Text(s.project).font(.caption).foregroundStyle(.secondary)
+                                Spacer()
+                                Text(s.tty.isEmpty ? "no TTY" : s.tty)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(s.tty.isEmpty ? .red : .secondary)
+                                    .textSelection(.enabled)
+                            }
+                            Text(s.cwd)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .textSelection(.enabled)
+                        }
+                        .padding(.vertical, 1)
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("Agent Sessions")
+                    Spacer()
+                    Button("Refresh") { refreshSessions() }
+                        .font(.caption)
+                }
+            }
+
+            Section("Live Processes") {
+                if liveProcesses.isEmpty {
+                    Text("No Claude or Codex processes found.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                } else {
+                    ForEach(liveProcesses) { p in
+                        HStack {
+                            Text(p.comm).font(.caption).fontWeight(.medium)
+                            Spacer()
+                            Text("PID \(p.pid)  TTY \(p.tty)")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
                     }
                 }
             }
-            .formStyle(.grouped)
+
+            Section("About") {
+                LabeledContent("AskMac Version") {
+                    Text(appVersion)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
         }
-        .frame(width: 480, height: 520)
+        .formStyle(.grouped)
+        .navigationTitle("Machine")
         .onAppear { refreshSessions() }
         .fileImporter(
             isPresented: $showVaultPicker,
@@ -569,11 +696,6 @@ struct GeneralSettingsView: View {
             if case .success(let url) = result {
                 _ = url.startAccessingSecurityScopedResource()
                 settings.vaultPath = url
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Done") { dismiss() }
             }
         }
     }
