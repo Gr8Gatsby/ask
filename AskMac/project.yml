@@ -20,7 +20,7 @@ settings:
 
 targets:
   AskMacCore:
-    type: framework
+    type: library.static
     platform: macOS
     sources:
       - path: Sources/AskMacCore
@@ -28,8 +28,6 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinhill.askmaccore
         SKIP_INSTALL: YES
-        CODE_SIGN_STYLE: Automatic
-        DEFINES_MODULE: YES
     scheme:
       testTargets:
         - AskMacTests
@@ -49,15 +47,16 @@ targets:
         INFOPLIST_FILE: Sources/AskMac/Info.plist
         MARKETING_VERSION: "0.7.0"
         CURRENT_PROJECT_VERSION: "1"
-        CODE_SIGN_STYLE: Automatic
-        CODE_SIGN_IDENTITY: "Developer ID Application"
         CODE_SIGN_ENTITLEMENTS: Sources/AskMac/AskMac.entitlements
       configs:
+        Debug:
+          CODE_SIGN_STYLE: Automatic
+          CODE_SIGN_IDENTITY: "Apple Development"
         Release:
+          CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Developer ID Application"
     dependencies:
       - target: AskMacCore
-        embed: true
       - package: Sparkle
         product: Sparkle
 
@@ -74,7 +73,6 @@ schemes:
     build:
       targets:
         AskMac: all
-        AskMacCore: [build]
         AskMacTests: [test]
     archive:
       config: Release

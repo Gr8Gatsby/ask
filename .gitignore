@@ -50,3 +50,4 @@ __pycache__/
 *.p12
 *.mobileprovision
 AuthKey_*.p8
+AskMac/AskMac.xcodeproj
