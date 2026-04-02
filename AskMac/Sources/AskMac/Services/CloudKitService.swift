@@ -1,6 +1,9 @@
 import Foundation
 import CloudKit
 import Observation
+import OSLog
+
+private let logger = Logger(subsystem: "com.kevinhill.askmac", category: "CloudKit")
 
 @Observable
 final class CloudKitService {
@@ -22,8 +25,10 @@ final class CloudKitService {
     func checkAccountStatus() async {
         do {
             accountStatus = try await container.accountStatus()
+            logger.info("iCloud account status: \(self.accountStatus.debugDescription)")
         } catch {
             accountStatus = .couldNotDetermine
+            logger.error("iCloud account status check failed: \(error)")
         }
     }
 
@@ -346,16 +351,24 @@ final class CloudKitService {
     /// Saves a record using allKeys policy (always overwrites server state).
     @discardableResult
     private func save(_ record: CKRecord) async throws -> CKRecord {
-        let result = try await database.modifyRecords(
-            saving: [record],
-            deleting: [],
-            savePolicy: .allKeys,
-            atomically: true
-        )
-        guard let saved = try result.saveResults[record.recordID]?.get() else {
-            throw CloudKitServiceError.saveFailed(record.recordID.recordName)
+        logger.debug("Saving \(record.recordType)/\(record.recordID.recordName)")
+        do {
+            let result = try await database.modifyRecords(
+                saving: [record],
+                deleting: [],
+                savePolicy: .allKeys,
+                atomically: true
+            )
+            guard let saved = try result.saveResults[record.recordID]?.get() else {
+                let err = CloudKitServiceError.saveFailed(record.recordID.recordName)
+                logger.error("Save returned no result for \(record.recordType)/\(record.recordID.recordName)")
+                throw err
+            }
+            return saved
+        } catch {
+            logger.error("CloudKit save failed [\(record.recordType)/\(record.recordID.recordName)]: \(error)")
+            throw error
         }
-        return saved
     }
 }
 
