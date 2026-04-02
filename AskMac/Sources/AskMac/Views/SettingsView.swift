@@ -1044,10 +1044,16 @@ private struct MachineDetailView: View {
                             Text(lastBeat, style: .relative)
                                 .foregroundStyle(.secondary)
                         }
-                    } else if heartbeat.error != nil {
-                        Label("Sync error", systemImage: "exclamationmark.icloud")
-                            .foregroundStyle(.red)
-                            .font(.caption)
+                    } else if let syncError = heartbeat.error {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Label("Sync error", systemImage: "exclamationmark.icloud")
+                                .foregroundStyle(.red)
+                                .font(.caption)
+                            Text(syncError.localizedDescription)
+                                .foregroundStyle(.secondary)
+                                .font(.caption2)
+                                .multilineTextAlignment(.trailing)
+                        }
                     } else {
                         Text("Connecting…")
                             .foregroundStyle(.secondary)
@@ -1056,6 +1062,24 @@ private struct MachineDetailView: View {
                 LabeledContent("Heartbeat Interval") {
                     Text("\(Int(HeartbeatService.interval))s")
                         .foregroundStyle(.secondary)
+                }
+            }
+            Section("Diagnostics") {
+                LabeledContent("Machine ID") {
+                    Text(settings.machineID)
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                        .textSelection(.enabled)
+                }
+                LabeledContent("Container") {
+                    Text("iCloud.simple.ask")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
+                LabeledContent("Database") {
+                    Text("Private")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
                 }
             }
         }

@@ -41,6 +41,12 @@ targets:
           - "**/*.entitlements"
     entitlements:
       path: Sources/AskMac/AskMac.entitlements
+      properties:
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.simple.ask
+        com.apple.developer.icloud-services:
+          - CloudKit
+        com.apple.security.network.client: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinhill.askmac
@@ -51,6 +57,7 @@ targets:
         CODE_SIGN_IDENTITY: "Developer ID Application: Kevin Hill (B5J28L8ARB)"
         PROVISIONING_PROFILE_SPECIFIER: "036fee16-227d-478a-a99e-021fe8ec952d"
         CODE_SIGN_ENTITLEMENTS: Sources/AskMac/AskMac.entitlements
+        CLOUDKIT_ENVIRONMENT: PRODUCTION
     dependencies:
       - target: AskMacCore
       - package: Sparkle
