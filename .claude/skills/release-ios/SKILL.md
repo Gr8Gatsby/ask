@@ -10,9 +10,9 @@ Cut the iOS release by creating and pushing a version tag. This triggers the `io
 Run:
 - `git status` — must be clean
 - `git branch --show-current` — must be `main`
-- `git log origin/main..HEAD --oneline` — verify the version bump commit from `/prepare-release-ios` is present
+- `git log origin/main..HEAD --oneline` — must be empty (version bump PR already merged)
 
-If anything is wrong, stop and tell the user.
+If there are unpushed commits, stop and tell the user to merge the PR from `/prepare-release-ios` first.
 
 ## Step 2 — Read the current iOS version
 

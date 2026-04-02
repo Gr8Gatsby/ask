@@ -94,7 +94,13 @@ Open `docs/spec.md` and add a new row at the top of the Change Log table:
 
 Use today's date in `YYYY-MM-DD` format.
 
-## Step 8 — Commit
+## Step 8 — Branch, commit, and open a PR
+
+Create a branch, commit, push, and open a PR targeting `main`:
+
+```bash
+git checkout -b release/ios-{version}
+```
 
 Stage only:
 - `ask/ask.xcodeproj/project.pbxproj`
@@ -102,6 +108,25 @@ Stage only:
 
 Commit with message: `chore(ios): bump version to {version}`
 
+Push and open a PR:
+```bash
+git push -u origin release/ios-{version}
+gh pr create --title "chore(ios): release v{version}" --head release/ios-{version} --base main --body "..."
+```
+
+The PR body should include:
+- A one-sentence summary of the release
+- A "Test plan" checklist:
+  - [ ] Merge PR
+  - [ ] Run `/release-ios` to tag ios-v{version}
+  - [ ] Run `release-ios` in Terminal to archive and upload to TestFlight
+
+Return to `main` after pushing:
+```bash
+git checkout main
+git reset --hard origin/main
+```
+
 ## Step 9 — Output release notes
 
-Print the final release notes to the conversation so the user can copy them for use as the git tag annotation when they run `/release-ios`.
+Print the final release notes to the conversation — they will be used as the tag annotation when the user runs `/release-ios` after merging.
