@@ -25,14 +25,25 @@ private func svgToWhite(_ svg: String) -> NSImage? {
 // MARK: - Top-level tab
 
 private enum MacTab: String, CaseIterable {
-    case scripts, feed, blocks, machine
+    case scripts, feed, blocks, messages, machine
+
+    var icon: String {
+        switch self {
+        case .scripts:  "terminal"
+        case .feed:     "clock.arrow.circlepath"
+        case .blocks:   "rectangle.stack"
+        case .messages: "bubble.left.and.bubble.right"
+        case .machine:  "desktopcomputer"
+        }
+    }
 
     var label: String {
         switch self {
-        case .scripts: "Scripts"
-        case .feed:    "Feed"
-        case .blocks:  "Blocks"
-        case .machine: "Machine"
+        case .scripts:  "Scripts"
+        case .feed:     "Feed"
+        case .blocks:   "Blocks"
+        case .messages: "Messages"
+        case .machine:  "Machine"
         }
     }
 }
@@ -43,8 +54,12 @@ struct MacScriptsView: View {
     @Environment(ScriptManager.self) private var scriptManager
     @Environment(ActionHistoryService.self) private var actionHistory
     @Environment(AppSettings.self) private var settings
+    @Environment(CloudKitService.self) private var cloudKit
+    @Environment(MessageWatcherService.self) private var messageWatcher
 
     @State private var activeTab: MacTab = .scripts
+    @State private var builderBlocks: [BuilderBlock] = []
+    @State private var builderShowJSON = true
 
     var body: some View {
         Group {
@@ -56,7 +71,12 @@ struct MacScriptsView: View {
                 MacFeedView()
                     .environment(actionHistory)
             case .blocks:
-                BlocksBuilderView()
+                BlocksBuilderView(blocks: $builderBlocks, showJSON: $builderShowJSON)
+            case .messages:
+                MacMessagesView()
+                    .environment(settings)
+                    .environment(cloudKit)
+                    .environment(messageWatcher)
             case .machine:
                 MachineDetailView()
                     .environment(settings)
@@ -66,11 +86,12 @@ struct MacScriptsView: View {
             ToolbarItem(placement: .principal) {
                 Picker("", selection: $activeTab) {
                     ForEach(MacTab.allCases, id: \.self) { tab in
-                        Text(tab.label).tag(tab)
+                        Image(systemName: tab.icon).tag(tab)
                     }
                 }
                 .pickerStyle(.segmented)
                 .fixedSize()
+                .help(activeTab.label)
             }
             if activeTab == .scripts {
                 ToolbarItem(placement: .automatic) {
@@ -196,11 +217,22 @@ private struct ScriptSidebarRow: View {
     }
 }
 
+// MARK: - Card preview axes
+
+private enum CardColorSchemePreview: String, CaseIterable {
+    case light = "Light"
+    case dark  = "Dark"
+}
+
 // MARK: - Script detail view
 
 private struct ScriptDetailView: View {
     let script: ManagedScript
     let scriptManager: ScriptManager
+
+    @State private var cardFlipped = false
+    @State private var previewBranded = true
+    @State private var previewScheme: CardColorSchemePreview = .light
 
     private var liveBlocks: [LiveBlock] {
         Array((scriptManager.activeBlocks[script.id] ?? [:]).values)
@@ -211,6 +243,32 @@ private struct ScriptDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 scriptCard
+
+                // Card preview controls
+                HStack(spacing: 12) {
+                    Text("Preview")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .textCase(.uppercase)
+                        .tracking(0.4)
+                    Toggle("Brand", isOn: $previewBranded)
+                        .toggleStyle(.button)
+                        .controlSize(.small)
+                        .font(.caption)
+                    Picker("", selection: $previewScheme) {
+                        ForEach(CardColorSchemePreview.allCases, id: \.self) { s in
+                            Text(s.rawValue).tag(s)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                    .onChange(of: previewScheme) { _, _ in
+                        if cardFlipped { cardFlipped = false }
+                    }
+                    .onChange(of: previewBranded) { _, _ in
+                        if cardFlipped { cardFlipped = false }
+                    }
+                }
 
                 if script.status == .crashed, let error = script.lastError {
                     crashBanner(error)
@@ -243,12 +301,27 @@ private struct ScriptDetailView: View {
         .navigationTitle(script.name)
     }
 
-    // MARK: Script card
+    // MARK: Script card (flippable)
 
     private var scriptCard: some View {
+        ZStack {
+            scriptCardFront
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .opacity(cardFlipped ? 0 : 1)
+            scriptCardBack
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .rotation3DEffect(.degrees(180), axis: (x: 0, y: 1, z: 0))
+                .opacity(cardFlipped ? 1 : 0)
+        }
+        .frame(maxWidth: .infinity, minHeight: 210, maxHeight: 210)
+        .rotation3DEffect(.degrees(cardFlipped ? 180 : 0), axis: (x: 0, y: 1, z: 0), perspective: 0.5)
+        .animation(.spring(duration: 0.5), value: cardFlipped)
+    }
+
+    private var scriptCardFront: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header: icon + info + toggle
-            HStack(alignment: .center, spacing: 14) {
+            // Header: icon + name/info
+            HStack(alignment: .top, spacing: 14) {
                 scriptIcon
                     .frame(width: 48, height: 48)
 
@@ -301,19 +374,6 @@ private struct ScriptDetailView: View {
                         statusBadge
                     }
                 }
-
-                Spacer()
-
-                Toggle("", isOn: Binding(
-                    get: { script.isEnabled },
-                    set: { enabled in
-                        if enabled { scriptManager.enableScript(id: script.id) }
-                        else { scriptManager.disableScript(id: script.id) }
-                    }
-                ))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.regular)
             }
             .padding(16)
 
@@ -324,11 +384,124 @@ private struct ScriptDetailView: View {
                 dependenciesSection
                     .padding(16)
             }
+
+            Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(brandBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .ifLet(brandColorScheme) { view, scheme in
             view.environment(\.colorScheme, scheme)
+        }
+        .overlay(alignment: .topTrailing) {
+            Button {
+                withAnimation(.spring(duration: 0.5)) { cardFlipped = true }
+            } label: {
+                Image(systemName: "info.circle")
+                    .font(.body)
+                    .foregroundStyle(brandForegroundPrimary)
+                    .padding(12)
+            }
+            .buttonStyle(.plain)
+            .help("View manifest details")
+        }
+        .overlay(alignment: .bottomTrailing) {
+            Toggle("", isOn: Binding(
+                get: { script.isEnabled },
+                set: { enabled in
+                    if enabled { scriptManager.enableScript(id: script.id) }
+                    else { scriptManager.disableScript(id: script.id) }
+                }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.regular)
+            .padding(14)
+        }
+    }
+
+    private var scriptCardBack: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Manifest")
+                    .font(.headline)
+                    .foregroundStyle(brandForegroundPrimary)
+                Spacer()
+                Button {
+                    withAnimation(.spring(duration: 0.5)) { cardFlipped = false }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(brandForegroundSecondary)
+                }
+                .buttonStyle(.plain)
+                .help("Close")
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                manifestRow("ID", value: script.id, monospaced: true)
+                manifestRow("Name", value: script.name)
+                if let version = script.version  { manifestRow("Version", value: "v\(version)") }
+                if let type = script.scriptType  { manifestRow("Type", value: type) }
+                if let schedule = script.schedule { manifestRow("Schedule", value: schedule, monospaced: true) }
+                if let entry = script.entry       { manifestRow("Entry", value: entry, monospaced: true) }
+                if !script.requires.isEmpty {
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("Dependencies")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundStyle(brandForegroundTertiary)
+                            .frame(width: 86, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 3) {
+                            ForEach(script.requires, id: \.id) { dep in
+                                let missing = script.missingDeps.contains { $0.id == dep.id }
+                                HStack(spacing: 4) {
+                                    Image(systemName: missing ? "xmark.circle.fill" : "checkmark.circle.fill")
+                                        .font(.caption2)
+                                        .foregroundStyle(missing ? .red : .green)
+                                    Text(dep.name)
+                                        .font(.caption)
+                                        .foregroundStyle(brandForegroundSecondary)
+                                    if missing, let install = dep.install {
+                                        Text("(\(install))")
+                                            .font(.caption2)
+                                            .foregroundStyle(brandForegroundTertiary)
+                                            .fontDesign(.monospaced)
+                                    }
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                if let path = script.manifestPath {
+                    manifestRow("Manifest", value: path.abbreviatingWithTildeInPath, monospaced: true)
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(brandBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .ifLet(brandColorScheme) { view, scheme in
+            view.environment(\.colorScheme, scheme)
+        }
+    }
+
+    private func manifestRow(_ key: String, value: String, monospaced: Bool = false) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(key)
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundStyle(brandForegroundTertiary)
+                .frame(width: 86, alignment: .leading)
+            Text(value)
+                .font(.caption)
+                .fontDesign(monospaced ? .monospaced : .default)
+                .foregroundStyle(brandForegroundSecondary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .lineLimit(2)
         }
     }
 
@@ -418,57 +591,77 @@ private struct ScriptDetailView: View {
         }
     }
 
-    // MARK: Brand colors
+    // MARK: Brand colors — raw (script's actual brand)
 
     @Environment(\.colorScheme) private var colorScheme
 
-    private var brandBackground: Color {
-        switch script.id {
-        case "claudecode-controller":
-            return colorScheme == .dark
-                ? Color(red: 0.15, green: 0.13, blue: 0.11)
-                : Color(red: 250/255, green: 249/255, blue: 245/255)
-        case "github":
-            return Color(red: 0x24/255, green: 0x29/255, blue: 0x2F/255)
-        default:
-            return Color.secondary.opacity(0.07)
-        }
+    /// The color scheme the card will render in, accounting for preview selection.
+    private var effectiveColorScheme: ColorScheme {
+        previewScheme == .dark ? .dark : .light
     }
 
-    private var brandColorScheme: ColorScheme? {
+    private var scriptBrandColorScheme: ColorScheme? {
         switch script.id {
         case "github": .dark
         default: nil
         }
     }
 
-    private var brandAccent: Color? {
+    // MARK: Brand colors — effective (respects preview toggles)
+
+    /// Background actually applied to the card.
+    private var brandBackground: Color {
+        if !previewBranded {
+            return effectiveColorScheme == .dark
+                ? Color(white: 0.15)
+                : Color.secondary.opacity(0.07)
+        }
         switch script.id {
-        case "claudecode-controller": Color(red: 202/255, green: 124/255, blue: 94/255)
-        case "github":               Color(red: 0x09/255, green: 0x69/255, blue: 0xDA/255)
-        default: nil
+        case "claudecode-controller":
+            return effectiveColorScheme == .dark
+                ? Color(red: 0.15, green: 0.13, blue: 0.11)
+                : Color(red: 250/255, green: 249/255, blue: 245/255)
+        case "github":
+            // GitHub always uses its dark card; light preview switches to a neutral surface
+            return effectiveColorScheme == .light
+                ? Color(red: 250/255, green: 250/255, blue: 250/255)
+                : Color(red: 0x24/255, green: 0x29/255, blue: 0x2F/255)
+        default:
+            return effectiveColorScheme == .dark
+                ? Color(white: 0.15)
+                : Color.secondary.opacity(0.07)
+        }
+    }
+
+    /// Color scheme environment applied to the card.
+    private var brandColorScheme: ColorScheme? {
+        previewScheme == .dark ? .dark : .light
+    }
+
+    /// Whether the card is rendering on a dark background (drives icon SVG recolouring).
+    private var cardIsOnDark: Bool {
+        previewScheme == .dark
+    }
+
+    private var brandAccent: Color? {
+        guard previewBranded else { return nil }
+        switch script.id {
+        case "claudecode-controller": return Color(red: 202/255, green: 124/255, blue: 94/255)
+        case "github":               return Color(red: 0x09/255, green: 0x69/255, blue: 0xDA/255)
+        default: return nil
         }
     }
 
     private var brandForegroundPrimary: Color {
-        switch script.id {
-        case "github": .white
-        default: .primary
-        }
+        cardIsOnDark ? .white : .primary
     }
 
     private var brandForegroundSecondary: Color {
-        switch script.id {
-        case "github": Color(.secondaryLabelColor).opacity(0.85)
-        default: .secondary
-        }
+        cardIsOnDark ? Color(.secondaryLabelColor).opacity(0.85) : .secondary
     }
 
     private var brandForegroundTertiary: Color {
-        switch script.id {
-        case "github": Color(.tertiaryLabelColor)
-        default: Color(.tertiaryLabelColor)
-        }
+        Color(.tertiaryLabelColor)
     }
 
     // MARK: Icon
@@ -488,10 +681,10 @@ private struct ScriptDetailView: View {
         }
     }
 
-    /// Icon image adapted for the card's brand color scheme.
-    /// Dark brand cards (e.g. GitHub) get SVG strokes recoloured to white.
+    /// Icon image adapted for the card's effective color scheme.
+    /// Dark background cards get SVG strokes recoloured to white.
     private var cardIcon: NSImage? {
-        if brandColorScheme == .dark, let svg = script.svgString {
+        if cardIsOnDark, let svg = script.svgString {
             return svgToWhite(svg) ?? script.iconImage
         }
         return script.iconImage
@@ -775,28 +968,74 @@ private struct FeedEventDetailSheet: View {
 
 // MARK: - Machine detail view
 
+private enum MachineSection: String, CaseIterable, Identifiable {
+    case cloud    = "Cloud"
+    case devices  = "Devices"
+    case machine  = "Machine"
+    case vault    = "Scripts Vault"
+    case sessions = "Sessions"
+    case about    = "About"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .cloud:    "icloud"
+        case .devices:  "iphone"
+        case .machine:  "desktopcomputer"
+        case .vault:    "folder"
+        case .sessions: "cpu"
+        case .about:    "info.circle"
+        }
+    }
+}
+
 private struct MachineDetailView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(HeartbeatService.self) private var heartbeat
 
+    @State private var selectedSection: MachineSection? = .cloud
     @State private var showVaultPicker = false
     @State private var agentSessions: [AgentSession] = []
     @State private var liveProcesses: [LiveProcess] = []
 
-    private var appVersion: String {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
-        return "\(version) (\(build))"
+    var body: some View {
+        NavigationSplitView {
+            List(MachineSection.allCases, selection: $selectedSection) { section in
+                Label(section.rawValue, systemImage: section.icon)
+                    .tag(section)
+            }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 170, ideal: 190)
+        } detail: {
+            switch selectedSection ?? .cloud {
+            case .cloud:    machineCloudSection
+            case .devices:  machineDevicesSection
+            case .machine:  machineMachineSection
+            case .vault:    machineVaultSection
+            case .sessions: machineSessionsSection
+            case .about:    machineAboutSection
+            }
+        }
+        .navigationTitle("Machine")
+        .onAppear { refreshSessions() }
+        .fileImporter(
+            isPresented: $showVaultPicker,
+            allowedContentTypes: [.folder]
+        ) { result in
+            if case .success(let url) = result {
+                _ = url.startAccessingSecurityScopedResource()
+                settings.vaultPath = url
+            }
+        }
     }
 
-    var body: some View {
-        @Bindable var settings = settings
+    // MARK: Section: Cloud
 
+    private var machineCloudSection: some View {
         Form {
-            // MARK: Cloud
-
-            Section("Cloud") {
-                LabeledContent("iCloud Sync") {
+            Section("iCloud Sync") {
+                LabeledContent("Status") {
                     if let lastBeat = heartbeat.lastHeartbeat {
                         HStack(spacing: 4) {
                             Image(systemName: "icloud.fill")
@@ -819,9 +1058,15 @@ private struct MachineDetailView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Cloud")
+    }
 
-            // MARK: Connected Devices
+    // MARK: Section: Devices
 
+    private var machineDevicesSection: some View {
+        Form {
             Section {
                 if heartbeat.connectedDevices.isEmpty {
                     Text("No iPhones seen in the last hour.")
@@ -879,9 +1124,16 @@ private struct MachineDetailView: View {
                     }
                 }
             }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Devices")
+    }
 
-            // MARK: Machine
+    // MARK: Section: Machine
 
+    private var machineMachineSection: some View {
+        @Bindable var settings = settings
+        return Form {
             Section("Machine") {
                 LabeledContent("Name") {
                     HStack(spacing: 6) {
@@ -911,7 +1163,15 @@ private struct MachineDetailView: View {
                         .textSelection(.enabled)
                 }
             }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Machine")
+    }
 
+    // MARK: Section: Scripts Vault
+
+    private var machineVaultSection: some View {
+        Form {
             Section("Scripts Vault") {
                 LabeledContent("Directory") {
                     Text(settings.vaultPath?.abbreviatingWithTildeInPath ?? "Not set")
@@ -921,7 +1181,15 @@ private struct MachineDetailView: View {
                 }
                 Button("Change Vault Directory…") { showVaultPicker = true }
             }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Scripts Vault")
+    }
 
+    // MARK: Section: Sessions
+
+    private var machineSessionsSection: some View {
+        Form {
             Section {
                 if agentSessions.isEmpty {
                     Text("No tracked sessions yet.")
@@ -966,7 +1234,7 @@ private struct MachineDetailView: View {
                 } else {
                     ForEach(liveProcesses) { p in
                         HStack {
-                            Text(p.comm).font(.caption).fontWeight(.medium)
+                            Text(p.name).font(.caption).fontWeight(.medium)
                             Spacer()
                             Text("PID \(p.pid)  TTY \(p.tty)")
                                 .font(.caption.monospaced())
@@ -976,28 +1244,30 @@ private struct MachineDetailView: View {
                     }
                 }
             }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Sessions")
+    }
 
+    // MARK: Section: About
+
+    private var machineAboutSection: some View {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let build   = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return Form {
             Section("About") {
                 LabeledContent("AskMac Version") {
-                    Text(appVersion)
+                    Text("\(version) (\(build))")
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("Machine")
-        .onAppear { refreshSessions() }
-        .fileImporter(
-            isPresented: $showVaultPicker,
-            allowedContentTypes: [.folder]
-        ) { result in
-            if case .success(let url) = result {
-                _ = url.startAccessingSecurityScopedResource()
-                settings.vaultPath = url
-            }
-        }
+        .navigationTitle("About")
     }
+
+    // MARK: Data loading
 
     private func refreshSessions() {
         let statusFiles: [(controller: String, path: String)] = [
@@ -1022,11 +1292,14 @@ private struct MachineDetailView: View {
             }
             if let list = json["live_processes"] as? [[String: Any]] {
                 for p in list {
+                    let comm = p["comm"] as? String ?? ""
+                    let name = p["name"] as? String ?? URL(fileURLWithPath: comm).lastPathComponent
                     procs.append(LiveProcess(
                         controller: controller,
                         pid:  p["pid"]  as? String ?? "",
                         tty:  p["tty"]  as? String ?? "",
-                        comm: p["comm"] as? String ?? ""
+                        comm: comm,
+                        name: name
                     ))
                 }
             }
@@ -1053,6 +1326,7 @@ private struct LiveProcess: Identifiable {
     let pid: String
     let tty: String
     let comm: String
+    let name: String
 }
 
 private extension String {

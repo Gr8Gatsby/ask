@@ -304,8 +304,13 @@ Collapsed state shows last message inline in the header row.
 - `codex-controller` — emits on session start, tool use, stop, and tmux pane response capture
 
 **Implementations:**
-- iOS view: [`ask/ask/BlockViews.swift`](../ask/ask/BlockViews.swift) — `AgentSessionBlockView`
+- iOS session list row: [`ask/ask/SessionChatView.swift`](../ask/ask/SessionChatView.swift) — `SessionRowView` (shown in ScriptDetailView session list)
+- iOS session chat: [`ask/ask/SessionChatView.swift`](../ask/ask/SessionChatView.swift) — `SessionChatView` (full-screen chat; navigated to from the session list row)
+- iOS legacy card: [`ask/ask/BlockViews.swift`](../ask/ask/BlockViews.swift) — `AgentSessionBlockView` (used in Mac Blocks builder preview only)
 - Mac preview: [`AskMac/Sources/AskMac/Views/BlockPreviewViews.swift`](../AskMac/Sources/AskMac/Views/BlockPreviewViews.swift) — `AgentSessionPreview`
+
+**iOS navigation context:**
+Tapping a script tile on the home screen opens `ScriptDetailView`, which shows one `SessionRowView` per `agent_session` block. Tapping a row navigates into `SessionChatView` — a full-screen chat thread that accumulates local history via SwiftData (`ChatSession`, `ChatEntry`). The session chat shows outgoing messages (user), incoming agent responses (`last_message` updates), inline block cards (confirmation/permission blocks linked to this `session_id`), and system events. When the `agent_session` block is cleared (session ended), the chat history is deleted and the view pops back to the session list.
 
 ---
 
@@ -338,8 +343,8 @@ Emitted persistently by `claudecode-controller` and `codex-controller`. Drives t
 **Block ID:** Fixed per controller: `claudecode-start-session` / `codex-start-session`.
 
 **Implementations:**
-- iOS view: [`ask/ask/BlockViews.swift`](../ask/ask/BlockViews.swift) — `StartSessionBlockView` + `RepoPickerSheet`
-- iOS home: rendered as "+" button in `detailBottomBar` of `ScriptDetailView`
+- iOS "+" button: rendered in `detailBottomBar` of [`ask/ask/HomeView.swift`](../ask/ask/HomeView.swift) — `ScriptDetailView`; visible only when this block is present
+- iOS repo picker: [`ask/ask/BlockViews.swift`](../ask/ask/BlockViews.swift) — `RepoPickerSheet`
 - Mac preview: [`AskMac/Sources/AskMac/Views/BlockPreviewViews.swift`](../AskMac/Sources/AskMac/Views/BlockPreviewViews.swift) — `StartSessionPreview`
 
 ---
@@ -744,3 +749,5 @@ Response: JSON object — `{"run_tests": true, "verbose": false}`.
 | Added `feed_item` | Feed tab entries |
 | Added `session_id` to `confirmation` payload | Links permission prompts to their parent session |
 | Removed emoji from ASCII art diagrams | Layout fix |
+| `agent_session` iOS navigation | Now renders as a `SessionRowView` in the script detail session list; tapping opens a full-screen `SessionChatView` with local SwiftData history. `AgentSessionBlockView` retained for Mac Blocks builder preview. |
+| `start_session` iOS rendering | "+" button in `ScriptDetailView` bottom bar; shown only when the block is active. |

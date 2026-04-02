@@ -6,6 +6,21 @@ struct BuilderBlock: Identifiable {
     let id = UUID()
     var blockType: String
     var payload: [String: Any]
+    let originalPayload: [String: Any]
+    var lastResponse: String? = nil
+    var resetToken = UUID()
+
+    init(blockType: String, payload: [String: Any]) {
+        self.blockType = blockType
+        self.payload = payload
+        self.originalPayload = payload
+    }
+
+    mutating func reset() {
+        payload = originalPayload
+        lastResponse = nil
+        resetToken = UUID()
+    }
 
     var liveBlock: LiveBlock {
         let json = (try? JSONSerialization.data(withJSONObject: payload))
@@ -58,6 +73,18 @@ private let blockCatalog: [BlockTypeInfo] = [
         ]
     ),
     BlockTypeInfo(
+        id: "chat_prompt",
+        name: "Chat Prompt",
+        description: "Conversational reply with agent context",
+        icon: "bubble.left.and.text.bubble.right",
+        category: .interactive,
+        defaultPayload: [
+            "title": "Reply to Claude…",
+            "context": "I found **3 failing tests**. Should I attempt auto-fixes or open a ticket?",
+            "placeholder": "Reply to Claude…"
+        ]
+    ),
+    BlockTypeInfo(
         id: "picker",
         name: "Picker",
         description: "Dropdown selection from options",
@@ -83,6 +110,18 @@ private let blockCatalog: [BlockTypeInfo] = [
                 ["id": "3", "label": "Third Item"]
             ],
             "actions": ["Cancel"]
+        ]
+    ),
+    BlockTypeInfo(
+        id: "detail",
+        name: "Detail",
+        description: "Long-form content with action buttons",
+        icon: "doc.text",
+        category: .interactive,
+        defaultPayload: [
+            "title": "Detail View",
+            "body": "This is a longer description providing context about the current situation. It can span multiple lines.",
+            "actions": ["Acknowledge", "Dismiss"]
         ]
     ),
     // Informational
@@ -127,18 +166,6 @@ private let blockCatalog: [BlockTypeInfo] = [
         ]
     ),
     BlockTypeInfo(
-        id: "detail",
-        name: "Detail",
-        description: "Long-form content with action buttons",
-        icon: "doc.text",
-        category: .informational,
-        defaultPayload: [
-            "title": "Detail View",
-            "body": "This is a longer description providing context about the current situation. It can span multiple lines.",
-            "actions": ["Acknowledge", "Dismiss"]
-        ]
-    ),
-    BlockTypeInfo(
         id: "countdown",
         name: "Countdown",
         description: "Relative timer display",
@@ -158,6 +185,20 @@ private let blockCatalog: [BlockTypeInfo] = [
         defaultPayload: [
             "title": "Card Title",
             "subtitle": "Supporting subtitle text"
+        ]
+    ),
+    BlockTypeInfo(
+        id: "feed_item",
+        name: "Feed Item",
+        description: "Entry in the iOS Feed tab",
+        icon: "newspaper",
+        category: .informational,
+        defaultPayload: [
+            "title": "Deployment complete",
+            "body": "Production deployment finished successfully.",
+            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "icon": "checkmark.circle.fill",
+            "color": "green"
         ]
     ),
     // AI & Sessions
@@ -217,8 +258,8 @@ private let blockCatalog: [BlockTypeInfo] = [
 // MARK: - Blocks builder view
 
 struct BlocksBuilderView: View {
-    @State private var blocks: [BuilderBlock] = []
-    @State private var showJSON = true
+    @Binding var blocks: [BuilderBlock]
+    @Binding var showJSON: Bool
 
     var body: some View {
         NavigationSplitView {
@@ -274,16 +315,21 @@ struct BlocksBuilderView: View {
     private var previewCanvas: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
-                    BlockCanvasCard(block: block) {
-                        blocks.remove(at: index)
-                    } onMoveUp: {
-                        guard index > 0 else { return }
-                        blocks.swapAt(index, index - 1)
-                    } onMoveDown: {
-                        guard index < blocks.count - 1 else { return }
-                        blocks.swapAt(index, index + 1)
-                    }
+                ForEach($blocks) { $block in
+                    BlockCanvasCard(
+                        block: $block,
+                        onDelete: {
+                            blocks.removeAll { $0.id == block.id }
+                        },
+                        onMoveUp: {
+                            guard let i = blocks.firstIndex(where: { $0.id == block.id }), i > 0 else { return }
+                            blocks.swapAt(i, i - 1)
+                        },
+                        onMoveDown: {
+                            guard let i = blocks.firstIndex(where: { $0.id == block.id }), i < blocks.count - 1 else { return }
+                            blocks.swapAt(i, i + 1)
+                        }
+                    )
                 }
             }
             .padding(20)
@@ -295,17 +341,18 @@ struct BlocksBuilderView: View {
 // MARK: - Block canvas card
 
 private struct BlockCanvasCard: View {
-    let block: BuilderBlock
+    @Binding var block: BuilderBlock
     let onDelete: () -> Void
     let onMoveUp: () -> Void
     let onMoveDown: () -> Void
 
     @State private var hovered = false
+    @State private var hideTask: Task<Void, Never>? = nil
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            VStack(alignment: .leading, spacing: 4) {
-                // Type label
+        VStack(alignment: .leading, spacing: 4) {
+            // Header row: type label + action buttons
+            HStack(spacing: 4) {
                 Text(block.blockType)
                     .font(.caption2)
                     .fontWeight(.medium)
@@ -313,38 +360,92 @@ private struct BlockCanvasCard: View {
                     .textCase(.uppercase)
                     .tracking(0.4)
 
-                BlockPreviewView(block: block.liveBlock)
+                Spacer()
+
+                // Action bar — unified pill with consistent icon sizes
+                HStack(spacing: 0) {
+                    actionBarButton(icon: "chevron.up",            tint: nil)  { onMoveUp() }
+                    actionBarDivider()
+                    actionBarButton(icon: "chevron.down",          tint: nil)  { onMoveDown() }
+                    actionBarDivider()
+                    actionBarButton(icon: "arrow.counterclockwise", tint: nil, disabled: block.lastResponse == nil) { block.reset() }
+                    actionBarDivider()
+                    actionBarButton(icon: "xmark",                 tint: .red) { onDelete() }
+                }
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(.separator, lineWidth: 0.5))
+                .opacity(hovered ? 1 : 0)
             }
 
-            // Controls
-            if hovered {
-                HStack(spacing: 2) {
-                    Button { onMoveUp() } label: {
-                        Image(systemName: "chevron.up")
-                            .font(.caption2)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.mini)
+            BlockPreviewView(block: block.liveBlock) { response in
+                block.lastResponse = response
+            }
+            .id(block.resetToken)
 
-                    Button { onMoveDown() } label: {
-                        Image(systemName: "chevron.down")
-                            .font(.caption2)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.mini)
-
-                    Button { onDelete() } label: {
+            // Response footer
+            if let response = block.lastResponse {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text("Response: \(response)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer()
+                    Button {
+                        block.lastResponse = nil
+                    } label: {
                         Image(systemName: "xmark")
                             .font(.caption2)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(.tertiary)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.mini)
+                    .buttonStyle(.plain)
                 }
-                .padding(6)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Color.accentColor.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
             }
         }
-        .onHover { hovered = $0 }
+        .padding(.horizontal, 4)
+        .contentShape(Rectangle())
+        .onHover { isOver in
+            if isOver {
+                hideTask?.cancel()
+                hideTask = nil
+                hovered = true
+            } else {
+                hideTask = Task {
+                    try? await Task.sleep(for: .milliseconds(300))
+                    if !Task.isCancelled { hovered = false }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func actionBarButton(
+        icon: String,
+        tint: Color?,
+        disabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(disabled ? Color.secondary.opacity(0.4) : (tint ?? .primary))
+                .frame(width: 28, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+    }
+
+    private func actionBarDivider() -> some View {
+        Rectangle()
+            .fill(.separator)
+            .frame(width: 0.5, height: 16)
     }
 }
 

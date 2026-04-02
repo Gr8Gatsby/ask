@@ -1,7 +1,7 @@
 {
   "id": "codex-controller",
   "name": "Codex",
-  "version": "1.15.15",
+  "version": "1.15.24",
   "description": "Codex CLI session supervisor — routes permissions and notifications to iPhone",
   "entry": "main.py",
   "icon": "sparkles",
@@ -10,7 +10,7 @@
     {
       "id": "codex",
       "name": "OpenAI Codex CLI",
-      "check": "codex --version",
+      "check": "source ~/.zshrc 2>/dev/null; codex --version",
       "install": "npm install -g @openai/codex",
       "install_url": "https://github.com/openai/codex"
     }

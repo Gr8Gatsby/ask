@@ -1,7 +1,8 @@
 import SwiftUI
 
+// MARK: - Block preview dispatcher
+
 /// Mac-side rendering of a single LiveBlock.
-/// Confirmation and prompt blocks are interactive when `onRespond` is provided.
 struct BlockPreviewView: View {
     let block: LiveBlock
     var onRespond: ((String) -> Void)? = nil
@@ -16,23 +17,93 @@ struct BlockPreviewView: View {
     var body: some View {
         Group {
             switch block.blockType {
-            case "confirmation": ConfirmationPreview(payload: payload, onRespond: onRespond)
-            case "status":       StatusPreview(payload: payload)
-            case "info_card":    InfoCardPreview(payload: payload)
-            case "alert":        AlertPreview(payload: payload)
-            case "prompt", "chat_prompt": PromptPreview(payload: payload, onRespond: onRespond)
-            case "countdown":    CountdownPreview(payload: payload)
-            case "list":         ListPreview(payload: payload, onRespond: onRespond)
-            case "detail":       DetailPreview(payload: payload, onRespond: onRespond)
-            case "picker":       PickerPreview(payload: payload, onRespond: onRespond)
-            case "icon_card":    IconCardPreview(payload: payload)
+            case "confirmation":  ConfirmationPreview(payload: payload, onRespond: onRespond)
+            case "status":        StatusPreview(payload: payload)
+            case "info_card":     InfoCardPreview(payload: payload)
+            case "alert":         AlertPreview(payload: payload)
+            case "prompt":        PromptPreview(payload: payload, onRespond: onRespond)
+            case "chat_prompt":   ChatPromptPreview(payload: payload, onRespond: onRespond)
+            case "countdown":     CountdownPreview(payload: payload)
+            case "list":          ListPreview(payload: payload, onRespond: onRespond)
+            case "detail":        DetailPreview(payload: payload, onRespond: onRespond)
+            case "picker":        PickerPreview(payload: payload, onRespond: onRespond)
+            case "icon_card":     IconCardPreview(payload: payload)
             case "claude_message": ClaudeMessagePreview(payload: payload)
-            case "agent_session":  AgentSessionPreview(payload: payload, onRespond: onRespond)
-            case "start_session":  StartSessionPreview(payload: payload)
-            case "tile":           EmptyView() // drives home-screen tile only
-            default:               EmptyView()
+            case "agent_session": AgentSessionPreview(payload: payload, onRespond: onRespond)
+            case "start_session": StartSessionPreview(payload: payload, onRespond: onRespond)
+            case "feed_item":     FeedItemPreview(payload: payload)
+            case "tile":          EmptyView() // drives home-screen tile only
+            default:              EmptyView()
             }
         }
+    }
+}
+
+// MARK: - Shared helpers
+
+/// Parse a hex string like "#CA7C5E" or "CA7C5E" into a Color.
+private func hexColor(_ hex: String?) -> Color? {
+    guard let hex else { return nil }
+    let cleaned = hex.trimmingCharacters(in: .init(charactersIn: "#"))
+    guard cleaned.count == 6, let value = UInt64(cleaned, radix: 16) else { return nil }
+    return Color(
+        red:   Double((value >> 16) & 0xFF) / 255,
+        green: Double((value >> 8)  & 0xFF) / 255,
+        blue:  Double(value         & 0xFF) / 255
+    )
+}
+
+/// Render markdown inline formatting via AttributedString (bold, italic, code, links).
+private func markdownText(_ string: String) -> Text {
+    if let attr = try? AttributedString(markdown: string) {
+        return Text(attr)
+    }
+    return Text(string)
+}
+
+/// Status color from the "color" payload field.
+private func statusColor(_ payload: [String: Any]) -> Color {
+    switch payload["color"] as? String {
+    case "green":  return .green
+    case "red":    return .red
+    case "orange": return .orange
+    case "yellow": return .yellow
+    case "blue":   return .blue
+    default:       return .secondary
+    }
+}
+
+/// Claude Code branding header — small dot + "Claude Code" label.
+private struct ClaudeBrandHeader: View {
+    var label: String = "Claude Code"
+    var color: Color = Color(red: 0.79, green: 0.49, blue: 0.37)
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(color)
+                .frame(width: 14, height: 14)
+                .overlay(
+                    Text("C")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white)
+                )
+            Text(label)
+                .font(.caption2)
+                .fontWeight(.medium)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+// MARK: - Card container modifier
+
+private extension View {
+    func blockCard(background: Color = Color.secondary.opacity(0.07)) -> some View {
+        self
+            .padding(8)
+            .background(background)
+            .clipShape(RoundedRectangle(cornerRadius: 7))
     }
 }
 
@@ -42,8 +113,14 @@ private struct ConfirmationPreview: View {
     let payload: [String: Any]
     var onRespond: ((String) -> Void)?
 
+    @State private var responded: String? = nil
+
+    private var options: [String] {
+        payload["options"] as? [String] ?? []
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 8) {
             if let title = payload["title"] as? String, !title.isEmpty {
                 Text(title).font(.subheadline).fontWeight(.medium)
             }
@@ -53,29 +130,58 @@ private struct ConfirmationPreview: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(4)
             }
-            if let options = payload["options"] as? [String], !options.isEmpty {
+
+            if let r = responded {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill").font(.caption).foregroundStyle(.secondary)
+                    Text(r).font(.caption).foregroundStyle(.secondary)
+                }
+            } else if options.count <= 2 {
+                // Horizontal buttons — first option is accent-colored
                 HStack(spacing: 6) {
-                    ForEach(options, id: \.self) { opt in
-                        if let respond = onRespond {
-                            Button(opt) { respond(opt) }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                        } else {
-                            Text(opt)
-                                .font(.caption2)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
-                                .background(Color.secondary.opacity(0.15))
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                    ForEach(Array(options.enumerated()), id: \.offset) { idx, opt in
+                        Button(opt) {
+                            responded = opt
+                            onRespond?(opt)
                         }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .tint(idx == 0 ? .accentColor : Color(.tertiaryLabelColor))
+                        .disabled(onRespond == nil)
                     }
                     Spacer()
                 }
+            } else {
+                // Radio list for 3+ options
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(options.enumerated()), id: \.offset) { idx, opt in
+                        Button {
+                            responded = opt
+                            onRespond?(opt)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "circle")
+                                    .font(.caption)
+                                    .foregroundStyle(Color.accentColor)
+                                Text(opt).font(.caption).foregroundStyle(.primary)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(onRespond == nil)
+                        if idx < options.count - 1 {
+                            Divider().padding(.leading, 8)
+                        }
+                    }
+                }
+                .background(Color.secondary.opacity(0.07))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
             }
         }
-        .padding(8)
-        .background(Color.secondary.opacity(0.07))
-        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .blockCard()
     }
 }
 
@@ -85,15 +191,16 @@ private struct StatusPreview: View {
     let payload: [String: Any]
 
     var body: some View {
-        HStack(spacing: 6) {
+        let color = statusColor(payload)
+        HStack(spacing: 8) {
             if let icon = payload["icon"] as? String {
-                Image(systemName: icon)
-                    .font(.caption)
-                    .foregroundStyle(statusColor)
+                Image(systemName: icon).font(.caption).foregroundStyle(color)
+            } else {
+                Circle().fill(color).frame(width: 8, height: 8)
             }
             VStack(alignment: .leading, spacing: 1) {
                 if let label = payload["label"] as? String {
-                    Text(label).font(.caption).foregroundStyle(statusColor)
+                    Text(label).font(.caption).foregroundStyle(color)
                 }
                 if let detail = payload["detail"] as? String {
                     Text(detail).font(.caption2).foregroundStyle(.secondary)
@@ -102,55 +209,8 @@ private struct StatusPreview: View {
             Spacer()
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(statusColor.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 7))
-    }
-
-    private var statusColor: Color {
-        switch payload["color"] as? String {
-        case "green":  return .green
-        case "red":    return .red
-        case "orange": return .orange
-        case "yellow": return .yellow
-        default:       return .blue
-        }
-    }
-}
-
-// MARK: - Info Card
-
-private struct InfoCardPreview: View {
-    let payload: [String: Any]
-
-    private var pairs: [(key: String, value: String)] {
-        guard let raw = payload["pairs"] as? [[String: String]] else { return [] }
-        return raw.compactMap { dict in
-            guard let k = dict["key"], let v = dict["value"] else { return nil }
-            return (k, v)
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if let title = payload["title"] as? String, !title.isEmpty {
-                Text(title).font(.subheadline).fontWeight(.medium)
-            }
-            ForEach(pairs, id: \.key) { pair in
-                HStack(alignment: .top) {
-                    Text(pair.key)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 80, alignment: .leading)
-                    Text(pair.value)
-                        .font(.caption)
-                        .lineLimit(2)
-                    Spacer()
-                }
-            }
-        }
-        .padding(8)
-        .background(Color.secondary.opacity(0.07))
+        .padding(.vertical, 6)
+        .background(color.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 7))
     }
 }
@@ -162,7 +222,7 @@ private struct AlertPreview: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: (payload["icon"] as? String) ?? "exclamationmark.triangle")
+            Image(systemName: (payload["icon"] as? String) ?? "bell.fill")
                 .font(.caption)
                 .foregroundStyle(.orange)
                 .frame(width: 14)
@@ -171,17 +231,49 @@ private struct AlertPreview: View {
                     Text(title).font(.caption).fontWeight(.medium)
                 }
                 if let body = payload["body"] as? String, !body.isEmpty {
-                    Text(body)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
+                    Text(body).font(.caption2).foregroundStyle(.secondary).lineLimit(4)
                 }
             }
             Spacer()
         }
-        .padding(8)
-        .background(Color.orange.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .blockCard(background: Color.orange.opacity(0.08))
+    }
+}
+
+// MARK: - Info Card
+
+private struct InfoCardPreview: View {
+    let payload: [String: Any]
+
+    private var pairs: [(key: String, value: String)] {
+        guard let raw = payload["pairs"] as? [[String: String]] else { return [] }
+        return raw.compactMap { d in
+            guard let k = d["key"], let v = d["value"] else { return nil }
+            return (k, v)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if let title = payload["title"] as? String, !title.isEmpty {
+                Text(title).font(.subheadline).fontWeight(.medium)
+                Divider()
+            }
+            ForEach(pairs, id: \.key) { pair in
+                HStack(alignment: .top) {
+                    Text(pair.key)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 90, alignment: .leading)
+                    Text(pair.value)
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .lineLimit(2)
+                    Spacer()
+                }
+            }
+        }
+        .blockCard()
     }
 }
 
@@ -190,57 +282,86 @@ private struct AlertPreview: View {
 private struct CountdownPreview: View {
     let payload: [String: Any]
 
+    private var targetDate: Date? {
+        guard let str = payload["time"] as? String else { return nil }
+        return ISO8601DateFormatter().date(from: str)
+    }
+
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "clock")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        HStack(spacing: 8) {
+            Image(systemName: "clock").font(.caption).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 1) {
-                if let label = payload["label"] as? String, let time = payload["time"] as? String {
-                    Text("\(label) in …").font(.caption)
-                    Text(time).font(.caption2).foregroundStyle(.secondary)
+                if let label = payload["label"] as? String {
+                    Text(label).font(.caption).fontWeight(.medium)
+                }
+                if let date = targetDate {
+                    if date > Date() {
+                        Text(date, style: .relative)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Overdue")
+                            .font(.caption2)
+                            .foregroundStyle(.red)
+                    }
                 }
             }
             Spacer()
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(Color.secondary.opacity(0.07))
-        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .padding(.vertical, 6)
+        .blockCard()
     }
 }
 
-// MARK: - Prompt / Chat Prompt
+// MARK: - Prompt
 
 private struct PromptPreview: View {
     let payload: [String: Any]
     var onRespond: ((String) -> Void)?
 
     @State private var text = ""
+    @State private var responded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let title = payload["title"] as? String, !title.isEmpty {
                 Text(title).font(.subheadline).fontWeight(.medium)
             }
-            if let context = payload["context"] as? String, !context.isEmpty {
-                Text(context).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-            }
-            if let respond = onRespond {
-                HStack(spacing: 6) {
+            if responded {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill").font(.caption).foregroundStyle(.secondary)
+                    Text(text).font(.caption).foregroundStyle(.secondary)
+                }
+            } else if let respond = onRespond {
+                let isMultiline = payload["multiline"] as? Bool ?? false
+                if isMultiline {
+                    TextEditor(text: $text)
+                        .font(.caption)
+                        .frame(minHeight: 60, maxHeight: 80)
+                        .scrollContentBackground(.hidden)
+                        .background(Color.secondary.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                } else {
                     TextField(
                         (payload["placeholder"] as? String) ?? "Type a response…",
                         text: $text
                     )
                     .textFieldStyle(.roundedBorder)
                     .font(.caption)
-                    Button("Send") {
+                }
+                HStack {
+                    Spacer()
+                    Button {
                         guard !text.isEmpty else { return }
                         respond(text)
-                        text = ""
+                        responded = true
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(text.isEmpty ? Color.secondary : Color.accentColor)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(.plain)
                     .disabled(text.isEmpty)
                 }
             } else {
@@ -248,14 +369,303 @@ private struct PromptPreview: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .italic()
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, 6).padding(.vertical, 4)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.secondary.opacity(0.1))
                     .clipShape(RoundedRectangle(cornerRadius: 5))
             }
         }
-        .padding(8)
+        .blockCard()
+    }
+}
+
+// MARK: - Chat Prompt
+
+private struct ChatPromptPreview: View {
+    let payload: [String: Any]
+    var onRespond: ((String) -> Void)?
+
+    @State private var text = ""
+    @State private var responded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Agent context bubble
+            if let context = payload["context"] as? String, !context.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ClaudeBrandHeader()
+                    markdownText(context)
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                        .lineLimit(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(8)
+                .background(Color.secondary.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
+            if responded {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill").font(.caption).foregroundStyle(.secondary)
+                    Text(text).font(.caption).foregroundStyle(.secondary)
+                }
+            } else if let respond = onRespond {
+                HStack(spacing: 6) {
+                    TextField(
+                        (payload["placeholder"] as? String) ?? "Reply to Claude…",
+                        text: $text
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+                    .onSubmit {
+                        guard !text.isEmpty else { return }
+                        respond(text); responded = true
+                    }
+                    Button {
+                        guard !text.isEmpty else { return }
+                        respond(text); responded = true
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(text.isEmpty ? Color.secondary : Color.accentColor)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(text.isEmpty)
+                }
+            } else {
+                Text((payload["placeholder"] as? String) ?? "Reply to Claude…")
+                    .font(.caption2).foregroundStyle(.tertiary).italic()
+                    .padding(.horizontal, 6).padding(.vertical, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.secondary.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+            }
+        }
+        .blockCard()
+    }
+}
+
+// MARK: - Claude Message
+
+private struct ClaudeMessagePreview: View {
+    let payload: [String: Any]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ClaudeBrandHeader()
+            Divider()
+            if let text = payload["text"] as? String, !text.isEmpty {
+                markdownText(text)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+        }
+        .blockCard()
+    }
+}
+
+// MARK: - Agent Session
+
+private struct AgentSessionPreview: View {
+    let payload: [String: Any]
+    var onRespond: ((String) -> Void)?
+
+    @State private var replyText = ""
+    @State private var responded = false
+
+    private var agentName: String { payload["agent_name"] as? String ?? "Claude" }
+    private var isWorking: Bool   { payload["is_working"] as? Bool ?? false }
+    private var lastMessage: String? { payload["last_message"] as? String }
+    private var placeholder: String { payload["placeholder"] as? String ?? "Reply to \(agentName)…" }
+    private var project: String?  { payload["project"] as? String }
+
+    private var brandColor: Color {
+        hexColor(payload["brand_color"] as? String) ?? .accentColor
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Agent + project header
+            HStack(spacing: 6) {
+                ClaudeBrandHeader(label: agentName, color: brandColor)
+                if let proj = project, !proj.isEmpty {
+                    Text("·").font(.caption2).foregroundStyle(.tertiary)
+                    Text(proj)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                if isWorking {
+                    ProgressView().controlSize(.mini).tint(brandColor)
+                }
+            }
+
+            // Message / working state
+            Group {
+                if isWorking, let msg = lastMessage, !msg.isEmpty {
+                    markdownText(msg)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .italic()
+                        .lineLimit(4)
+                } else if isWorking {
+                    HStack(spacing: 4) {
+                        Text("Working…").font(.caption).foregroundStyle(.secondary).italic()
+                    }
+                } else if let msg = lastMessage, !msg.isEmpty {
+                    markdownText(msg)
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                        .lineLimit(6)
+                        .textSelection(.enabled)
+                } else {
+                    Text("Waiting for input…")
+                        .font(.caption).foregroundStyle(.secondary).italic()
+                }
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            // Reply row
+            if responded {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill").font(.caption).foregroundStyle(.secondary)
+                    Text(replyText).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            } else if let respond = onRespond {
+                HStack(spacing: 6) {
+                    TextField(placeholder, text: $replyText)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption)
+                        .onSubmit {
+                            guard !replyText.isEmpty else { return }
+                            respond(replyText); responded = true
+                        }
+                    Button {
+                        guard !replyText.isEmpty else { return }
+                        respond(replyText); responded = true
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(replyText.isEmpty ? Color.secondary : brandColor)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(replyText.isEmpty)
+                }
+            } else {
+                Text(placeholder)
+                    .font(.caption2).foregroundStyle(.tertiary).italic()
+                    .padding(.horizontal, 6).padding(.vertical, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.secondary.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+            }
+        }
+        .blockCard()
+    }
+}
+
+// MARK: - Repo row (extracted to help the type checker)
+
+private struct RepoRowView: View {
+    let name: String
+    let path: String
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(name)
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.primary)
+                    Text(path)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer()
+                Image(systemName: "arrow.right.circle")
+                    .font(.caption)
+                    .foregroundStyle(Color.accentColor)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Start Session
+
+private struct StartSessionPreview: View {
+    let payload: [String: Any]
+    var onRespond: ((String) -> Void)?
+
+    @State private var expanded = false
+
+    private var repos: [(name: String, path: String)] {
+        guard let raw = payload["repos"] as? [[String: Any]] else { return [] }
+        return raw.compactMap { d in
+            guard let n = d["name"] as? String, let p = d["path"] as? String else { return nil }
+            return (n, p)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header button
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.body)
+                        .foregroundStyle(Color.accentColor)
+                    Text("Start Session")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    if !repos.isEmpty {
+                        Text("\(repos.count) repo\(repos.count == 1 ? "" : "s")")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(8)
+
+            if expanded && !repos.isEmpty {
+                Divider()
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(repos.enumerated()), id: \.offset) { idx, repo in
+                        RepoRowView(name: repo.name, path: repo.path) {
+                            onRespond?(repo.path)
+                            expanded = false
+                        }
+                        .disabled(onRespond == nil)
+                        if idx < repos.count - 1 {
+                            Divider().padding(.leading, 8)
+                        }
+                    }
+                }
+            }
+        }
         .background(Color.secondary.opacity(0.07))
         .clipShape(RoundedRectangle(cornerRadius: 7))
     }
@@ -267,55 +677,60 @@ private struct ListPreview: View {
     let payload: [String: Any]
     var onRespond: ((String) -> Void)?
 
+    @State private var selectedID: String? = nil
+
     private var items: [(id: String, label: String, subtitle: String?)] {
         guard let raw = payload["items"] as? [[String: Any]] else { return [] }
-        return raw.compactMap { dict in
-            guard let id = dict["id"] as? String, let label = dict["label"] as? String else { return nil }
-            return (id, label, dict["subtitle"] as? String)
+        return raw.compactMap { d in
+            guard let id = d["id"] as? String, let label = d["label"] as? String else { return nil }
+            return (id, label, d["subtitle"] as? String)
         }
     }
 
-    private var actions: [String] {
-        payload["actions"] as? [String] ?? []
-    }
+    private var actions: [String] { payload["actions"] as? [String] ?? [] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let title = payload["title"] as? String, !title.isEmpty {
-                Text(title).font(.caption).fontWeight(.medium)
+                Text(title)
+                    .font(.caption)
+                    .fontWeight(.medium)
                     .padding(.horizontal, 8).padding(.top, 7).padding(.bottom, 5)
+                Divider()
             }
-            ForEach(Array(items.prefix(5).enumerated()), id: \.element.id) { idx, item in
+            ForEach(Array(items.enumerated()), id: \.element.id) { idx, item in
                 Button {
+                    selectedID = item.id
                     onRespond?(item.id)
                 } label: {
                     HStack {
+                        let isSelected = selectedID == item.id
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(item.label).font(.caption).lineLimit(2)
-                                .foregroundStyle(.primary)
+                            Text(item.label)
+                                .font(.caption)
+                                .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                                .lineLimit(2)
                             if let sub = item.subtitle {
                                 Text(sub).font(.caption2).foregroundStyle(.secondary)
                             }
                         }
                         Spacer()
-                        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                     }
-                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .padding(.horizontal, 8).padding(.vertical, 6)
                     .contentShape(Rectangle())
+                    .background(selectedID == item.id ? Color.accentColor.opacity(0.07) : Color.clear)
                 }
                 .buttonStyle(.plain)
                 .disabled(onRespond == nil)
-                if idx < min(items.count, 5) - 1 {
+                if idx < items.count - 1 {
                     Divider().padding(.leading, 8)
                 }
             }
-            if items.count > 5 {
-                Text("+ \(items.count - 5) more")
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-            }
             if !actions.isEmpty {
-                if !items.isEmpty { Divider() }
+                Divider()
                 HStack(spacing: 6) {
                     ForEach(actions, id: \.self) { action in
                         Button(action) { onRespond?(action) }
@@ -338,24 +753,35 @@ private struct DetailPreview: View {
     let payload: [String: Any]
     var onRespond: ((String) -> Void)?
 
+    @State private var responded: String? = nil
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
             if let title = payload["title"] as? String, !title.isEmpty {
                 Text(title).font(.subheadline).fontWeight(.medium)
+                Divider()
             }
             if let body = payload["body"] as? String, !body.isEmpty {
-                Text(body).font(.caption).foregroundStyle(.secondary).lineLimit(5)
+                Text(body)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
             }
             if let actions = payload["actions"] as? [String], !actions.isEmpty {
                 HStack(spacing: 6) {
                     ForEach(actions, id: \.self) { action in
                         Button {
+                            responded = action
                             onRespond?(action)
                         } label: {
                             Text(action)
                                 .font(.caption2)
-                                .padding(.horizontal, 7).padding(.vertical, 3)
-                                .background(Color.accentColor.opacity(0.1))
+                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                .background(
+                                    responded == action
+                                        ? Color.accentColor.opacity(0.2)
+                                        : Color.accentColor.opacity(0.1)
+                                )
                                 .clipShape(RoundedRectangle(cornerRadius: 4))
                         }
                         .buttonStyle(.plain)
@@ -365,9 +791,7 @@ private struct DetailPreview: View {
                 }
             }
         }
-        .padding(8)
-        .background(Color.secondary.opacity(0.07))
-        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .blockCard()
     }
 }
 
@@ -380,9 +804,7 @@ private struct PickerPreview: View {
     @State private var selected: String = ""
     @State private var responded = false
 
-    private var options: [String] {
-        payload["options"] as? [String] ?? []
-    }
+    private var options: [String] { payload["options"] as? [String] ?? [] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -391,13 +813,8 @@ private struct PickerPreview: View {
             }
             if responded {
                 HStack(spacing: 4) {
-                    Image(systemName: "checkmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(selected)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
+                    Image(systemName: "checkmark.circle.fill").font(.caption).foregroundStyle(.secondary)
+                    Text(selected).font(.caption).foregroundStyle(.secondary)
                 }
             } else {
                 HStack(spacing: 8) {
@@ -413,16 +830,14 @@ private struct PickerPreview: View {
                             respond(selected)
                             responded = true
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                         .disabled(selected.isEmpty)
                     }
                 }
             }
         }
-        .padding(8)
-        .background(Color.secondary.opacity(0.07))
-        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .blockCard()
         .onAppear {
             if selected.isEmpty {
                 selected = (payload["selected"] as? String) ?? options.first ?? ""
@@ -438,10 +853,17 @@ private struct IconCardPreview: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "app.fill")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-                .frame(width: 32, height: 32)
+            if let iconName = payload["icon"] as? String {
+                Image(systemName: iconName)
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, height: 32)
+            } else {
+                Image(systemName: "square.grid.2x2")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, height: 32)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 if let title = payload["title"] as? String, !title.isEmpty {
                     Text(title).font(.subheadline).fontWeight(.medium)
@@ -452,157 +874,50 @@ private struct IconCardPreview: View {
             }
             Spacer()
         }
-        .padding(8)
-        .background(Color.secondary.opacity(0.07))
-        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .blockCard()
     }
 }
 
-// MARK: - AgentSession
+// MARK: - Feed Item
 
-private struct AgentSessionPreview: View {
+private struct FeedItemPreview: View {
     let payload: [String: Any]
-    var onRespond: ((String) -> Void)?
 
-    @State private var replyText = ""
-
-    private var agentName: String { payload["agent_name"] as? String ?? "Claude" }
-    private var isWorking: Bool { payload["is_working"] as? Bool ?? false }
-    private var lastMessage: String? { payload["last_message"] as? String }
-    private var placeholder: String { payload["placeholder"] as? String ?? "Reply to \(agentName)…" }
-
-    private var brandColor: Color {
-        guard let hex = payload["brand_color"] as? String else { return .accentColor }
-        let cleaned = hex.trimmingCharacters(in: .init(charactersIn: "#"))
-        guard cleaned.count == 6, let value = UInt64(cleaned, radix: 16) else { return .accentColor }
-        let r = Double((value >> 16) & 0xFF) / 255
-        let g = Double((value >> 8) & 0xFF) / 255
-        let b = Double(value & 0xFF) / 255
-        return Color(red: r, green: g, blue: b)
+    private var itemColor: Color {
+        switch payload["color"] as? String {
+        case "green":  return .green
+        case "red":    return .red
+        case "orange": return .orange
+        case "yellow": return .yellow
+        case "blue":   return .blue
+        default:       return .accentColor
+        }
     }
 
-    private var project: String? { payload["project"] as? String }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Project / session label
-            if let proj = project, !proj.isEmpty {
-                Text(proj)
+        HStack(alignment: .top, spacing: 8) {
+            if let icon = payload["icon"] as? String {
+                Image(systemName: icon)
                     .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
+                    .foregroundStyle(itemColor)
+                    .frame(width: 14)
             }
-            // Message / working state box
-            Group {
-                if isWorking {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.small).tint(brandColor)
-                        Text("\(agentName) is working…")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .italic()
-                    }
-                } else if let msg = lastMessage, !msg.isEmpty {
-                    Text(msg)
-                        .font(.caption)
-                        .foregroundStyle(.primary)
-                        .lineLimit(6)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    Text("Waiting for input…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .italic()
+            VStack(alignment: .leading, spacing: 2) {
+                if let title = payload["title"] as? String, !title.isEmpty {
+                    Text(title).font(.caption).fontWeight(.medium)
+                }
+                if let body = payload["body"] as? String, !body.isEmpty {
+                    Text(body).font(.caption2).foregroundStyle(.secondary).lineLimit(3)
+                }
+                if let ts = payload["timestamp"] as? String,
+                   let date = ISO8601DateFormatter().date(from: ts) {
+                    Text(date, style: .relative)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
             }
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.secondary.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-
-            // Reply input
-            if let respond = onRespond {
-                HStack(spacing: 6) {
-                    TextField(placeholder, text: $replyText)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.caption)
-                        .onSubmit {
-                            guard !replyText.isEmpty else { return }
-                            respond(replyText)
-                            replyText = ""
-                        }
-                    Button("Send") {
-                        guard !replyText.isEmpty else { return }
-                        respond(replyText)
-                        replyText = ""
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(replyText.isEmpty)
-                }
-            } else {
-                Text(placeholder)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .italic()
-            }
-        }
-        .padding(8)
-        .background(Color.secondary.opacity(0.07))
-        .clipShape(RoundedRectangle(cornerRadius: 7))
-    }
-}
-
-// MARK: - ClaudeMessage
-
-private struct ClaudeMessagePreview: View {
-    let payload: [String: Any]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Claude Code")
-                .font(.caption2)
-                .fontWeight(.medium)
-                .foregroundStyle(.secondary)
-            if let text = payload["text"] as? String, !text.isEmpty {
-                Text(text)
-                    .font(.caption)
-                    .foregroundStyle(.primary)
-                    .lineLimit(4)
-            }
-        }
-        .padding(8)
-        .background(Color.secondary.opacity(0.07))
-        .clipShape(RoundedRectangle(cornerRadius: 7))
-    }
-}
-
-// MARK: - StartSession
-
-private struct StartSessionPreview: View {
-    let payload: [String: Any]
-
-    private var repoCount: Int {
-        (payload["repos"] as? [[String: Any]])?.count ?? 0
-    }
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "plus.circle")
-                .foregroundStyle(.secondary)
-            Text("Start Session")
-                .font(.subheadline)
-                .fontWeight(.medium)
             Spacer()
-            if repoCount > 0 {
-                Text("\(repoCount) repos")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
-        .padding(8)
-        .background(Color.secondary.opacity(0.07))
-        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .blockCard()
     }
 }

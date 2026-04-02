@@ -70,6 +70,8 @@ struct AskMacApp: App {
                 .environment(scriptManager)
                 .environment(actionHistory)
                 .environment(heartbeat)
+                .environment(cloudKit)
+                .environment(messageWatcher)
         }
         .defaultSize(width: 720, height: 520)
         .defaultPosition(.center)
