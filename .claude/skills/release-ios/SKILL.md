@@ -78,15 +78,38 @@ Show the user:
 
 CI validation running at: https://github.com/Gr8Gatsby/ask/actions
 
-Next step — run the local release script to archive, sign, and upload to TestFlight:
+Next step — run the local release script to archive, sign, and upload to TestFlight.
 
-  export ASC_KEY_ID="your-key-id"
-  export ASC_ISSUER_ID="your-issuer-id"
+If you have the release-ios shell function in ~/.zshrc:
+  release-ios {version}
+
+Otherwise load credentials from Keychain manually:
+  ASC_KEY_ID=$(security find-generic-password -a "$USER" -s ASC_KEY_ID -w) \
+  ASC_ISSUER_ID=$(security find-generic-password -a "$USER" -s ASC_ISSUER_ID -w) \
   ./scripts/release-ios.sh {version}
 
-The ASC API key must be at:
-  ~/.appstoreconnect/private_keys/AuthKey_{ASC_KEY_ID}.p8
+Credentials are stored in Keychain:
+  ASC_KEY_ID:     Q2A223X6SQ
+  ASC_ISSUER_ID:  69a6de81-7ccf-47e3-e053-5b8c7c11a4d1
+  API key file:   ~/.appstoreconnect/private_keys/AuthKey_Q2A223X6SQ.p8
+
+Note: The ~/.zshrc release-ios function loads these automatically:
+  release-ios() {
+    ASC_KEY_ID=$(security find-generic-password -a "$USER" -s ASC_KEY_ID -w) \
+    ASC_ISSUER_ID=$(security find-generic-password -a "$USER" -s ASC_ISSUER_ID -w) \
+    /Users/kevin/Documents/code/ask/scripts/release-ios.sh "$@"
+  }
 
 Upload takes ~5 min. Apple processes the build after upload (~10–30 min).
 Monitor: https://appstoreconnect.apple.com
 ```
+
+## Prerequisites checklist
+
+Before running, verify:
+- [ ] Apple Distribution cert in Keychain: `Apple Distribution: Kevin Hill (B5J28L8ARB)`
+- [ ] ASC_KEY_ID in Keychain: `Q2A223X6SQ`
+- [ ] ASC_ISSUER_ID in Keychain: `69a6de81-7ccf-47e3-e053-5b8c7c11a4d1`
+- [ ] API key file at: `~/.appstoreconnect/private_keys/AuthKey_Q2A223X6SQ.p8`
+- [ ] "Ask App Store" provisioning profile installed in Xcode
+- [ ] `release-ios` function in `~/.zshrc` for one-command uploads
