@@ -25,7 +25,7 @@ final class ScriptIconCache {
     /// matches the `ScriptGroup` fields the caller extracts.
     func update(from groups: [(id: String, name: String, sfSymbol: String?, iconData: String?)]) {
         guard !groups.isEmpty else { return }
-        var updated = groups.map {
+        let updated = groups.map {
             CachedScriptEntry(id: $0.id, name: $0.name, sfSymbol: $0.sfSymbol, iconData: $0.iconData)
         }
         // Preserve entries for scripts not in this load (could be from another

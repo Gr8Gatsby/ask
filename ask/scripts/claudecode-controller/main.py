@@ -57,6 +57,8 @@ class MCPClient:
         self._pending_tmux_targets: dict = {}
         # tmux_target -> asyncio.Task — background pane monitors
         self._tmux_monitors: dict = {}
+        # session_id -> asyncio.Task — active response capture (deduplicated per session)
+        self._capture_tasks: dict = {}
         # CWDs the user explicitly launched via Start Session — pid-* sessions only surface for these
         self._recently_launched_cwds: set = set()
         # Tile state
@@ -661,10 +663,11 @@ class MCPClient:
         tmux_target = self._pending_tmux_targets.pop(cwd, None)
         if tmux_target:
             entry['tmux_target'] = tmux_target
-        # When a hook-confirmed session registers, clear any pid-* placeholder for the same cwd
-        if not session_id.startswith('pid-'):
+        # When a hook-confirmed session registers, clear all old sessions for the same cwd
+        # (pid-* placeholders AND stale real sessions from previous runs).
+        if not session_id.startswith('pid-') and cwd:
             for sid in list(self._sessions.keys()):
-                if sid.startswith('pid-') and self._sessions[sid].get('cwd') == cwd:
+                if self._sessions[sid].get('cwd') == cwd:
                     self._sessions.pop(sid)
                     self._recently_launched_cwds.discard(cwd)
                     asyncio.create_task(self.clear_block(self._session_block_id(sid)))
@@ -685,7 +688,12 @@ class MCPClient:
             self._save_sessions()  # persist TTY immediately so it survives restarts
         self._working_sessions.add(session_id)
         if is_new:
-            asyncio.create_task(self._emit_session_block(session_id))
+            if cwd:
+                asyncio.create_task(self.clear_block(self._launching_block_id(cwd)))
+        # Always re-emit so iOS sees is_working=true for every new turn, not just the first
+        asyncio.create_task(self._emit_session_block(session_id))
+        # Start (or restart) response capture for this turn
+        self._start_capture(session_id)
 
     def _handle_session_stop(self, msg):
         session_id = msg.get('session_id', '')
@@ -731,6 +739,9 @@ class MCPClient:
         project = session.get('project', 'Claude Code')
         cwd = session.get('cwd', '')
         block_id = self._session_block_id(session_id)
+        # Fall back to stored last_message so heartbeats / re-emits never clear it.
+        if not last_message:
+            last_message = session.get('last_message', '')
         payload: dict = {
             'session_id': session_id,
             'project': project,
@@ -872,6 +883,16 @@ end tell
             if info.get('tmux_target') == tmux_target:
                 return sid
         return None
+
+    def _start_capture(self, session_id: str):
+        """Cancel any in-flight capture for this session and start a fresh one."""
+        old = self._capture_tasks.pop(session_id, None)
+        if old and not old.done():
+            old.cancel()
+        tmux_target = self._sessions.get(session_id, {}).get('tmux_target')
+        if tmux_target:
+            task = asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
+            self._capture_tasks[session_id] = task
 
     async def _capture_tmux_response(self, tmux_target: str, session_id: str):
         """After routing a message, poll until Claude Code is idle, then emit last_message."""
@@ -1098,6 +1119,12 @@ end tell
             elif msg_type == 'notification':
                 await self._handle_notification(msg)
 
+            elif msg_type == 'chat_prompt':
+                # notification.py sends this when Claude is waiting for input.
+                # Update the session's last_message with the context so iOS
+                # shows what Claude is asking rather than the previous response.
+                await self._handle_chat_prompt(msg)
+
             elif msg_type == 'tool_executed':
                 await self._handle_tool_executed(msg)
 
@@ -1271,6 +1298,28 @@ end tell
             await self.emit_block(block_id, 'alert', payload, ttl=3600)
         except Exception as e:
             print(f'[claudecode-controller] notification emit failed: {e}', file=sys.stderr)
+        # Also refresh the session block so the tile reflects Claude's latest context.
+        # Prefer the body (more descriptive); fall back to title.
+        context = msg.get('body', '').strip() or msg.get('title', '').strip()
+        session_id = msg.get('session_id', '')
+        if context and session_id and session_id in self._sessions:
+            asyncio.create_task(self._emit_session_block(session_id, last_message=context))
+
+    async def _handle_chat_prompt(self, msg):
+        """Claude is waiting for user input — update the session block so iOS
+        shows what Claude needs rather than the previous response."""
+        session_id = msg.get('session_id', '')
+        context = msg.get('context', '').strip() or msg.get('title', '').strip()
+        if not session_id or session_id not in self._sessions:
+            # Fall back to updating whichever session shares the CWD
+            cwd = msg.get('cwd', '')
+            if cwd:
+                for sid, info in self._sessions.items():
+                    if info.get('cwd') == cwd:
+                        session_id = sid
+                        break
+        if session_id and context:
+            asyncio.create_task(self._emit_session_block(session_id, last_message=context))
 
     async def start_socket_server(self):
         os.makedirs(os.path.dirname(SOCKET_PATH), exist_ok=True)
@@ -1317,7 +1366,12 @@ async def _session_heartbeat(client):
                 if tty:
                     info['tty'] = tty
         client._write_status()
-        for session_id in list(client._sessions.keys()):
+        for session_id, info in list(client._sessions.items()):
+            # Skip re-emit if block was written recently — TTL is SESSION_TTL (3600s),
+            # so only re-emit when more than half the TTL has elapsed.
+            last_emitted = info.get('last_emitted', 0)
+            if time.time() - last_emitted < SESSION_TTL * 0.5:
+                continue
             try:
                 await client._emit_session_block(session_id)
             except Exception as e:

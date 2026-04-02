@@ -51,6 +51,7 @@ struct ManagedScript: Identifiable {
     let description: String? // manifest.description
     let icon: String?       // SF Symbol fallback
     var iconImage: NSImage? // loaded from icon_file
+    var svgString: String?  // raw SVG markup, used for dark-mode colour manipulation
     var status: ScriptStatus
     var isEnabled: Bool
     var lastError: String?  // last stderr output before most recent crash
@@ -651,7 +652,8 @@ final class ScriptManager {
             scripts[idx].isEnabled = isEnabled
             if let img = iconImage { scripts[idx].iconImage = img }
         } else {
-            scripts.append(ManagedScript(id: id, name: name, version: manifest?.version, description: manifest?.description, icon: icon, iconImage: iconImage, status: status, isEnabled: isEnabled))
+            let svgString = manifests[id]?.svgString
+            scripts.append(ManagedScript(id: id, name: name, version: manifest?.version, description: manifest?.description, icon: icon, iconImage: iconImage, svgString: svgString, status: status, isEnabled: isEnabled))
         }
     }
 }

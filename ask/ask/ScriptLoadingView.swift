@@ -1,10 +1,12 @@
 import SwiftUI
 
 /// Shown instead of a spinner while the first CloudKit load is in progress.
-/// Renders cached script icons as floating bubbles above the toolbar with a
-/// gentle idle bob. When `hasLoaded` becomes true each icon plays its exit:
-///   - matched icon  → settles downward and shrinks (lands in its tile)
-///   - unmatched icon → flies upward off-screen (script no longer active)
+/// Renders cached script icons as skeleton placeholder tiles — same layout and
+/// position as the real `ScriptTileView` rows. Each icon bobs gently in its tile.
+///
+/// When `hasLoaded` becomes true:
+///   - matched tile  → fades out in place, revealing the live tile behind it
+///   - unmatched tile → slides up and off screen (script no longer active)
 struct ScriptLoadingView: View {
     let entries: [CachedScriptEntry]
     /// IDs that appeared in the loaded `scriptGroups`. Empty while loading.
@@ -12,12 +14,10 @@ struct ScriptLoadingView: View {
     let hasLoaded: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
-            HStack(spacing: 18) {
-                // Cap at 8 icons so they fit comfortably on any screen width
+        ScrollView {
+            LazyVStack(spacing: 8) {
                 ForEach(Array(entries.prefix(8).enumerated()), id: \.element.id) { i, entry in
-                    FloatingIconBubble(
+                    SkeletonTileRow(
                         entry: entry,
                         index: i,
                         hasLoaded: hasLoaded,
@@ -25,98 +25,94 @@ struct ScriptLoadingView: View {
                     )
                 }
             }
-            // Position just above the floating toolbar capsule (which is ~76pt from bottom)
-            .padding(.bottom, 100)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 20)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .allowsHitTesting(false)
     }
 }
 
-// MARK: - Individual floating icon
+// MARK: - Individual skeleton tile
 
-private struct FloatingIconBubble: View {
+private struct SkeletonTileRow: View {
     let entry: CachedScriptEntry
     let index: Int
     let hasLoaded: Bool
-    let settles: Bool   // true → animate down into tile; false → fly off top
+    let settles: Bool   // true → fade in-place; false → slide up and off
 
     @State private var bobOffset: CGFloat = 0
-    @State private var exitYOffset: CGFloat = 0
-    @State private var exitScale: CGFloat = 1
-    @State private var exitOpacity: Double = 1
+    @State private var tileYOffset: CGFloat = 0
+    @State private var tileOpacity: Double = 1
 
-    /// Small per-icon phase delay so the bobbing looks organic rather than
-    /// synchronized. Derived deterministically from the script ID so it's
-    /// stable across reloads.
-    private var bobPhase: Double {
+    /// Deterministic width for the name placeholder bar (looks more natural than
+    /// all bars being the same width).
+    private var namePlaceholderWidth: CGFloat {
         let hash = abs(entry.id.hashValue)
-        return Double(hash % 6) * 0.15   // 0…0.75 s offset
+        return CGFloat(90 + (hash % 5) * 18)  // 90…162 pt
+    }
+
+    /// Small per-icon phase delay so the bobbing looks organic.
+    private var bobPhase: Double {
+        Double(abs(entry.id.hashValue) % 6) * 0.15
     }
 
     var body: some View {
-        ZStack {
-            Circle()
-                .fill(Color(.secondarySystemGroupedBackground))
-                .frame(width: 52, height: 52)
-                .shadow(color: .black.opacity(0.08), radius: 6, y: 3)
+        HStack(spacing: 12) {
+            ScriptIconView(
+                svgString: nil,
+                iconData: entry.iconData,
+                sfSymbol: entry.sfSymbol ?? "terminal.fill"
+            )
+            .frame(width: 30, height: 30)
+            .offset(y: bobOffset)
 
-            iconImage
-                .frame(width: 28, height: 28)
+            VStack(alignment: .leading, spacing: 5) {
+                Capsule()
+                    .fill(Color(.tertiarySystemFill))
+                    .frame(width: namePlaceholderWidth, height: 11)
+                Capsule()
+                    .fill(Color(.tertiarySystemFill))
+                    .frame(width: 60, height: 8)
+            }
+
+            Spacer()
         }
-        .scaleEffect(exitScale)
-        .opacity(exitOpacity)
-        .offset(y: bobOffset + exitYOffset)
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity, minHeight: 64, maxHeight: 64, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .offset(y: tileYOffset)
+        .opacity(tileOpacity)
         .onAppear { startBobbing() }
         .onChange(of: hasLoaded) { _, loaded in
             guard loaded else { return }
-            playExitAnimation()
-        }
-    }
-
-    @ViewBuilder
-    private var iconImage: some View {
-        if let data = entry.iconData,
-           let imageData = Data(base64Encoded: data),
-           let uiImage = UIImage(data: imageData) {
-            Image(uiImage: uiImage)
-                .resizable()
-                .scaledToFit()
-        } else {
-            Image(systemName: entry.sfSymbol ?? "terminal.fill")
-                .font(.title3)
-                .foregroundStyle(.secondary)
+            let delay = Double(index) * 0.06
+            if settles {
+                // Stop the bob, then fade out to reveal the live tile underneath
+                withAnimation(.spring(response: 0.25).delay(delay)) {
+                    bobOffset = 0
+                }
+                withAnimation(.easeOut(duration: 0.22).delay(delay + 0.05)) {
+                    tileOpacity = 0
+                }
+            } else {
+                // Script is gone — slide the tile up and out
+                withAnimation(.easeIn(duration: 0.28).delay(delay)) {
+                    tileYOffset = -60
+                    tileOpacity = 0
+                }
+            }
         }
     }
 
     private func startBobbing() {
-        // Delay the start so icons don't all begin on the same frame
         DispatchQueue.main.asyncAfter(deadline: .now() + bobPhase) {
             withAnimation(
                 .easeInOut(duration: 0.85 + bobPhase * 0.3)
                 .repeatForever(autoreverses: true)
             ) {
-                bobOffset = -8
-            }
-        }
-    }
-
-    private func playExitAnimation() {
-        // Stagger exits so they don't all disappear simultaneously
-        let delay = Double(index) * 0.07
-        if settles {
-            // Icon "lands" in its tile — drops down, shrinks, fades
-            withAnimation(.spring(response: 0.38, dampingFraction: 0.65).delay(delay)) {
-                exitYOffset = 80
-                exitScale = 0.15
-                exitOpacity = 0
-            }
-        } else {
-            // Script not loaded / stale — icon flies upward off screen
-            withAnimation(.easeIn(duration: 0.32).delay(delay)) {
-                exitYOffset = -350
-                exitScale = 0.6
-                exitOpacity = 0
+                bobOffset = -4
             }
         }
     }

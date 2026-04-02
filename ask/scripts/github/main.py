@@ -356,8 +356,7 @@ class GitReposScript:
             label = f'All {total} repos up to date'
             color = 'green'
         await self.mcp.emit_block(BLOCK_TILE, 'tile', {
-            'label': 'Git Repos',
-            'body':  label,
+            'label': label,
             'status_color': color,
         }, ttl=600)
 

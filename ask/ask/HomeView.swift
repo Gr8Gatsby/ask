@@ -26,17 +26,49 @@ struct ScriptGroup: Identifiable {
         blocks.first(where: { $0.blockType == .tile })?.tilePayload
     }
 
+    /// All agent session payloads for this script.
+    private var agentSessions: [RKAgentSessionPayload] {
+        blocks.compactMap { $0.blockType == .agentSession ? $0.agentSessionPayload : nil }
+    }
+
     /// Action required only when a script explicitly sets action_required: true in its tile block.
     var isActionRequired: Bool { tileBlock?.actionRequired == true }
 
-    /// Short status label: tile block takes priority, then first status block.
-    var tileLabel: String? { tileBlock?.label ?? blocks.first(where: { $0.blockType == .status })?.statusPayload?.label }
+    /// Short status label: tile > status block > agent session count.
+    var tileLabel: String? {
+        if let label = tileBlock?.label { return label }
+        if let label = blocks.first(where: { $0.blockType == .status })?.statusPayload?.label { return label }
+        let sessions = agentSessions
+        guard !sessions.isEmpty else { return nil }
+        let working = sessions.filter { $0.isWorking == true }.count
+        let count = sessions.count
+        let noun = count == 1 ? "session" : "sessions"
+        if working > 0 {
+            return working == count ? "\(count) \(noun) working" : "\(count) \(noun), \(working) working"
+        }
+        return "\(count) \(noun)"
+    }
 
-    /// Status color: tile block takes priority, then first status block.
-    var tileStatusColor: String? { tileBlock?.statusColor ?? blocks.first(where: { $0.blockType == .status })?.statusPayload?.color }
+    /// Status color: tile > status block > blue when working, gray otherwise.
+    var tileStatusColor: String? {
+        if let c = tileBlock?.statusColor { return c }
+        if let c = blocks.first(where: { $0.blockType == .status })?.statusPayload?.color { return c }
+        let sessions = agentSessions
+        guard !sessions.isEmpty else { return nil }
+        return sessions.contains(where: { $0.isWorking == true }) ? "blue" : "gray"
+    }
 
-    /// Optional longer body text shown below the status line on the tile.
-    var tileBody: String? { tileBlock?.body }
+    /// Body text: tile block > most recent agent session last message (first line).
+    var tileBody: String? {
+        if let body = tileBlock?.body { return body }
+        let sessions = agentSessions
+        let active = sessions.first(where: { $0.isWorking == true }) ?? sessions.first
+        if let msg = active?.lastMessage, !msg.isEmpty {
+            let firstLine = msg.components(separatedBy: "\n").first(where: { !$0.isEmpty }) ?? msg
+            return String(firstLine.prefix(120))
+        }
+        return nil
+    }
 
     /// Countdown block payload, if the script emitted one.
     var countdownPayload: RKCountdownPayload? {
@@ -85,6 +117,7 @@ struct HomeView: View {
     @State private var blocks: [RKBlock] = []
 
     @State private var hasLoaded = false
+    @State private var fetchFailed = false
     @State private var activeMachineID: String?
     @State private var showSettings = false
     @State private var selectedScriptID: String?
@@ -139,6 +172,8 @@ struct HomeView: View {
                 } else if !hasLoaded {
                     // Empty view — the loading overlay is shown via .overlay below
                     Color.clear
+                } else if machines.isEmpty && fetchFailed {
+                    fetchFailedState
                 } else if machines.isEmpty {
                     emptyState
                 } else if !deviceEnabled {
@@ -403,6 +438,17 @@ struct HomeView: View {
         }
     }
 
+    private var fetchFailedState: some View {
+        ContentUnavailableView {
+            Label("iCloud Unavailable", systemImage: "icloud.slash")
+        } description: {
+            Text("Could not reach iCloud. This is usually temporary — please try again in a moment.")
+        } actions: {
+            Button("Try Again") { Task { await load() } }
+                .buttonStyle(.borderedProminent)
+        }
+    }
+
     private var disabledState: some View {
         ContentUnavailableView {
             Label("Access Disabled", systemImage: "iphone.slash")
@@ -418,9 +464,12 @@ struct HomeView: View {
 
     private func load() async {
         do {
-            machines = try await cloudKit.fetchMachines()
+            let fresh = try await cloudKit.fetchMachines()
+            machines = fresh
+            fetchFailed = false
         } catch {
             print("[HomeView] Failed to fetch machines: \(error)")
+            fetchFailed = machines.isEmpty  // only flag as failed if we have nothing to show
         }
         if let machine = activeMachine {
             deviceEnabled = await cloudKit.checkDeviceEnabled(machineID: machine.id)
@@ -500,6 +549,7 @@ struct HomeView: View {
                 guard !Task.isCancelled else { break }
                 if let fresh = try? await cloudKit.fetchMachines(), !fresh.isEmpty {
                     machines = fresh
+                    fetchFailed = false
                 }
 
                 // Detect Mac coming back online — show queue review if needed.
@@ -1137,29 +1187,6 @@ private func blockStatusColor(_ colorString: String?) -> Color {
     case "red":    .red
     case "yellow": .yellow
     default:       .secondary
-    }
-}
-
-// MARK: - Script icon
-
-/// Renders the script's icon. Priority: PNG (from Mac SVG→PNG) → SF Symbol.
-private struct ScriptIconView: View {
-    let svgString: String?
-    let iconData: String?
-    let sfSymbol: String
-
-    var body: some View {
-        if let data = iconData,
-                  let imageData = Data(base64Encoded: data),
-                  let uiImage = UIImage(data: imageData) {
-            Image(uiImage: uiImage)
-                .resizable()
-                .scaledToFit()
-        } else {
-            Image(systemName: sfSymbol)
-                .font(.title3)
-                .foregroundStyle(.secondary)
-        }
     }
 }
 

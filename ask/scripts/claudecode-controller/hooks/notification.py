@@ -34,6 +34,8 @@ def _should_skip(title: str) -> bool:
 data = json.load(sys.stdin)
 title = data.get('title', data.get('message', 'Claude Code'))
 body = data.get('message', data.get('body', ''))
+session_id = data.get('session_id', '')
+cwd = data.get('cwd', '')
 
 is_waiting = title.strip().lower() in WAITING_TITLES
 
@@ -64,12 +66,16 @@ if is_waiting:
     # Update the persistent chat block with context — returns immediately
     send({
         'type': 'chat_prompt',
+        'session_id': session_id,
+        'cwd': cwd,
         'title': 'Reply to Claude',
         'context': body if body and body.strip().lower() != title.strip().lower() else '',
     })
 else:
     send({
         'type': 'notification',
+        'session_id': session_id,
+        'cwd': cwd,
         'title': title,
         'body': body,
     })

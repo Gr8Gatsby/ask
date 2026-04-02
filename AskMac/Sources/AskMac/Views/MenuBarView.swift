@@ -254,9 +254,11 @@ private struct ScriptRow: View {
     let script: ManagedScript
     let scriptManager: ScriptManager
 
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         HStack(spacing: 8) {
-            if let img = script.iconImage {
+            if let img = effectiveIcon {
                 Image(nsImage: img)
                     .resizable()
                     .scaledToFit()
@@ -302,5 +304,36 @@ private struct ScriptRow: View {
             .controlSize(.mini)
             .labelsHidden()
         }
+    }
+
+    private var effectiveIcon: NSImage? {
+        guard colorScheme == .dark, let svg = script.svgString else { return script.iconImage }
+        return darkModeImage(from: svg) ?? script.iconImage
+    }
+
+    private func darkModeImage(from svg: String) -> NSImage? {
+        var s = svg
+        // currentColor inherits black from NSImage rendering context — override first
+        s = s.replacingOccurrences(of: "currentColor", with: "white", options: .caseInsensitive)
+        let darkColors = ["#000000", "#000", "black", "#111111", "#111",
+                          "#1a1a1a", "#222222", "#222", "#333333", "#333"]
+        for color in darkColors {
+            for attr in ["fill", "stroke"] {
+                s = s.replacingOccurrences(of: "\(attr)=\"\(color)\"",
+                                           with: "\(attr)=\"white\"",
+                                           options: .caseInsensitive)
+                s = s.replacingOccurrences(of: "\(attr)='\(color)'",
+                                           with: "\(attr)='white'",
+                                           options: .caseInsensitive)
+                s = s.replacingOccurrences(of: "\(attr):\(color)",
+                                           with: "\(attr):white",
+                                           options: .caseInsensitive)
+                s = s.replacingOccurrences(of: "\(attr): \(color)",
+                                           with: "\(attr): white",
+                                           options: .caseInsensitive)
+            }
+        }
+        guard let data = s.data(using: .utf8) else { return nil }
+        return NSImage(data: data)
     }
 }

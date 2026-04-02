@@ -261,6 +261,7 @@ private struct MessageBubble: View {
     let message: DisplayMessage
     let isLastFromMe: Bool
 
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showStatus = false
 
     var body: some View {
@@ -272,7 +273,7 @@ private struct MessageBubble: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
                     .background(bubbleColor)
-                    .foregroundStyle(message.fromMe ? .white : .primary)
+                    .foregroundStyle(message.fromMe ? (colorScheme == .dark ? Color.black : Color.white) : .primary)
                     .clipShape(RoundedRectangle(cornerRadius: 18))
                 if !message.fromMe { Spacer(minLength: 60) }
             }

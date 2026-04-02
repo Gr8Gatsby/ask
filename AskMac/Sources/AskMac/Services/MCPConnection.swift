@@ -204,9 +204,15 @@ final class MCPConnection: @unchecked Sendable {
             let expiresAt = ttl.map { Date().addingTimeInterval($0) }
             // Determine if this block needs user input for CloudKit alert push delivery
             let requiresResponse: Bool
-            let responseTypes: Set<String> = ["confirmation", "prompt", "chat_prompt", "picker", "list", "detail", "agent_session"]
+            let responseTypes: Set<String> = ["confirmation", "prompt", "chat_prompt", "picker", "list", "detail"]
             if responseTypes.contains(blockType) {
                 requiresResponse = true
+            } else if blockType == "agent_session",
+                      let payloadDict = args["payload"] as? [String: Any],
+                      let isWorking = payloadDict["is_working"] as? Bool {
+                // Only notify when the session is idle — agent has responded and is waiting for input.
+                // Skip notification while the agent is actively working to avoid spam.
+                requiresResponse = !isWorking
             } else if blockType == "tile",
                       let payloadDict = args["payload"] as? [String: Any],
                       let actionRequired = payloadDict["action_required"] as? Bool {

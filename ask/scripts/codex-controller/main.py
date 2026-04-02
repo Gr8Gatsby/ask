@@ -98,7 +98,6 @@ def _write_hooks_json(hooks_dir: str):
             ],
             'PostToolUse': [
                 {
-                    'matcher': 'tool == "Bash"',
                     'hooks': [{'type': 'command', 'command': post}]
                 }
             ],
@@ -132,6 +131,8 @@ class MCPClient:
         self._pending_tmux_targets: dict = {}
         # tmux_target -> asyncio.Task — background pane monitors
         self._tmux_monitors: dict = {}
+        # session_id -> asyncio.Task — active response capture (deduplicated per session)
+        self._capture_tasks: dict = {}
         # CWDs the user explicitly launched via Start Session — pid-* sessions only surface for these
         self._recently_launched_cwds: set = set()
         # Tile state
@@ -187,11 +188,23 @@ class MCPClient:
                     print(f'[codex-controller] startup TTY backfill: {session_id} -> {tty}', file=sys.stderr)
         if backfilled:
             self._save_sessions()
+        # Backfill tmux_target from TTY so discovered sessions use the reliable
+        # tmux send-keys path instead of the AppleScript do-script fallback.
+        await self._backfill_tmux_targets()
         self._write_status()
         for session_id, info in list(self._sessions.items()):
-            asyncio.create_task(
-                self._emit_session_block(session_id, last_message=info.get('last_message', ''), touch_last_seen=False)
-            )
+            stored_msg = info.get('last_message', '')
+            if stored_msg:
+                asyncio.create_task(
+                    self._emit_session_block(session_id, last_message=stored_msg, touch_last_seen=False)
+                )
+            elif info.get('tmux_target'):
+                # No stored message — try to read the terminal now
+                asyncio.create_task(self._capture_tmux_once(info['tmux_target'], session_id))
+            else:
+                asyncio.create_task(
+                    self._emit_session_block(session_id, touch_last_seen=False)
+                )
         asyncio.create_task(self._emit_start_session_block())
 
     async def emit_block(self, block_id, block_type, payload, ttl=None):
@@ -216,8 +229,9 @@ class MCPClient:
             return []
 
     async def _update_tile(self):
-        # Count only sessions with an emitted block — excludes stale/filtered pid-* sessions
-        n = sum(1 for info in self._sessions.values() if info.get('last_emitted'))
+        # Count all sessions that have a TTY (surfaceable on iOS), whether or not the
+        # block has been emitted yet (avoids "No sessions" during startup race).
+        n = sum(1 for info in self._sessions.values() if info.get('tty'))
         if self._active_confirmations > 0:
             payload = {
                 'label': 'Approval needed',
@@ -439,6 +453,7 @@ class MCPClient:
         if not self._initialized:
             return
         await self._discover_active_processes()
+        await self._backfill_tmux_targets()
         for session_id, info in list(self._sessions.items()):
             if not info.get('last_emitted'):
                 asyncio.create_task(self._emit_session_block(session_id))
@@ -461,12 +476,21 @@ class MCPClient:
 
     @staticmethod
     def _parse_tmux_prompt(content: str):
-        """Detect a numbered interactive menu in tmux pane output.
-        Returns (body, options) list, or None if no prompt found."""
+        """Detect interactive prompts in tmux pane output.
+        Returns (body, options) or None if no prompt found.
+
+        Handles two formats:
+          1. Numbered menu   — lines like "1. Yes", "2. No" + footer "press enter"
+          2. Codex approval  — "Allow command?" + horizontal options "Yes    Always    No…"
+        """
         import re
+        # Strip ANSI escape codes so highlighting doesn't break matching
+        ansi_re = re.compile(r'\x1b\[[0-9;]*[mGKHFJABCDsuhl]|\x1b[()][AB012]|\x1b\][^\x07]*\x07|\r')
+        lines = [ansi_re.sub('', l) for l in content.splitlines()]
+
+        # --- Pattern 1: numbered menu (original) ---
         option_re = re.compile(r'^\s*>?\s*(\d+)[.)]\s+(.+)$')
         footer_re = re.compile(r'press\s+enter|to\s+continue', re.IGNORECASE)
-        lines = content.splitlines()
         options = []
         body_lines = []
         found_options = False
@@ -483,6 +507,30 @@ class MCPClient:
         if len(options) >= 2 and has_footer:
             body = ' '.join(body_lines[-2:]) if body_lines else 'Choose an option'
             return body, options
+
+        # --- Pattern 2: Codex "Allow command?" horizontal option menu ---
+        # Indicator: a line containing "Allow" followed by a word and "?"
+        allow_re = re.compile(r'\bAllow\b.{0,40}\?', re.IGNORECASE)
+        has_allow = any(allow_re.search(l) for l in lines)
+        if has_allow:
+            # Find the body (the Allow command? line)
+            body = 'Allow command?'
+            for l in lines:
+                if allow_re.search(l):
+                    body = l.strip() or body
+            # Find the options line: words/phrases separated by 2+ spaces
+            # e.g. "  Yes    Always    No, provide feedback"
+            for line in reversed(lines):  # options are near the bottom
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                parts = re.split(r'\s{2,}', stripped)
+                parts = [p.strip() for p in parts if p.strip()]
+                # Valid option line: 2-4 items, each ≤ 35 chars, no shell prompt chars
+                if (2 <= len(parts) <= 4
+                        and all(1 < len(p) <= 35 for p in parts)
+                        and not any(c in stripped for c in ('$', '%', '#', '=', '{', '}'))):
+                    return body, parts
         return None
 
     async def _monitor_tmux_pane(self, tmux_target: str):
@@ -580,6 +628,11 @@ class MCPClient:
             await self.clear_block(block_id)
         except Exception:
             pass
+        # Trigger response capture so the session block updates with what
+        # Codex does after the user approves/rejects the command.
+        session_id = self._session_id_for_tmux(tmux_target)
+        if session_id:
+            asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
 
     async def _monitor_terminal_app_launch(self, cwd: str):
         """Monitor a Terminal.app-launched Codex session for startup prompts.
@@ -919,6 +972,48 @@ end tell'''
             self._save_sessions()
         return dead
 
+    async def _backfill_tmux_targets(self):
+        """For sessions that have a TTY but no tmux_target, query tmux list-panes
+        to find their pane. This lets us use the reliable tmux send-keys path for
+        sessions that were discovered from ps/MCP rather than launched by us."""
+        sessions_needing = [
+            (sid, info) for sid, info in self._sessions.items()
+            if not info.get('tmux_target') and info.get('tty')
+        ]
+        if not sessions_needing:
+            return
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'tmux', 'list-panes', '-a',
+                '-F', '#{pane_tty}\t#{session_name}:#{window_index}.#{pane_index}',
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await proc.communicate()
+        except Exception:
+            return
+        tty_to_pane: dict = {}
+        for line in stdout.decode().splitlines():
+            parts = line.strip().split('\t', 1)
+            if len(parts) == 2:
+                pane_tty, pane_id = parts
+                tty_to_pane[pane_tty] = pane_id
+                # Also store short form (s003) and medium form (ttys003)
+                short = pane_tty.replace('/dev/', '')
+                tty_to_pane[short] = pane_id
+        changed = False
+        for sid, info in sessions_needing:
+            tty = info.get('tty', '')
+            pane = tty_to_pane.get(tty) or tty_to_pane.get(tty.lstrip('/dev/'))
+            if pane:
+                info['tmux_target'] = pane
+                changed = True
+                print(f'[codex-controller] backfilled tmux_target={pane} for {sid}', file=sys.stderr)
+                if pane not in self._tmux_monitors:
+                    task = asyncio.create_task(self._monitor_tmux_pane(pane))
+                    self._tmux_monitors[pane] = task
+        if changed:
+            self._save_sessions()
+
     async def _find_tty_for_cwd(self, cwd: str, comm_filter: str):
         """Find the TTY of a running process matching comm_filter in cwd via ps+lsof.
         Returns the short TTY string (e.g. 's003') suitable for /dev/tty{short}."""
@@ -960,12 +1055,16 @@ end tell'''
         tmux_target = self._pending_tmux_targets.pop(cwd, None)
         if tmux_target:
             entry['tmux_target'] = tmux_target
-        if not session_id.startswith('pid-'):
+        if not session_id.startswith('pid-') and cwd:
+            # A real hook-registered session supersedes all old sessions for this CWD
+            # (pid-* placeholders AND stale real sessions from previous runs).
             for sid in list(self._sessions.keys()):
-                if sid.startswith('pid-') and self._sessions[sid].get('cwd') == cwd:
+                if self._sessions[sid].get('cwd') == cwd:
                     self._sessions.pop(sid)
                     self._recently_launched_cwds.discard(cwd)
                     asyncio.create_task(self.clear_block(self._session_block_id(sid)))
+        # Always clear the "Starting Codex…" launching placeholder for this CWD
+        asyncio.create_task(self.clear_block(self._launching_block_id(cwd)))
         self._sessions[session_id] = entry
         self._save_sessions()
         return True
@@ -986,7 +1085,10 @@ end tell'''
                 # Clear loading placeholder and startup prompt blocks
                 asyncio.create_task(self.clear_block(self._launching_block_id(cwd)))
                 asyncio.create_task(self.clear_block(self._terminal_prompt_block_id(cwd)))
-            asyncio.create_task(self._emit_session_block(session_id))
+        # Always re-emit so iOS sees is_working=true for every new turn, not just the first
+        asyncio.create_task(self._emit_session_block(session_id))
+        # Start (or restart) response capture; delay lets tmux backfill run first on new sessions
+        self._start_capture(session_id, delay=6 if is_new else 2)
 
     def _handle_session_stop(self, msg):
         session_id = msg.get('session_id', '')
@@ -1008,7 +1110,13 @@ end tell'''
             if task:
                 task.cancel()
         print(f'[codex-controller] session stopped: {session_id}', file=sys.stderr)
-        asyncio.create_task(self._emit_session_block(session_id, last_message=last_message))
+        if last_message:
+            asyncio.create_task(self._emit_session_block(session_id, last_message=last_message))
+        elif tmux_target:
+            # Hook didn't provide a message — read it directly from the pane
+            asyncio.create_task(self._capture_tmux_once(tmux_target, session_id))
+        else:
+            asyncio.create_task(self._emit_session_block(session_id))
 
     async def _emit_session_block(self, session_id: str, last_message: str = '', touch_last_seen: bool = True):
         """touch_last_seen=False during startup re-emit so sessions past SESSION_TTL
@@ -1024,6 +1132,9 @@ end tell'''
         project = session.get('project', 'Codex')
         cwd = session.get('cwd', '')
         block_id = self._session_block_id(session_id)
+        # Fall back to stored last_message so heartbeats / re-emits never clear it.
+        if not last_message:
+            last_message = session.get('last_message', '')
         payload: dict = {
             'session_id': session_id,
             'project': project,
@@ -1125,10 +1236,11 @@ end tell
 
     @staticmethod
     def _is_codex_idle(content: str) -> bool:
-        """True when Codex shows its idle footer (⌃C quit visible).
+        """True when Codex shows its idle footer.
+        Matches variants: ⌃C quit, ^C quit, Ctrl+C quit, ctrl-c quit.
         Terminal.app history uses U+2303 (⌃) not literal caret."""
         import re
-        return bool(re.search(r'[⌃\^]C\s+quit', content))
+        return bool(re.search(r'([⌃\^]C|[Cc]trl[-+][Cc])\s*\w*\s+quit', content))
 
     @staticmethod
     def _extract_response(content: str) -> str:
@@ -1152,7 +1264,7 @@ end tell
         # Trim at the LAST idle status bar — search from end so older sessions
         # earlier in history don't confuse us.
         for i in range(len(lines) - 1, -1, -1):
-            if re.search(r'[⌃\^]C\s+quit', lines[i]):
+            if re.search(r'([⌃\^]C|[Cc]trl[-+][Cc])\s*\w*\s+quit', lines[i]):
                 lines = lines[:i]
                 break
 
@@ -1165,6 +1277,10 @@ end tell
                 lines = lines[:i]
                 break
 
+        # Strip trailing blank lines
+        while lines and not lines[-1].strip():
+            lines.pop()
+
         # Find the last "> " prefixed line — the start of Codex's last response
         last_response_start = None
         for i in range(len(lines) - 1, -1, -1):
@@ -1173,15 +1289,28 @@ end tell
                 last_response_start = i
                 break
 
-        if last_response_start is None:
-            return ''
+        if last_response_start is not None:
+            # Include the "> " line itself (strip its prefix) plus all continuation lines
+            response_lines = [l.rstrip() for l in lines[last_response_start:]]
+            if response_lines and response_lines[0].strip().startswith('> '):
+                response_lines[0] = response_lines[0].strip()[2:]
+            return '\n'.join(response_lines).strip()[:4000]
 
-        # Include the "> " line itself (strip its prefix) plus all continuation lines
-        response_lines = [l.rstrip() for l in lines[last_response_start:]]
-        if response_lines and response_lines[0].strip().startswith('> '):
-            response_lines[0] = response_lines[0].strip()[2:]
-
-        return '\n'.join(response_lines).strip()[:4000]
+        # Fallback: take the last paragraph block — consecutive non-empty lines
+        # at the bottom of the trimmed content (stops at first blank line going up).
+        # Much tighter than taking 40 arbitrary lines.
+        result = []
+        for i in range(len(lines) - 1, -1, -1):
+            stripped = lines[i].strip()
+            if not stripped:
+                break  # blank line = top of paragraph
+            if re.match(r'^[|•●]\s', stripped):
+                break  # user-input marker
+            result.append(lines[i].rstrip())
+        if result:
+            result.reverse()
+            return '\n'.join(result).strip()[:4000]
+        return ''
 
     def _session_id_for_tmux(self, tmux_target: str) -> Optional[str]:
         """Find the session_id that owns this tmux_target."""
@@ -1190,17 +1319,66 @@ end tell
                 return sid
         return None
 
+    def _tty_to_full_path(self, tty_short: str) -> str:
+        """Normalise a stored tty value to a full /dev/ path."""
+        if tty_short.startswith('/dev/'):
+            return tty_short
+        if tty_short.startswith('ttys') or tty_short.startswith('ttyp'):
+            return f'/dev/{tty_short}'
+        return f'/dev/tty{tty_short}'
+
+    def _start_capture(self, session_id: str, delay: float = 0):
+        """Cancel any in-flight capture for this session and start a fresh one.
+        Uses tmux capture-pane when a tmux_target is known; falls back to
+        reading Terminal.app history via AppleScript when only a TTY is available."""
+        old = self._capture_tasks.pop(session_id, None)
+        if old and not old.done():
+            old.cancel()
+        async def _run():
+            if delay:
+                await asyncio.sleep(delay)
+            info = self._sessions.get(session_id, {})
+            tmux_target = info.get('tmux_target')
+            if tmux_target:
+                await self._capture_tmux_response(tmux_target, session_id)
+            elif info.get('tty'):
+                full_tty = self._tty_to_full_path(info['tty'])
+                await self._capture_terminal_response(session_id, full_tty)
+        task = asyncio.create_task(_run())
+        self._capture_tasks[session_id] = task
+
+    async def _capture_tmux_once(self, tmux_target: str, session_id: str):
+        """Single-shot tmux read — used at session stop or startup when Codex is already idle."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'tmux', 'capture-pane', '-p', '-S', '-300', '-t', tmux_target,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3)
+            content = stdout.decode()
+        except Exception:
+            asyncio.create_task(self._emit_session_block(session_id))
+            return
+        response = self._extract_response(content)
+        if response:
+            print(f'[codex-controller] one-shot capture for {session_id} ({len(response)} chars)', file=sys.stderr)
+        asyncio.create_task(self._emit_session_block(session_id, last_message=response))
+
     async def _capture_tmux_response(self, tmux_target: str, session_id: str):
         """After routing a message, poll until Codex is idle, then emit last_message."""
         # Wait for Codex to start processing
         await asyncio.sleep(2)
         prev_content = ''
         stable_count = 0
+        stable_no_idle_count = 0
         for _ in range(180):  # max ~3 min
             await asyncio.sleep(1)
             try:
+                # Capture up to 300 lines of history so a long response that
+                # scrolled off the visible screen is still included.
                 proc = await asyncio.create_subprocess_exec(
-                    'tmux', 'capture-pane', '-p', '-t', tmux_target,
+                    'tmux', 'capture-pane', '-p', '-S', '-300', '-t', tmux_target,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.DEVNULL,
                 )
@@ -1209,19 +1387,23 @@ end tell
             except Exception:
                 return  # pane gone
 
-            if self._is_codex_idle(content):
-                if content == prev_content:
-                    stable_count += 1
-                    if stable_count >= 2:
-                        response = self._extract_response(content)
-                        if response:
-                            print(f'[codex-controller] captured response for {session_id} ({len(response)} chars)', file=sys.stderr)
-                            asyncio.create_task(self._emit_session_block(session_id, last_message=response))
-                        return
-                else:
-                    stable_count = 0
+            is_idle = self._is_codex_idle(content)
+            if content == prev_content:
+                stable_count += 1
+                if not is_idle:
+                    stable_no_idle_count += 1
             else:
                 stable_count = 0
+                stable_no_idle_count = 0
+
+            # Capture if: idle + stable 2s, OR content has been stable 5s without
+            # idle detection (handles cases where status bar format doesn't match).
+            if (is_idle and stable_count >= 2) or stable_no_idle_count >= 5:
+                response = self._extract_response(content)
+                if response:
+                    print(f'[codex-controller] captured response for {session_id} ({len(response)} chars, idle={is_idle})', file=sys.stderr)
+                    asyncio.create_task(self._emit_session_block(session_id, last_message=response))
+                return
             prev_content = content
 
     async def _route_to_terminal(self, session_id: str, text: str):
@@ -1391,6 +1573,7 @@ end tell
 '''
         prev_content = ''
         stable_count = 0
+        stable_no_idle_count = 0
         for _ in range(180):  # max ~3 min
             await asyncio.sleep(1)
             try:
@@ -1404,20 +1587,22 @@ end tell
             except Exception:
                 break
 
-            if self._is_codex_idle(content):
-                if content == prev_content:
-                    stable_count += 1
-                    if stable_count >= 2:
-                        self._working_sessions.discard(session_id)
-                        response = self._extract_response(content)
-                        if response:
-                            _log(f'[codex] captured response for {session_id} ({len(response)} chars)')
-                            asyncio.create_task(self._emit_session_block(session_id, last_message=response))
-                        return
-                else:
-                    stable_count = 0
+            is_idle = self._is_codex_idle(content)
+            if content == prev_content:
+                stable_count += 1
+                if not is_idle:
+                    stable_no_idle_count += 1
             else:
                 stable_count = 0
+                stable_no_idle_count = 0
+
+            if (is_idle and stable_count >= 2) or stable_no_idle_count >= 5:
+                self._working_sessions.discard(session_id)
+                response = self._extract_response(content)
+                if response:
+                    _log(f'[codex] captured response for {session_id} ({len(response)} chars, idle={is_idle})')
+                    asyncio.create_task(self._emit_session_block(session_id, last_message=response))
+                return
             prev_content = content
 
         self._working_sessions.discard(session_id)
@@ -1582,6 +1767,10 @@ end tell
             if q:
                 print(f'[codex-controller] tool {tool_name} ran — clearing block {block_id}', file=sys.stderr)
                 await q.put('Allow')
+        # After each tool Codex will produce a response — capture it.
+        # Use _start_capture for deduplication: cancels any in-flight capture
+        # for this session and starts a fresh one.
+        self._start_capture(session_id, delay=2)
 
     async def _handle_notification(self, msg):
         block_id = str(uuid.uuid4())
@@ -1594,6 +1783,82 @@ end tell
             await self.emit_block(block_id, 'alert', payload, ttl=3600)
         except Exception as e:
             print(f'[codex-controller] notification emit failed: {e}', file=sys.stderr)
+
+    async def _read_terminal_content(self, full_tty: str) -> str:
+        """Single AppleScript read of Terminal.app tab history for the given TTY.
+        Returns empty string on any error."""
+        safe_tty = full_tty.replace('"', '\\"')
+        script = f'''
+tell application "Terminal"
+    repeat with w in windows
+        set tabCount to count of tabs of w
+        repeat with i from 1 to tabCount
+            set t to tab i of w
+            try
+                if tty of t is "{safe_tty}" then
+                    return history of tab i of w
+                end if
+            end try
+        end repeat
+    end repeat
+    return ""
+end tell
+'''
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'osascript', '-e', script,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            return stdout.decode()
+        except Exception:
+            return ''
+
+    async def _poll_idle_sessions(self):
+        """Background loop: every 10 s scan all sessions.
+        If Codex is idle and the terminal content differs from stored last_message,
+        extract and emit an update. Supports both tmux panes and Terminal.app tabs."""
+        POLL_INTERVAL = 10
+        while True:
+            await asyncio.sleep(POLL_INTERVAL)
+            if not self._initialized:
+                continue
+            for session_id, info in list(self._sessions.items()):
+                # Skip if a dedicated capture task is already running
+                task = self._capture_tasks.get(session_id)
+                if task and not task.done():
+                    continue
+                tmux_target = info.get('tmux_target')
+                tty = info.get('tty')
+                if not tmux_target and not tty:
+                    continue
+                # Read terminal content
+                if tmux_target:
+                    try:
+                        proc = await asyncio.create_subprocess_exec(
+                            'tmux', 'capture-pane', '-p', '-S', '-300', '-t', tmux_target,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.DEVNULL,
+                        )
+                        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3)
+                        content = stdout.decode()
+                    except Exception:
+                        continue
+                else:
+                    full_tty = self._tty_to_full_path(tty)
+                    content = await self._read_terminal_content(full_tty)
+                    if not content:
+                        continue
+                if not self._is_codex_idle(content):
+                    continue
+                response = self._extract_response(content)
+                if not response:
+                    continue
+                stored = info.get('last_message', '')
+                if response != stored:
+                    print(f'[codex-controller] idle poll: updating last_message for {session_id[:8]}', file=sys.stderr)
+                    asyncio.create_task(self._emit_session_block(session_id, last_message=response))
 
     async def start_socket_server(self):
         os.makedirs(os.path.dirname(SOCKET_PATH), exist_ok=True)
@@ -1632,7 +1897,12 @@ async def _session_heartbeat(client):
                 if tty:
                     info['tty'] = tty
         client._write_status()
-        for session_id in list(client._sessions.keys()):
+        for session_id, info in list(client._sessions.items()):
+            # Skip re-emit if block was written recently — TTL is SESSION_TTL (3600s),
+            # so only re-emit when more than half the TTL has elapsed.
+            last_emitted = info.get('last_emitted', 0)
+            if time.time() - last_emitted < SESSION_TTL * 0.5:
+                continue
             try:
                 await client._emit_session_block(session_id)
             except Exception as e:
@@ -1653,6 +1923,7 @@ async def run():
 
     asyncio.create_task(_tile_heartbeat(client))
     asyncio.create_task(_session_heartbeat(client))
+    asyncio.create_task(client._poll_idle_sessions())
 
     try:
         await client.initialize()

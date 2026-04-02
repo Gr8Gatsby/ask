@@ -1,7 +1,7 @@
 {
   "id": "github",
   "name": "Git Repos",
-  "version": "2.0",
+  "version": "2.1",
   "description": "Monitor local git repos and push changes from iPhone",
   "entry": "main.py",
   "icon": "arrow.triangle.branch",

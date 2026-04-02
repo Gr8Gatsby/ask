@@ -2,7 +2,7 @@ import SwiftUI
 
 @main
 struct AskMacApp: App {
-    @StateObject private var updater = AppUpdater()
+    @State private var updater = AppUpdater()
 
     private let settings = AppSettings()
     private let cloudKit = CloudKitService()
