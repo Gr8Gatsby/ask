@@ -1,13 +1,21 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - Sidebar selection
+
+private enum SidebarItem: Hashable {
+    case feed
+    case script(String)
+}
+
 // MARK: - Mac Scripts Home
 
 struct MacScriptsView: View {
     @Environment(ScriptManager.self) private var scriptManager
+    @Environment(ActionHistoryService.self) private var actionHistory
     @Environment(AppSettings.self) private var settings
 
-    @State private var selectedScriptID: String?
+    @State private var selectedItem: SidebarItem? = nil
     @State private var showingSettings = false
 
     var body: some View {
@@ -25,21 +33,29 @@ struct MacScriptsView: View {
     // MARK: Sidebar
 
     private var sidebar: some View {
-        List(selection: $selectedScriptID) {
-            if scriptManager.scripts.isEmpty {
-                Text("No scripts found in vault directory.")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
-                    .padding(.vertical, 4)
-            } else {
-                ForEach(scriptManager.scripts) { script in
-                    ScriptSidebarRow(script: script, scriptManager: scriptManager)
-                        .tag(script.id)
+        List(selection: $selectedItem) {
+            Section {
+                Label("Feed", systemImage: "clock.arrow.circlepath")
+                    .tag(SidebarItem.feed)
+            }
+
+            Section("Scripts") {
+                if scriptManager.scripts.isEmpty {
+                    Text("No scripts found in vault directory.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                        .padding(.vertical, 4)
+                } else {
+                    ForEach(scriptManager.scripts) { script in
+                        ScriptSidebarRow(script: script, scriptManager: scriptManager)
+                            .tag(SidebarItem.script(script.id))
+                    }
                 }
             }
         }
-        .navigationTitle("Scripts")
+        .navigationTitle("Ask")
         .listStyle(.sidebar)
+        .navigationSplitViewColumnWidth(min: 220, ideal: 240)
         .toolbar {
             ToolbarItem(placement: .automatic) {
                 Button { scriptManager.reload() } label: {
@@ -60,16 +76,27 @@ struct MacScriptsView: View {
 
     @ViewBuilder
     private var detail: some View {
-        if let id = selectedScriptID,
-           let script = scriptManager.scripts.first(where: { $0.id == id }) {
-            ScriptDetailView(script: script, scriptManager: scriptManager)
-        } else {
-            ContentUnavailableView(
-                "Select a Script",
-                systemImage: "terminal",
-                description: Text("Choose a script from the sidebar to view its active blocks.")
-            )
+        switch selectedItem {
+        case .feed:
+            MacFeedView()
+                .environment(actionHistory)
+        case .script(let id):
+            if let script = scriptManager.scripts.first(where: { $0.id == id }) {
+                ScriptDetailView(script: script, scriptManager: scriptManager)
+            } else {
+                scriptPlaceholder
+            }
+        case nil:
+            scriptPlaceholder
         }
+    }
+
+    private var scriptPlaceholder: some View {
+        ContentUnavailableView(
+            "Select a Script",
+            systemImage: "terminal",
+            description: Text("Choose a script from the sidebar to view its active blocks.")
+        )
     }
 }
 
@@ -342,6 +369,68 @@ private struct ScriptDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.orange.opacity(0.07))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+// MARK: - Feed view
+
+private struct MacFeedView: View {
+    @Environment(ActionHistoryService.self) private var history
+
+    var body: some View {
+        Group {
+            if history.events.isEmpty {
+                ContentUnavailableView(
+                    "No Feed Activity",
+                    systemImage: "clock.arrow.circlepath",
+                    description: Text("Script interactions and lifecycle events will appear here.")
+                )
+            } else {
+                List {
+                    ForEach(history.events) { event in
+                        FeedEventRow(event: event)
+                    }
+                }
+                .listStyle(.inset(alternatesRowBackgrounds: true))
+            }
+        }
+        .navigationTitle("Feed")
+    }
+}
+
+private struct FeedEventRow: View {
+    let event: HistoryEvent
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: event.kind.systemImage)
+                .foregroundStyle(event.kind.color)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(event.source)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                Text(event.summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                if let detail = event.detail {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
+                        .fontDesign(.monospaced)
+                }
+            }
+
+            Spacer()
+
+            Text(event.timestamp, style: .relative)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 2)
     }
 }
 

@@ -68,6 +68,7 @@ struct AskMacApp: App {
             MacScriptsView()
                 .environment(settings)
                 .environment(scriptManager)
+                .environment(actionHistory)
         }
         .defaultSize(width: 720, height: 520)
         .defaultPosition(.center)
