@@ -40,6 +40,28 @@ security add-generic-password -a "$USER" -s APPLE_ID_PASSWORD -w "xxxx-xxxx-xxxx
 security add-generic-password -a "$USER" -s APPLE_TEAM_ID -w "B5J28L8ARB"
 ```
 
+**Provisioning profile check** — The build requires a Developer ID provisioning profile for `com.kevinhill.askmac` with the `iCloud.simple.ask` container. Verify it's installed:
+```bash
+for f in ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles/*.provisionprofile; do
+  name=$(security cms -D -i "$f" 2>/dev/null | grep -A1 '<key>Name</key>' | grep '<string>' | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
+  uuid=$(basename "$f" .provisionprofile)
+  appid=$(security cms -D -i "$f" 2>/dev/null | grep -A1 'com.apple.application-identifier' | grep '<string>' | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
+  echo "UUID: $uuid | Name: $name | AppID: $appid"
+done
+```
+You should see a line with `AppID: B5J28L8ARB.com.kevinhill.askmac`. The UUID in that line must match `PROVISIONING_PROFILE_SPECIFIER` in `AskMac/project.yml`.
+
+**If the provisioning profile is missing or has the wrong UUID:**
+1. Go to developer.apple.com → Certificates, Identifiers & Profiles
+2. **Identifiers** → `com.kevinhill.askmac` → iCloud capability → Edit → check `iCloud.simple.ask` → Save
+3. **Profiles** → AskMac (Developer ID Application) → Edit → Save → Download
+4. Double-click the downloaded `.provisionprofile` to install it
+5. Get the new UUID: `basename ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles/$(ls -t ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles/*.provisionprofile | head -1) .provisionprofile`
+6. Update `PROVISIONING_PROFILE_SPECIFIER` in `AskMac/project.yml` and the `provisioningProfiles` dict in `AskMac/ExportOptions.plist` to match
+7. Commit via PR before rebuilding
+
+**Why this matters:** The app uses CloudKit (`iCloud.simple.ask`). Without a provisioning profile that explicitly authorizes this container, macOS calls `_os_crash` at launch — the app appears signed and notarized but silently crashes on open.
+
 ## Step 2 — Read the current version
 
 ```bash
@@ -90,6 +112,8 @@ Do not run in the background — stream output so the user can see progress.
 - **`AskMac.xcodeproj does not exist`** — xcodegen not installed: `brew install xcodegen`
 - **`sign_update: Signing key not found`** — run `./sparkle/bin/generate_keys`, add `SUPublicEDKey` to Info.plist
 - **`AskMacCore.framework: bundle format unrecognized`** — project.yml has `AskMacCore` as `library.static`, not `framework`; regenerate with xcodegen
+- **`No profiles for 'com.kevinhill.askmac' were found`** — provisioning profile not installed or UUID mismatch in project.yml; see provisioning profile check above
+- **App installs but "can't be opened" on another Mac** — check crash log: `cat ~/Library/Logs/DiagnosticReports/AskMac-*.ips | head -60`. If crash shows `EXC_BREAKPOINT` + `_os_crash`, the provisioning profile is missing the `iCloud.simple.ask` container — go back to the Developer Portal and follow the provisioning profile steps above, then rebuild
 
 ## Step 5 — Report
 
