@@ -524,10 +524,92 @@ private struct ScriptDetailView: View {
 
 private struct MacFeedView: View {
     @Environment(ActionHistoryService.self) private var history
+    @State private var sourceFilter: String? = nil   // nil = all
+    @State private var selectedEvent: HistoryEvent?
+
+    private var filteredEvents: [HistoryEvent] {
+        guard let filter = sourceFilter else { return history.events }
+        return history.events.filter { $0.source == filter }
+    }
+
+    private struct SourceStat: Identifiable {
+        let name: String
+        let count: Int
+        let latest: Date?
+        var id: String { name }
+    }
+
+    private var sourceStats: [SourceStat] {
+        var counts: [String: (count: Int, latest: Date?)] = [:]
+        for event in history.events {
+            let existing = counts[event.source]
+            let latestDate = existing.flatMap { $0.latest }.map { max($0, event.timestamp) } ?? event.timestamp
+            counts[event.source] = ((existing?.count ?? 0) + 1, latestDate)
+        }
+        return counts.map { SourceStat(name: $0.key, count: $0.value.count, latest: $0.value.latest) }
+            .sorted { ($0.latest ?? .distantPast) > ($1.latest ?? .distantPast) }
+    }
 
     var body: some View {
+        NavigationSplitView {
+            feedSidebar
+        } detail: {
+            feedDetail
+        }
+        .navigationTitle("Feed")
+        .sheet(item: $selectedEvent) { event in
+            FeedEventDetailSheet(event: event)
+        }
+    }
+
+    // MARK: Sidebar — analytics
+
+    private var feedSidebar: some View {
+        List(selection: $sourceFilter) {
+            Section {
+                HStack {
+                    Label("All Activity", systemImage: "clock.arrow.circlepath")
+                    Spacer()
+                    Text("\(history.events.count)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .tag(Optional<String>.none)
+            }
+
+            if !sourceStats.isEmpty {
+                Section("By Script") {
+                    ForEach(sourceStats) { stat in
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(stat.name)
+                                    .font(.subheadline)
+                                if let date = stat.latest {
+                                    Text(date, style: .relative)
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
+                            Spacer()
+                            Text("\(stat.count)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                        .tag(Optional(stat.name))
+                    }
+                }
+            }
+        }
+        .listStyle(.sidebar)
+        .navigationSplitViewColumnWidth(min: 200, ideal: 220)
+    }
+
+    // MARK: Detail — event list
+
+    private var feedDetail: some View {
         Group {
-            if history.events.isEmpty {
+            if filteredEvents.isEmpty {
                 ContentUnavailableView(
                     "No Feed Activity",
                     systemImage: "clock.arrow.circlepath",
@@ -535,14 +617,16 @@ private struct MacFeedView: View {
                 )
             } else {
                 List {
-                    ForEach(history.events) { event in
+                    ForEach(filteredEvents) { event in
                         FeedEventRow(event: event)
+                            .contentShape(Rectangle())
+                            .onTapGesture { selectedEvent = event }
+                            .listRowBackground(Color.clear)
                     }
                 }
                 .listStyle(.inset(alternatesRowBackgrounds: true))
             }
         }
-        .navigationTitle("Feed")
     }
 }
 
@@ -579,6 +663,66 @@ private struct FeedEventRow: View {
                 .foregroundStyle(.tertiary)
         }
         .padding(.vertical, 2)
+        .onHover { inside in
+            if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+    }
+}
+
+// MARK: - Feed event detail sheet
+
+private struct FeedEventDetailSheet: View {
+    let event: HistoryEvent
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack(spacing: 10) {
+                Image(systemName: event.kind.systemImage)
+                    .font(.title2)
+                    .foregroundStyle(event.kind.color)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(event.source)
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                    Text(event.kind.displayName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }
+            }
+            .padding()
+
+            Divider()
+
+            Form {
+                LabeledContent("Summary") {
+                    Text(event.summary)
+                        .multilineTextAlignment(.trailing)
+                }
+                LabeledContent("Time") {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(event.timestamp.formatted(date: .abbreviated, time: .standard))
+                        Text(event.timestamp, style: .relative)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if let detail = event.detail, !detail.isEmpty {
+                    LabeledContent("Detail") {
+                        Text(detail)
+                            .font(.caption)
+                            .fontDesign(.monospaced)
+                            .textSelection(.enabled)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+            }
+            .formStyle(.grouped)
+        }
+        .frame(width: 400, height: 280)
     }
 }
 
@@ -586,6 +730,7 @@ private struct FeedEventRow: View {
 
 private struct MachineDetailView: View {
     @Environment(AppSettings.self) private var settings
+    @Environment(HeartbeatService.self) private var heartbeat
 
     @State private var showVaultPicker = false
     @State private var agentSessions: [AgentSession] = []
@@ -601,6 +746,95 @@ private struct MachineDetailView: View {
         @Bindable var settings = settings
 
         Form {
+            // MARK: Cloud
+
+            Section("Cloud") {
+                LabeledContent("iCloud Sync") {
+                    if let lastBeat = heartbeat.lastHeartbeat {
+                        HStack(spacing: 4) {
+                            Image(systemName: "icloud.fill")
+                                .foregroundStyle(.green)
+                                .font(.caption)
+                            Text(lastBeat, style: .relative)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if heartbeat.error != nil {
+                        Label("Sync error", systemImage: "exclamationmark.icloud")
+                            .foregroundStyle(.red)
+                            .font(.caption)
+                    } else {
+                        Text("Connecting…")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                LabeledContent("Heartbeat Interval") {
+                    Text("\(Int(HeartbeatService.interval))s")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            // MARK: Connected Devices
+
+            Section {
+                if heartbeat.connectedDevices.isEmpty {
+                    Text("No iPhones seen in the last hour.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                } else {
+                    ForEach(heartbeat.connectedDevices, id: \.deviceID) { device in
+                        HStack(spacing: 12) {
+                            Image(systemName: "iphone")
+                                .font(.title3)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(device.deviceName)
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                HStack(spacing: 8) {
+                                    Label(device.lastSeen.formatted(.relative(presentation: .named)),
+                                          systemImage: "clock")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    Text("·")
+                                        .foregroundStyle(.tertiary)
+                                        .font(.caption2)
+                                    Text(device.deviceID.prefix(8) + "…")
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                        .fontDesign(.monospaced)
+                                        .textSelection(.enabled)
+                                }
+                            }
+
+                            Spacer()
+
+                            Toggle("", isOn: Binding(
+                                get: { device.enabled },
+                                set: { heartbeat.setDeviceEnabled(device, enabled: $0) }
+                            ))
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .labelsHidden()
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("Connected iPhones")
+                    Spacer()
+                    if !heartbeat.connectedDevices.isEmpty {
+                        Text("\(heartbeat.connectedDevices.count) device\(heartbeat.connectedDevices.count == 1 ? "" : "s")")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            // MARK: Machine
+
             Section("Machine") {
                 LabeledContent("Name") {
                     HStack(spacing: 6) {
