@@ -40,7 +40,32 @@ security add-generic-password -a "$USER" -s APPLE_ID_PASSWORD -w "xxxx-xxxx-xxxx
 security add-generic-password -a "$USER" -s APPLE_TEAM_ID -w "B5J28L8ARB"
 ```
 
-**Provisioning profile check** — The build requires a Developer ID provisioning profile for `com.kevinhill.askmac` with the `iCloud.simple.ask` container. Verify it's installed:
+**Provisioning profile check** — The build requires a Developer ID provisioning profile for `com.kevinhill.askmac` with the `iCloud.simple.ask` container, and the cert embedded in the profile must match the cert in the Keychain. Run this full check:
+
+```bash
+# Get fingerprint of the active Developer ID cert in Keychain
+KEYCHAIN_FP=$(security find-certificate -c "Developer ID Application" -p 2>/dev/null | openssl x509 -fingerprint -sha256 -noout 2>/dev/null | cut -d= -f2)
+echo "Keychain cert fingerprint: $KEYCHAIN_FP"
+echo "Keychain cert dates: $(security find-certificate -c 'Developer ID Application' -p 2>/dev/null | openssl x509 -dates -noout 2>/dev/null)"
+echo ""
+
+# Check each profile
+for f in ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles/*.provisionprofile; do
+  uuid=$(basename "$f" .provisionprofile)
+  appid=$(security cms -D -i "$f" 2>/dev/null | grep -A1 'com.apple.application-identifier' | grep '<string>' | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
+  [[ "$appid" != *"com.kevinhill.askmac"* ]] && continue
+  PROFILE_CERT=$(security cms -D -i "$f" 2>/dev/null | awk '/<key>DeveloperCertificates<\/key>/{f=1} f && /<data>/{d=1;s=""} d{s=s$0} d && /<\/data>/{print s;d=0;f=0}' | sed 's/.*<data>\(.*\)<\/data>.*/\1/' | tr -d '\t\n ' | base64 -d 2>/dev/null | openssl x509 -inform DER -fingerprint -sha256 -noout 2>/dev/null | cut -d= -f2)
+  MATCH=$([[ "$PROFILE_CERT" == "$KEYCHAIN_FP" ]] && echo "✓ MATCH" || echo "✗ MISMATCH")
+  echo "UUID: $uuid | $MATCH"
+  echo "  Profile cert: $PROFILE_CERT"
+done
+```
+
+The profile for `com.kevinhill.askmac` must show `✓ MATCH`. If it shows `✗ MISMATCH`, the profile was generated with a different cert — regenerate it in the Developer Portal selecting the correct certificate (the one with the matching creation date from the Keychain dates output above).
+
+**If you have multiple Developer ID Application certs in the portal** (all named the same), identify the correct one by creation date: run `security find-certificate -c "Developer ID Application" -p 2>/dev/null | openssl x509 -dates -noout` to get the `notBefore` date, then select the matching cert in the portal.
+
+**Provisioning profile (original check)** — Verify it's installed:
 ```bash
 for f in ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles/*.provisionprofile; do
   name=$(security cms -D -i "$f" 2>/dev/null | grep -A1 '<key>Name</key>' | grep '<string>' | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
