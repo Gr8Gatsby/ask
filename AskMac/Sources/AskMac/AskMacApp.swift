@@ -64,12 +64,12 @@ struct AskMacApp: App {
         .windowResizability(.contentSize)
         .defaultSize(width: 400, height: 560)
 
-        Window("Ask Settings", id: "settings") {
-            SettingsView()
+        Window("Scripts", id: "scripts") {
+            MacScriptsView()
                 .environment(settings)
                 .environment(scriptManager)
         }
-        .windowResizability(.contentSize)
+        .defaultSize(width: 720, height: 520)
         .defaultPosition(.center)
 
         Window("Action History", id: "history") {

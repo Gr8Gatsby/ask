@@ -228,7 +228,7 @@ struct MenuBarView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             Spacer()
-            Button("Settings") { openWindow(id: "settings") }
+            Button("Scripts") { openWindow(id: "scripts") }
                 .buttonStyle(.plain)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
