@@ -12,9 +12,16 @@ import os
 SOCKET_PATH = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/sockets/codex-controller.sock'))
 
 data = json.load(sys.stdin)
-tool = data.get('tool', data.get('tool_name', 'Unknown'))
+raw_tool = (data.get('tool') or data.get('tool_name') or '').strip()
 session = data.get('session_id', '')
 ti = data.get('tool_input', {})
+
+# PreToolUse currently only fires for the Bash tool, but future Codex
+# releases have shipped different casing / aliases (e.g. `tool_name`
+# omitted entirely). Rather than guess, always surface the permission and
+# fall back to a generic label if the tool name is blank. The iOS sheet still
+# shows the command preview so the user knows what is being executed.
+tool = raw_tool or 'Bash'
 
 # Build human-readable preview
 if 'command' in ti:

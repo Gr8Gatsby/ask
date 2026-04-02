@@ -791,108 +791,104 @@ struct ScriptDetailView: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("useBrandColors") private var useBrandColors: Bool = true
 
-    // Detail-push navigation state
+    // Detail-push navigation state (for list→detail block pattern)
     @State private var isShowingDetail = false
     @State private var pushedDetail: RKBlock? = nil
     @State private var detailSentResponse = false
-    /// ID of a detail block the user just dismissed. We ignore re-appearances of this
-    /// block (from burst polling before the script clears it) to prevent re-pushing.
     @State private var dismissedDetailBlockID: String? = nil
     @State private var showRepoPicker = false
-    @State private var keyboardVisible = false
+
+    // Cached icon/name — survives block clearing during restarts
+    @State private var cachedIconSF: String = "terminal.fill"
+    @State private var cachedIconSVG: String? = nil
+    @State private var cachedIconData: String? = nil
+    @State private var cachedName: String = ""
+
+    @State private var restartBobOffset: CGFloat = 0
 
     private var group: ScriptGroup {
         ScriptGroup(scriptID: scriptID, blocks: allBlocks.filter { $0.scriptID == scriptID && $0.blockType != .tile })
     }
 
-    /// ScriptGroup including tile block — used only for brand color lookup.
     private var brandGroup: ScriptGroup {
         ScriptGroup(scriptID: scriptID, blocks: allBlocks.filter { $0.scriptID == scriptID })
     }
 
-    /// Script display name — resolved from all blocks including the tile, so we get
-    /// the real name even when only a tile block exists (group.blocks excludes tiles).
     private var scriptDisplayName: String {
         allBlocks.first { $0.scriptID == scriptID }?.scriptName
             ?? scriptID.split(separator: "-").map { $0.capitalized }.joined(separator: " ")
     }
 
-    /// Icon fields resolved from all blocks including the tile, so the icon shows
-    /// even when no non-tile blocks are present (e.g. "No active sessions" state).
     private var scriptIconSF: String {
-        allBlocks.first(where: { $0.scriptID == scriptID && $0.scriptIcon != nil })?.scriptIcon ?? "terminal.fill"
+        allBlocks.first(where: { $0.scriptID == scriptID && $0.scriptIcon != nil })?.scriptIcon ?? cachedIconSF
     }
     private var scriptIconSVG: String? {
-        allBlocks.first(where: { $0.scriptID == scriptID && $0.scriptIconSVG != nil })?.scriptIconSVG
+        allBlocks.first(where: { $0.scriptID == scriptID && $0.scriptIconSVG != nil })?.scriptIconSVG ?? cachedIconSVG
     }
     private var scriptIconData: String? {
-        allBlocks.first(where: { $0.scriptID == scriptID && $0.scriptIconData != nil })?.scriptIconData
+        allBlocks.first(where: { $0.scriptID == scriptID && $0.scriptIconData != nil })?.scriptIconData ?? cachedIconData
     }
 
     private var startSessionBlock: RKBlock? {
         group.blocks.first { $0.blockType == .startSession }
     }
 
-    /// Blocks shown in the main list — detail blocks are pushed; claudeMessage is inlined when chatPrompt or agentSession blocks exist.
-    private var mainBlocks: [RKBlock] {
-        let all = group.blocks.filter { $0.blockType != .detail && $0.blockType != .startSession }
-        let hasPrompt = all.contains(where: { $0.blockType == .chatPrompt })
-        let hasSession = all.contains(where: { $0.blockType == .agentSession })
-        guard hasPrompt || hasSession else { return all }
-        // Exclude claudeMessage (inlined) and confirmations that are linked to a session (grouped inside session section)
-        return all.filter {
-            $0.blockType != .claudeMessage &&
-            !($0.blockType == .confirmation && $0.confirmationPayload?.sessionId != nil)
+    /// agent_session blocks — each becomes a row in the session list.
+    private var sessionBlocks: [RKBlock] {
+        group.blocks.filter { $0.blockType == .agentSession }
+    }
+
+    /// Non-session, non-tile, non-feed blocks shown in the header strip above sessions.
+    private var headerBlocks: [RKBlock] {
+        group.blocks.filter {
+            $0.blockType != .agentSession &&
+            $0.blockType != .tile &&
+            $0.blockType != .startSession &&
+            $0.blockType != .feedItem &&
+            $0.blockType != .detail
         }
     }
 
-    /// Text from a claudeMessage block, shown above the chatPrompt input.
-    private var inlinedClaudeMessage: String? {
-        group.blocks.first { $0.blockType == .claudeMessage }?.claudeMessagePayload?.text
-    }
+    private var isEmpty: Bool { headerBlocks.isEmpty && sessionBlocks.isEmpty }
 
-    /// Confirmation blocks linked to a specific session_id.
+    private var currentDetailBlock: RKBlock? { group.blocks.first { $0.blockType == .detail } }
+
     private func sessionConfirmations(for sessionId: String) -> [RKBlock] {
         group.blocks.filter {
             $0.blockType == .confirmation && $0.confirmationPayload?.sessionId == sessionId
         }
     }
 
-    /// The active detail block, if any.
-    private var currentDetailBlock: RKBlock? { group.blocks.first { $0.blockType == .detail } }
-
     var body: some View {
         NavigationStack {
             List {
-                ForEach(mainBlocks) { block in
+                // Header strip: non-session blocks (status, countdown, info cards, etc.)
+                ForEach(headerBlocks) { block in
                     Section {
-                        if block.blockType == .agentSession,
-                           let p = block.agentSessionPayload {
-                            let confirmations = sessionConfirmations(for: p.sessionId)
-                            // Render any linked confirmations above the session reply box
-                            ForEach(confirmations) { conf in
-                                BlockView(block: conf, onRespond: { value in
-                                    await onRespond(conf, value)
-                                }, isWaiting: isWaiting)
+                        BlockView(block: block, onRespond: { value in
+                            await onRespond(block, value)
+                        }, isWaiting: isWaiting)
+                    }
+                }
+
+                // Session list
+                if !sessionBlocks.isEmpty {
+                    Section("Sessions") {
+                        ForEach(sessionBlocks) { block in
+                            if let payload = block.agentSessionPayload {
+                                let confCount = sessionConfirmations(for: payload.sessionId).count
+                                NavigationLink(value: block.id) {
+                                    SessionRowView(
+                                        payload: payload,
+                                        confirmationCount: confCount
+                                    )
+                                }
+                                .listRowBackground(
+                                    confCount > 0
+                                        ? Color.orange.opacity(0.07)
+                                        : nil
+                                )
                             }
-                            BlockView(block: block, onRespond: { value in
-                                await onRespond(block, value)
-                            }, isWaiting: isWaiting)
-                        } else if block.blockType == .startSession,
-                                  let p = block.startSessionPayload {
-                            StartSessionBlockView(payload: p, onRespond: { value in
-                                await onRespond(block, value)
-                            })
-                        } else if block.blockType == .chatPrompt, let p = block.chatPromptPayload {
-                            ChatPromptBlockView(
-                                payload: p,
-                                claudeMessage: inlinedClaudeMessage,
-                                onRespond: { value in await onRespond(block, value) }
-                            )
-                        } else {
-                            BlockView(block: block, onRespond: { value in
-                                await onRespond(block, value)
-                            }, isWaiting: isWaiting)
                         }
                     }
                 }
@@ -901,6 +897,7 @@ struct ScriptDetailView: View {
             .listSectionSpacing(.compact)
             .scrollContentBackground(.hidden)
             .background(useBrandColors ? (brandGroup.brandBackground ?? Color(.systemGroupedBackground)) : Color(.systemGroupedBackground))
+            .overlay { if isEmpty { restartingOverlay } }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
@@ -917,12 +914,6 @@ struct ScriptDetailView: View {
                 }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) { detailBottomBar }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-                keyboardVisible = true
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-                keyboardVisible = false
-            }
             .sheet(isPresented: $showRepoPicker) {
                 if let block = startSessionBlock, let payload = block.startSessionPayload {
                     RepoPickerSheet(repos: payload.repos) { repo in
@@ -931,6 +922,21 @@ struct ScriptDetailView: View {
                     }
                 }
             }
+            // Session chat navigation
+            .navigationDestination(for: String.self) { sessionBlockID in
+                if let block = allBlocks.first(where: { $0.id == sessionBlockID && $0.blockType == .agentSession }),
+                   let payload = block.agentSessionPayload {
+                    SessionChatView(
+                        sessionBlockID: sessionBlockID,
+                        sessionPayload: payload,
+                        allBlocks: allBlocks,
+                        scriptID: scriptID,
+                        machineID: activeMachine?.id ?? "",
+                        onRespond: onRespond
+                    )
+                }
+            }
+            // Detail block push (list→detail pattern)
             .navigationDestination(isPresented: $isShowingDetail) {
                 if let block = pushedDetail, let payload = block.detailPayload {
                     DetailFullView(
@@ -941,9 +947,6 @@ struct ScriptDetailView: View {
                             dismissedDetailBlockID = closedID
                             Task { await onRespond(block, "dismissed") }
                             isShowingDetail = false
-                            // Safety timer: clear the guard after the script has had time
-                            // to remove the block from CloudKit (~3–5 s). Without this,
-                            // re-tapping the same issue would be permanently blocked.
                             Task {
                                 try? await Task.sleep(for: .seconds(6))
                                 if dismissedDetailBlockID == closedID {
@@ -960,24 +963,14 @@ struct ScriptDetailView: View {
         }
         .onChange(of: currentDetailBlock?.id) { _, newID in
             if let id = newID {
-                // Ignore re-appearances of the block we just dismissed (burst polling
-                // may fetch it again before the script clears it from CloudKit).
                 guard id != dismissedDetailBlockID else { return }
-                // Ignore if it's already the block we're showing.
                 guard pushedDetail?.id != id else { return }
                 pushedDetail = currentDetailBlock
                 detailSentResponse = false
                 dismissedDetailBlockID = nil
                 isShowingDetail = true
             } else {
-                // Block gone — could be optimistic removal (before CloudKit confirms)
-                // or the script genuinely cleared it. Do NOT clear dismissedDetailBlockID
-                // here: clearing it now would let burst polling re-push the dismissed block.
-                // The close/swipe-back handlers each start a 6-second safety timer to
-                // clear dismissedDetailBlockID once the script has had time to remove the
-                // block from CloudKit.
                 if isShowingDetail {
-                    // Cleared externally (script refreshed, etc.) — pop silently.
                     detailSentResponse = true
                     isShowingDetail = false
                 }
@@ -989,12 +982,10 @@ struct ScriptDetailView: View {
         }
         .onChange(of: isShowingDetail) { _, showing in
             if !showing && !detailSentResponse {
-                // User swiped back via the system gesture.
                 if let block = pushedDetail {
                     let swipedID = block.id
                     dismissedDetailBlockID = swipedID
                     Task { await onRespond(block, "dismissed") }
-                    // Safety timer: clear guard after script has removed block from CloudKit.
                     Task {
                         try? await Task.sleep(for: .seconds(6))
                         if dismissedDetailBlockID == swipedID {
@@ -1012,24 +1003,46 @@ struct ScriptDetailView: View {
             }
         }
         .environment(\.colorScheme, useBrandColors ? (brandGroup.brandColorScheme ?? colorScheme) : colorScheme)
+        .onAppear { seedIconCache() }
+        .onChange(of: allBlocks.count) { _, _ in seedIconCache() }
+    }
+
+    private func seedIconCache() {
+        guard let block = allBlocks.first(where: { $0.scriptID == scriptID }) else { return }
+        cachedName = block.scriptName ?? cachedName
+        if let sf = block.scriptIcon    { cachedIconSF   = sf }
+        if let sv = block.scriptIconSVG { cachedIconSVG  = sv }
+        if let d  = block.scriptIconData { cachedIconData = d }
+    }
+
+    private var restartingOverlay: some View {
+        VStack(spacing: 20) {
+            ScriptIconView(
+                svgString: scriptIconSVG,
+                iconData: scriptIconData,
+                sfSymbol: scriptIconSF
+            )
+            .frame(width: 56, height: 56)
+            .offset(y: restartBobOffset)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.75).repeatForever(autoreverses: true)) {
+                    restartBobOffset = -10
+                }
+            }
+            .onDisappear { restartBobOffset = 0 }
+
+            Text("Script restarting…")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(useBrandColors ? (brandGroup.brandBackground ?? Color(.systemGroupedBackground)) : Color(.systemGroupedBackground))
     }
 
     private var detailBottomBar: some View {
         HStack {
             Spacer()
             HStack(spacing: 2) {
-                // Keyboard dismiss — shown only when keyboard is visible
-                if keyboardVisible {
-                    Button {
-                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                    } label: {
-                        Image(systemName: "keyboard.chevron.compact.down")
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 5)
-                    }
-                }
-
-                // Home (not selected)
                 Button { dismiss() } label: {
                     Text("Home")
                         .font(.subheadline)
@@ -1039,7 +1052,6 @@ struct ScriptDetailView: View {
                 }
                 .buttonStyle(.plain)
 
-                // Script icon (selected state) — uses brand PNG, falls back to SF symbol
                 Button { } label: {
                     ScriptIconView(
                         svgString: scriptIconSVG,
@@ -1053,7 +1065,6 @@ struct ScriptDetailView: View {
                 }
                 .buttonStyle(.plain)
 
-                // Plus button (start session)
                 if startSessionBlock != nil {
                     Button { showRepoPicker = true } label: {
                         Image(systemName: "plus")
@@ -1074,7 +1085,6 @@ struct ScriptDetailView: View {
         .padding(.bottom, 16)
         .padding(.top, 4)
     }
-
 }
 
 // MARK: - Detail full-screen view

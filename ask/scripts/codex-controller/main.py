@@ -92,7 +92,6 @@ def _write_hooks_json(hooks_dir: str):
             ],
             'PreToolUse': [
                 {
-                    'matcher': 'tool == "Bash"',
                     'hooks': [{'type': 'command', 'command': pre}]
                 }
             ],
@@ -311,6 +310,13 @@ class MCPClient:
                 q = self._pending_blocks.get(block_id)
                 if q:
                     await q.put(value)
+
+            elif data.get('type') == 'chat_message':
+                session_id = data.get('sessionId', '')
+                text = data.get('text', '')
+                if session_id and text:
+                    print(f'[codex-controller] chat_message sessionId={session_id!r}', file=sys.stderr)
+                    asyncio.create_task(self._route_to_terminal(session_id, text))
 
     async def wait_for_block_response(self, block_id):
         """Wait indefinitely for the user to respond via iOS."""
@@ -833,7 +839,7 @@ end tell'''
                         continue
                     pid, tty, comm = parts[0], parts[1], ' '.join(parts[2:])
                     if 'codex' in comm.lower() and tty != '??':
-                        live.append({'pid': pid, 'tty': tty, 'comm': comm})
+                        live.append({'pid': pid, 'tty': tty, 'comm': comm, 'name': comm.split('/')[-1]})
             except Exception:
                 pass
             with open(STATUS_PATH, 'w') as f:
@@ -872,7 +878,7 @@ end tell'''
                     tty = s.get('tty', '')
                     if pid and cwd:
                         synthetic_id = f'pid-{pid}'
-                        is_new = self._register_session(synthetic_id, cwd)
+                        is_new = self._register_session(synthetic_id, cwd, tty=tty)
                         if is_new:
                             print(f'[codex-controller] discovered codex (mcp) pid={pid} cwd={cwd}', file=sys.stderr)
                         if tty and synthetic_id in self._sessions and not self._sessions[synthetic_id].get('tty'):
@@ -923,7 +929,7 @@ end tell'''
                         cwd = lline[1:]
                         break
                 if cwd:
-                    if self._register_session(synthetic_id, cwd):
+                    if self._register_session(synthetic_id, cwd, tty=tty_short):
                         if synthetic_id in self._sessions:
                             self._sessions[synthetic_id]['tty'] = tty_short
                             self._save_sessions()
@@ -1047,9 +1053,19 @@ end tell'''
             pass
         return None
 
-    def _register_session(self, session_id: str, cwd: str):
+    def _register_session(self, session_id: str, cwd: str, tty: str = ''):
         if session_id in self._sessions:
             return False
+        # pid-* sessions are discovery placeholders. Skip if a real (hook-registered)
+        # session already exists for the same CWD or TTY — the real session wins.
+        if session_id.startswith('pid-') and cwd:
+            for sid, info in self._sessions.items():
+                if sid.startswith('pid-'):
+                    continue
+                if info.get('cwd') == cwd:
+                    return False
+                if tty and info.get('tty') == tty:
+                    return False
         project = self._project_label(cwd, session_id)
         entry = {'cwd': cwd, 'project': project, 'last_seen': time.time()}
         tmux_target = self._pending_tmux_targets.pop(cwd, None)
@@ -1236,79 +1252,104 @@ end tell
 
     @staticmethod
     def _is_codex_idle(content: str) -> bool:
-        """True when Codex shows its idle footer.
-        Matches variants: ⌃C quit, ^C quit, Ctrl+C quit, ctrl-c quit.
-        Terminal.app history uses U+2303 (⌃) not literal caret."""
+        """True when Codex is waiting for user input.
+
+        Modern npm Codex (v0.100+) shows an idle state with:
+          > [optional text]          ← input prompt line
+          gpt-X.X default · N% left ← status bar
+
+        Older Codex shows ⌃C quit in the footer.
+        Permission prompts show | Allow...? lines.
+        Check the last 6 non-empty lines for any of these patterns.
+        """
         import re
-        return bool(re.search(r'([⌃\^]C|[Cc]trl[-+][Cc])\s*\w*\s+quit', content))
+        clean = MCPClient._strip_ansi(content)
+        lines = [l for l in clean.splitlines() if l.strip()]
+        if not lines:
+            return False
+        tail = lines[-6:]
+        for line in tail:
+            s = line.strip()
+            # Permission prompt waiting for Allow/Deny
+            if re.match(r'^\|', s):
+                return True
+            # Old Codex quit footer
+            if re.search(r'([⌃\^]C|[Cc]trl[-+][Cc])\s*\w*\s+quit', s):
+                return True
+            # Modern Codex input prompt (> with optional text)
+            if re.match(r'^>\s', s):
+                return True
+        return False
 
     @staticmethod
     def _extract_response(content: str) -> str:
-        """Extract Codex's response from terminal history.
+        """Extract Codex's last response from terminal history.
 
-        Codex renders responses as:
-          > First line of response
-            continuation line (indented, no > prefix)
-            ...
-        User input shows as: | user typed text  (or • text)
-        Status bar: ... ^C quit ...
+        Modern npm Codex terminal structure (bottom to top):
+          gpt-X.X default · N% left · ~/path   ← status bar
+          > [last user input or empty]           ← input prompt
+          [blank]
+          Stop hook (completed)                  ← hook notifications
+          • Running Stop hook
+          [blank]
+          • Codex response text                  ← THIS is what we want
+            continuation (indented)
+          ...
 
-        Strategy: trim at the LAST status bar (history may have multiple
-        sessions), trim any pending user input line just above it, then
-        take from the last '> ' line (inclusive) to the end.
+        Strategy:
+          1. Strip the modern footer from the bottom up (status bar, input
+             prompt, blank lines, hook notifications).
+          2. Walk up from the remaining bottom to find the last response block,
+             stopping when we hit a previous user-input prompt (> line).
         """
         import re
         clean = MCPClient._strip_ansi(content)
         lines = clean.splitlines()
 
-        # Trim at the LAST idle status bar — search from end so older sessions
-        # earlier in history don't confuse us.
-        for i in range(len(lines) - 1, -1, -1):
-            if re.search(r'([⌃\^]C|[Cc]trl[-+][Cc])\s*\w*\s+quit', lines[i]):
-                lines = lines[:i]
-                break
+        # ── Step 1: strip footer from the bottom ──────────────────────────────
+        # Patterns to strip: status bar, input prompt, blank lines, hook lines.
+        # Keep looping until nothing more matches at the bottom.
+        status_bar_re  = re.compile(r'^(gpt|o\d|claude|codex)[-\w.]*\s', re.IGNORECASE)
+        input_prompt_re = re.compile(r'^>\s?')
+        hook_re        = re.compile(
+            r'(Running\s+(Stop|Pre|Post)\w*\s+hook|hook\s+\(completed\)|'
+            r'PreToolUse|PostToolUse)',
+            re.IGNORECASE,
+        )
+        changed = True
+        while changed and lines:
+            changed = False
+            s = lines[-1].strip()
+            if not s:
+                lines.pop(); changed = True; continue
+            if status_bar_re.match(s) and ('%' in s or 'left' in s):
+                lines.pop(); changed = True; continue
+            if input_prompt_re.match(s):
+                lines.pop(); changed = True; continue
+            if hook_re.search(s):
+                lines.pop(); changed = True; continue
+            # Old-style ⌃C quit footer
+            if re.search(r'([⌃\^]C|[Cc]trl[-+][Cc])\s*\w*\s+quit', s):
+                lines.pop(); changed = True; continue
 
-        # Remove any current user-input line sitting just above the status bar
-        # (Codex shows what the user is typing with | or • prefix)
-        for i in range(len(lines) - 1, max(len(lines) - 6, -1), -1):
-            stripped = lines[i].strip()
-            if stripped and (stripped.startswith('| ') or stripped.startswith('• ')
-                             or stripped.startswith('● ')):
-                lines = lines[:i]
-                break
+        if not lines:
+            return ''
 
-        # Strip trailing blank lines
-        while lines and not lines[-1].strip():
-            lines.pop()
-
-        # Find the last "> " prefixed line — the start of Codex's last response
-        last_response_start = None
-        for i in range(len(lines) - 1, -1, -1):
-            stripped = lines[i].strip()
-            if stripped.startswith('> ') and len(stripped) > 2:
-                last_response_start = i
-                break
-
-        if last_response_start is not None:
-            # Include the "> " line itself (strip its prefix) plus all continuation lines
-            response_lines = [l.rstrip() for l in lines[last_response_start:]]
-            if response_lines and response_lines[0].strip().startswith('> '):
-                response_lines[0] = response_lines[0].strip()[2:]
-            return '\n'.join(response_lines).strip()[:4000]
-
-        # Fallback: take the last paragraph block — consecutive non-empty lines
-        # at the bottom of the trimmed content (stops at first blank line going up).
-        # Much tighter than taking 40 arbitrary lines.
+        # ── Step 2: collect the last response block ────────────────────────────
+        # Walk up from the bottom (max 120 lines). Stop at a previous user-input
+        # prompt line (> ...) — that's where the prior exchange ended.
         result = []
-        for i in range(len(lines) - 1, -1, -1):
-            stripped = lines[i].strip()
-            if not stripped:
-                break  # blank line = top of paragraph
-            if re.match(r'^[|•●]\s', stripped):
-                break  # user-input marker
-            result.append(lines[i].rstrip())
+        for line in reversed(lines[-120:]):
+            s = line.strip()
+            if input_prompt_re.match(s):
+                break  # hit the previous user input — stop here
+            result.append(line.rstrip())
+
         if result:
             result.reverse()
+            # Drop leading blank lines
+            while result and not result[0].strip():
+                result.pop(0)
             return '\n'.join(result).strip()[:4000]
         return ''
 
@@ -1466,7 +1507,11 @@ end tell
         if full_tty:
             _log(f'[codex] routing via TTY: {full_tty}')
             safe_tty = full_tty.replace('\\', '\\\\').replace('"', '\\"')
-            # Use "do script in tab" — sends text directly to the tab by TTY, no focus needed.
+            # Use System Events keystroke to type text + Return.
+            # Direct PTY writes (slave fd) interact poorly with npm Codex's raw-mode
+            # TUI — ghost suggestions get mixed in and Enter may not register.
+            # System Events simulates real OS-level keyboard events which work
+            # correctly with any interactive TUI application.
             script = f'''set targetTTY to "{safe_tty}"
 set inputText to "{safe_text}"
 set foundTab to false
@@ -1478,7 +1523,9 @@ if application "Terminal" is running then
                 set t to tab i of w
                 try
                     if tty of t is targetTTY then
-                        do script inputText in tab i of w
+                        set selected tab of w to t
+                        set index of w to 1
+                        activate
                         set foundTab to true
                         exit repeat
                     end if
@@ -1490,7 +1537,13 @@ if application "Terminal" is running then
 end if
 if not foundTab then
     error "No Terminal tab found for TTY " & targetTTY
-end if'''
+end if
+delay 0.25
+tell application "System Events"
+    keystroke inputText
+    delay 0.1
+    keystroke return
+end tell'''
         else:
             # Fallback: match by CWD path in window title, paste via clipboard
             _log(f'[codex] routing via window title fallback (no TTY)')

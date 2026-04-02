@@ -57,6 +57,11 @@ struct ManagedScript: Identifiable {
     var lastError: String?  // last stderr output before most recent crash
     var lastEmitTime: Date? // last time this script emitted a block to CloudKit
     var missingDeps: [ScriptDependency] = []
+    var scriptType: String?              // "tile" (default) or "feed"
+    var schedule: String?               // cron expression for feed scripts
+    var requires: [ScriptDependency] = [] // all declared dependencies
+    var entry: String?                  // manifest entry point (relative path)
+    var manifestPath: URL?              // path to the manifest.json file
 
     enum ScriptStatus {
         case starting, running, crashed, stopped, missingDependencies
@@ -653,7 +658,8 @@ final class ScriptManager {
             if let img = iconImage { scripts[idx].iconImage = img }
         } else {
             let svgString = manifests[id]?.svgString
-            scripts.append(ManagedScript(id: id, name: name, version: manifest?.version, description: manifest?.description, icon: icon, iconImage: iconImage, svgString: svgString, status: status, isEnabled: isEnabled))
+            let dir = manifests[id]?.dir
+            scripts.append(ManagedScript(id: id, name: name, version: manifest?.version, description: manifest?.description, icon: icon, iconImage: iconImage, svgString: svgString, status: status, isEnabled: isEnabled, scriptType: manifest?.type, schedule: manifest?.schedule, requires: manifest?.requires ?? [], entry: manifest?.entry, manifestPath: dir.map { $0.appendingPathComponent("manifest.json") }))
         }
     }
 }

@@ -30,16 +30,20 @@ final class PushService: NSObject {
         let actionSubID = "ask-action-required-v1"
         let legacyID = "ask-rkblock-created"
 
-        // Delete legacy creation-only subscription if present
-        if let existing = try? await database.subscriptions(for: [CKSubscription.ID(legacyID)]),
-           existing[legacyID] != nil {
-            _ = try? await database.modifySubscriptions(saving: [], deleting: [legacyID])
+        // Delete legacy subscriptions if present
+        var toDelete: [CKSubscription.ID] = []
+        for id in [legacyID, actionSubID] {
+            if let existing = try? await database.subscriptions(for: [CKSubscription.ID(id)]),
+               existing[id] != nil {
+                toDelete.append(id)
+            }
+        }
+        if !toDelete.isEmpty {
+            _ = try? await database.modifySubscriptions(saving: [], deleting: toDelete)
         }
 
-        // Always re-save subscriptions to ensure current settings are applied.
-        // CloudKit replaces any existing subscription with the same ID.
-
-        // Silent push subscription — fires for all RKBlock changes
+        // Silent push subscription — fires for all RKBlock changes.
+        // No alert/sound: background refresh only. Visible notifications are disabled.
         let sub = CKQuerySubscription(
             recordType: CKSchema.RecordType.rkBlock,
             predicate: NSPredicate(value: true),
@@ -51,24 +55,7 @@ final class PushService: NSObject {
         info.shouldBadge = false
         sub.notificationInfo = info
 
-        // Alert push subscription — fires when a block requires a response
-        // Delivers a visible notification even when the app is terminated
-        let actionSub = CKQuerySubscription(
-            recordType: CKSchema.RecordType.rkBlock,
-            predicate: NSPredicate(format: "requiresResponse == 1"),
-            subscriptionID: actionSubID,
-            options: [.firesOnRecordCreation, .firesOnRecordUpdate]
-        )
-        let actionInfo = CKSubscription.NotificationInfo()
-        actionInfo.shouldSendContentAvailable = true
-        actionInfo.titleLocalizationKey = "%1$@"
-        actionInfo.titleLocalizationArgs = ["scriptName"]
-        actionInfo.alertBody = "Action required"
-        actionInfo.soundName = "default"
-        actionInfo.desiredKeys = ["scriptID", "scriptName"]
-        actionSub.notificationInfo = actionInfo
-
-        _ = try? await database.modifySubscriptions(saving: [sub, actionSub], deleting: [])
+        _ = try? await database.modifySubscriptions(saving: [sub], deleting: [])
     }
 
     /// Called by the app delegate when a remote notification arrives.

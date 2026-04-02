@@ -380,7 +380,7 @@ private struct HistoryDetailView: View {
 extension HistoryEventKind {
     var systemImage: String {
         switch self {
-        case .blockResponse:  "hand.tap.fill"
+        case .blockResponse:  "hand.point.up.left"
         case .scriptEnabled:  "play.circle.fill"
         case .scriptDisabled: "stop.circle.fill"
         case .scriptCrashed:  "exclamationmark.triangle.fill"

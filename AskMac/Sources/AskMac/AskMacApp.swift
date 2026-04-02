@@ -32,7 +32,7 @@ struct AskMacApp: App {
         Task {
             await ck.checkAccountStatus()
             hb.start()
-            mw.start()
+            mw.start(scriptManager: sm)
             sm.start()
             rp.start(scriptManager: sm)
             // Purge old records in the background after services are running.
@@ -64,12 +64,16 @@ struct AskMacApp: App {
         .windowResizability(.contentSize)
         .defaultSize(width: 400, height: 560)
 
-        Window("Ask Settings", id: "settings") {
-            SettingsView()
+        Window("Ask", id: "scripts") {
+            MacScriptsView()
                 .environment(settings)
                 .environment(scriptManager)
+                .environment(actionHistory)
+                .environment(heartbeat)
+                .environment(cloudKit)
+                .environment(messageWatcher)
         }
-        .windowResizability(.contentSize)
+        .defaultSize(width: 720, height: 520)
         .defaultPosition(.center)
 
         Window("Action History", id: "history") {

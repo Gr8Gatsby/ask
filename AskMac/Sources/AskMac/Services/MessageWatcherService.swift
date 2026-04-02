@@ -2,7 +2,10 @@ import Foundation
 import UserNotifications
 import Observation
 
-/// Polls CloudKit for messages sent from the iPhone and shows macOS notifications.
+/// Polls CloudKit for messages sent from the iPhone.
+/// - Chat messages (sessionID present): routed to the owning script via MCPConnection,
+///   then `readAt` is written back so the iPhone can show a "Delivered" status.
+/// - Legacy messages (no sessionID): shown as macOS notifications.
 /// Also sends outbound messages from the Mac to the iPhone.
 @Observable
 final class MessageWatcherService {
@@ -10,20 +13,22 @@ final class MessageWatcherService {
     private let machineID: String
     private var pollTask: Task<Void, Never>?
     private var lastChecked: Date = .distantPast
+    private weak var scriptManager: ScriptManager?
 
     init(cloudKit: CloudKitService, machineID: String) {
         self.cloudKit = cloudKit
         self.machineID = machineID
     }
 
-    func start() {
+    func start(scriptManager: ScriptManager? = nil) {
+        self.scriptManager = scriptManager
         requestNotificationPermission()
         // Start slightly in the future so only new messages after launch are shown
         lastChecked = Date()
         pollTask = Task {
             while !Task.isCancelled {
                 await poll()
-                try? await Task.sleep(for: .seconds(10))
+                try? await Task.sleep(for: .seconds(5))
             }
         }
     }
@@ -48,7 +53,25 @@ final class MessageWatcherService {
         else { return }
 
         for message in messages {
-            showNotification(text: message.text)
+            if let sessionID = message.sessionID, let scriptID = message.scriptID {
+                // Route to the script's MCP connection and write readAt for delivery confirmation
+                if let conn = scriptManager?.connection(for: scriptID) {
+                    conn.deliverChatMessage(
+                        sessionID: sessionID,
+                        messageID: message.messageID,
+                        text: message.text
+                    )
+                    print("[MessageWatcher] chat_message → scriptID=\(scriptID) sessionID=\(sessionID)")
+                } else {
+                    print("[MessageWatcher] no connection for scriptID=\(scriptID), queuing notification")
+                    showNotification(text: message.text)
+                }
+                // Write readAt regardless — confirms receipt even if script is offline
+                await cloudKit.markMessageRead(messageID: message.messageID)
+            } else {
+                // Legacy Messages-screen message — show notification
+                showNotification(text: message.text)
+            }
         }
     }
 

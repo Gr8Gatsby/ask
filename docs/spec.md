@@ -620,6 +620,169 @@ Cuts the iOS TestFlight release:
 
 ---
 
+## Session Chat
+
+### Overview
+
+Each script that runs agent sessions surfaces a persistent, full-screen chat view per session. Rather than showing raw block cards, the iOS app presents agent sessions as conversation threads. The user can read the agent's output, send messages to the session, and respond to inline requests — all within a single continuous chat history that persists locally on the device across launches.
+
+### Concepts
+
+**Session Chat** is the per-session conversation view. It is the primary surface for interacting with a running or completed agent session. It shows:
+- All messages the user has sent to this session
+- All responses received from the agent (derived from `last_message` updates on the session's block)
+- All blocks that appeared during the session (confirmation prompts, permission requests, etc.) rendered inline as chat entries
+- A compose bar for sending new messages
+
+**Session List** is the intermediate screen between a script tile and its chat. It shows all known sessions for a script, ordered by most recent activity. Each row previews the last message and shows the session's working/idle state.
+
+**Local Chat History** is the device-side store of all chat entries for all sessions. It persists across app launches and is independent of what CloudKit blocks are currently live. The source of truth for message history is the local store; CloudKit blocks provide live state.
+
+### Navigation
+
+```
+Home screen (script tiles)
+  → Script Detail (session list)
+      → Session Chat (full-screen chat for one session)
+```
+
+The home screen script tiles remain unchanged. Tapping a tile opens the Script Detail screen, which now shows the session list for that script. Tapping a session row navigates to the Session Chat for that session.
+
+Non-session blocks emitted by a script (tile, status, countdown) are displayed as a compact header strip at the top of the Script Detail screen, above the session list.
+
+### Script Detail Screen — Session List
+
+- Header strip: compact display of any active non-session blocks (status label, countdown, etc.)
+- Session list: one row per known agent session, sorted by most recent activity descending
+- Each session row shows:
+  - Session project name (working directory name or project label from the block)
+  - Status indicator: animated working dot (blue) when `is_working: true`; idle dot (gray) otherwise
+  - Last message preview: first line of the most recent agent response, truncated to one line
+  - Relative time of last activity
+  - Unread indicator: shown when the agent has sent a new message since the user last opened the chat
+- Sessions with pending confirmation blocks are sorted to the top and shown with an orange border
+- Only active (non-ended) sessions are shown; when a session ends its row is removed and its local history is deleted
+- Tapping a row navigates to the Session Chat
+- A "New Session" button is shown only when the script has an active `start_session` block; tapping it responds to that block to launch a new session
+
+### Session Chat Screen
+
+**Header:**
+- Back button returning to the session list
+- Session title (project name)
+- Status: "Working…" with animated indicator when active; "Idle" when not; "Ended" when the session has stopped
+
+**Chat thread:**
+- Chronological list of all entries for this session, oldest at top, newest at bottom
+- Auto-scrolls to bottom on new entries; stops auto-scrolling if the user has scrolled up
+- Entry types:
+  - **Outgoing message**: a message the user sent — right-aligned bubble
+  - **Agent response**: the agent's output text — left-aligned bubble; long responses are collapsed to 4 lines by default with a "Show more" expansion
+  - **Inline block**: a confirmation, permission request, prompt, or other interactive block rendered as a card within the thread; the user can respond directly from within the chat
+  - **Block response**: shows the option the user chose for a now-resolved block (e.g. "You chose: Allow") — displayed as a compact resolved entry
+  - **System event**: session started, session ended — displayed as a centered timestamp-style label
+- Inline blocks that have already been responded to are shown in a resolved/dimmed state; they cannot be re-responded to
+- Inline blocks that are awaiting a response are shown in full interactive form
+
+**Compose bar:**
+- Always visible at the bottom of the screen
+- Text input with a send button
+- Sending a message creates a local outgoing entry immediately, then delivers the message to the Mac via the message delivery flow
+- The compose bar is active regardless of whether the session is currently working or idle
+- Disabled (grayed out) only when the session has permanently ended
+
+**History persistence:**
+- All chat entries are stored locally on the device using SwiftData
+- When a session ends (the agent_session block is cleared or `is_working` transitions permanently to ended), the session's `ChatSession` record and all its `ChatEntry` records are deleted
+- On first open of a session, history starts empty and accumulates as the session runs
+- Local-only — not synced to iCloud; history is lost if the app is reinstalled
+
+**Populating history from live blocks:**
+- When an `agent_session` block is received and its `last_message` value differs from the most recently stored agent response entry for that session, a new agent response entry is appended
+- When a confirmation, permission, or prompt block appears, an inline block entry is appended to the session's history
+- When the user responds to an inline block, a block response entry is appended immediately
+- Duplicate detection: a new agent response is only appended if its text differs from the last stored agent response for that session
+
+### Local Storage Model
+
+The local chat history is stored in SwiftData with two entity types:
+
+**ChatSession**
+- `sessionId` — stable identifier matching the `session_id` in the agent_session block payload
+- `scriptID` — which script owns this session
+- `machineID`
+- `project` — working directory / project name
+- `startedAt`
+- `lastActivityAt`
+
+**ChatEntry**
+- `id` — stable unique identifier
+- `sessionId` — foreign key to ChatSession
+- `role` — `user`, `assistant`, or `system`
+- `entryKind` — `message`, `inlineBlock`, `blockResponse`, `event`
+- `text` — display text or agent message content
+- `blockID` — for inline block entries, the CloudKit block ID (used to match live block state)
+- `blockJSON` — for inline block entries, the full block payload JSON (for rendering)
+- `resolvedValue` — for block response entries, the value the user chose
+- `timestamp`
+
+---
+
+## Message Delivery Confirmation
+
+### Overview
+
+When a user sends a message from the iOS Messages screen, they need to know that the message actually reached the Mac and was routed to a running terminal session — not just that it was saved to CloudKit. This section defines the full delivery lifecycle and what the user sees at each stage.
+
+### Delivery States
+
+| State | Meaning |
+|---|---|
+| **Sending** | The message is being written to CloudKit |
+| **Delivered** | The Mac daemon has read the message from CloudKit and acknowledged it |
+| **Failed** | The message could not be written to CloudKit |
+
+"Delivered" means the Mac received the message — not merely that CloudKit accepted it. This matches the mental model users have from iMessage.
+
+If the Mac is offline or has not polled recently, the message remains in a transient state (spinner still shown) until the Mac acknowledges it or a timeout elapses.
+
+### iOS — Message Status Display
+
+- While the CloudKit write is in-flight, the sending spinner is shown beneath the last outbound message
+- Once CloudKit accepts the write, the spinner remains until a Mac read receipt arrives — there is no intermediate "Delivered to CloudKit" label shown to the user
+- When a read receipt arrives, the label "Delivered" appears with a fade-in transition
+- If no read receipt arrives within 60 seconds of the CloudKit write succeeding, the label "Delivered" is shown in a dimmed style to indicate the Mac may not be online yet; it updates to the normal style if a receipt arrives later
+- Failed messages show a red "Not delivered" label with an error icon; the user can retry
+- Status labels follow the same show/hide timing as today: visible for 6 seconds after delivery, then hidden unless the message is the last in the thread
+
+### Mac — Read Receipts
+
+- When `MessageWatcherService` polls CloudKit and finds new iPhone messages, it immediately writes a `readAt` timestamp to each `AskMessage` record in CloudKit before doing anything else with the message
+- The iOS app's existing 3-second poll loop in MessagesView detects the updated `readAt` field and transitions the message to "Delivered"
+- The `AskMessage` CloudKit record type gains a single new field: `readAt` (DateTime, optional)
+
+### Mac — Message Routing to Scripts
+
+- After writing the read receipt, `MessageWatcherService` forwards each received message to all running scripts that declare support for chat messages
+- The daemon sends a `notifications/message` RPC to each eligible script connection with payload: `{ "type": "chat_message", "text": "..." }`
+- A script declares support for chat messages by including `"chat_messages": true` in its `manifest.json`
+- Scripts that do not declare `chat_messages` are not sent the notification and do not need to handle it
+- If no running script declares `chat_message` support, the Mac falls back to showing a macOS system notification (current behavior)
+
+### Script — Handling Chat Messages
+
+- A script receives a `notifications/message` event with `data.type == "chat_message"` and `data.text` containing the message text
+- The script is responsible for deciding what to do with the message: route it to a terminal, respond, etc.
+- codex-controller: routes the message text to the active Codex session's terminal using the existing `_route_to_terminal` path; if multiple sessions are active, routes to the session most recently seen as working
+- A script may respond to a chat message by emitting a block update; the iOS app surfaces the response through the normal block display flow
+
+### No Active Sessions
+
+- If a chat message is received and forwarded to a script but no terminal session is currently active, the script emits a block update indicating the message was received but there is no active session to route it to
+- The user sees this feedback via the script's tile or session block on the iOS home screen
+
+---
+
 ## Constraints and Scope (v1)
 
 - Single iCloud account — no sharing between users
@@ -664,3 +827,16 @@ Cuts the iOS TestFlight release:
 | 2026-04-01 | iOS TestFlight: GitHub Actions pipeline triggered by ios-v* tags; iOS Distribution cert + App Store provisioning profile + ASC API key auth; deployment target iOS 26.0. Release skills: /prepare-release-mac, /prepare-release-ios, /release-mac, /release-ios — version bump, prose+commit release notes, spec changelog, annotated tag creation. |
 | 2026-04-01 | Distribution: AskMac installer packaged as a PKG inside a DMG, distributed via GitHub Releases. PKG has required app component + optional per-script components (all unchecked by default). Sparkle 2.x integrated for silent app-only auto-updates via appcast. Bundled scripts in app bundle enable update detection: menu bar popover shows pending script updates and prompts user to apply. Xcode project generated via XcodeGen (project.yml). GitHub Actions release pipeline triggered on version tags. |
 | 2026-04-01 | Script dependency checking: manifest.json `requires` array declares external tool dependencies (name, check command, min version, install instructions). AskMac checks deps before spawning a script; failed scripts enter missingDependencies status with install instructions shown in the menu bar popover and a status block emitted to iPhone. claudecode-controller, codex-controller, and ollama manifests updated with requires declarations. |
+| 2026-04-02 | Mac Scripts home view: replaced the tabbed Settings panel with a NavigationSplitView home + detail experience. Sidebar lists all scripts with icon, status indicator, and enable/disable toggle. Detail panel shows the script header (name, version, description) and all active blocks rendered with full interactivity using BlockPreviewView. General settings (machine name, vault path, agent sessions, about) moved to a gear-button sheet within the Scripts window. "Actions" renamed to "Scripts" throughout the Mac app. Menu bar popover "Settings" button renamed to "Scripts". |
+| 2026-04-02 | Mac Feed view: added a "Feed" item at the top of the Scripts sidebar. Selecting it shows a chronological list of script interactions and lifecycle events (block responses, enable/disable, crashes) from ActionHistoryService. Sidebar minimum width set to 220pt so script names are fully visible. |
+| 2026-04-02 | Mac script detail card: replaced the flat header with a rich card showing brand colors (Claude Code cream, GitHub dark), large icon, name, version, type badge (Tile/Feed), description, ID, schedule, status badge, enable/disable toggle, and a dependencies section (all declared deps with installed/missing state and retry). ManagedScript now carries scriptType, schedule, and requires from the manifest. Machine settings moved from a gear-button sheet to a "Machine" sidebar item with a full-panel Form view. |
+| 2026-04-02 | Mac app navigation restructured: Scripts, Feed, and Machine are now top-level tabs in the window toolbar (segmented picker, principal placement). Scripts tab retains its NavigationSplitView sidebar; Feed and Machine are full-window panels with no sidebar. This allows each tab to independently decide its layout. Window renamed to "Ask". |
+| 2026-04-02 | Mac menu bar popover simplified: shows only machine name + status dot, scripts list (icon, name, cloud indicator, toggle), a labelled "Restart Scripts" button with proper hit target, and a single "Open Ask" button. iCloud sync and connected devices moved to Machine tab. |
+| 2026-04-02 | Mac Machine tab enhanced: Cloud section shows iCloud sync status (last heartbeat, interval) and Connected iPhones section shows device name, last-seen time, truncated device ID, and enabled/disabled toggle with device count. HeartbeatService added to Scripts window environment. |
+| 2026-04-02 | Mac Feed tab: NavigationSplitView with an analytics sidebar (total count + per-script breakdown with event count and last activity) and a main feed list. Clicking a feed item opens a detail sheet showing summary, formatted timestamp, and detail text. blockResponse history icon changed to hand.point.up.left. |
+| 2026-04-02 | Mac Blocks tab: local block builder (no service connection). Palette sidebar with 14 block types grouped by Interactive / Informational / AI & Sessions. Canvas shows live BlockPreviewView renders with move-up/move-down/delete controls on hover. JSON panel shows pretty-printed block array with copy button. Panel toggle in toolbar. Block previews are fully interactive: dropdowns, text fields, and buttons all work; each interaction shows an event footer (field, value) below the block until the next interaction clears it. |
+| 2026-04-02 | Feed sidebar type filters: "By Type" section added with Crashes, Responses, Enabled, Disabled rows (shown only when count > 0). Filter uses typed FeedFilter enum (all / kind / source) replacing the old String? source-only filter. Crash detail: crashes without stderr simply have no Detail row in the sheet — this is correct; no data was lost. |
+| 2026-04-02 | Mac brand card icons: dark-brand cards (GitHub) now apply SVG white-fill rewrite to the card icon, matching the sidebar dark-mode behaviour. svgToWhite() extracted to a file-level helper. Color scheme override on brand cards is now conditional — unbranded cards do not force a color scheme, correctly adapting to the system setting. |
+| 2026-04-02 | Spec: Session Chat — script detail screen replaced with session list (active sessions only); ended sessions are removed and their local history deleted; each active session opens a full-screen chat view with SwiftData history (ChatSession + ChatEntry); agent responses, user messages, and inline blocks accumulate as chat entries; "New Session" button shown only when a start_session block is active. |
+| 2026-04-02 | Session Chat implemented (iOS): `ChatModels.swift` (SwiftData ChatSession + ChatEntry), `SessionChatView.swift` (SessionRowView + SessionChatView + bubble/card sub-views), `ScriptDetailView` rewritten to session list + header strip, model container updated in askApp. blocks.md updated with new iOS navigation context for agent_session and start_session. |
+| 2026-04-02 | Spec: Message Delivery Confirmation — defined delivery state lifecycle (Sending → Delivered/Failed), read receipt via `readAt` field on AskMessage CloudKit record, Mac routing of chat messages to scripts via `notifications/message` (type: chat_message), and `chat_messages` manifest declaration for opt-in scripts. |

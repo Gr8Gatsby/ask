@@ -132,10 +132,8 @@ public actor TerminalMonitorService {
     }
 
     /// Returns a map of tty (short form, e.g. "s003") → tab/session title.
+    /// Terminal.app and iTerm2 are queried concurrently to halve latency.
     private func fetchTabTitles() async -> [String: String] {
-        var result: [String: String] = [:]
-
-        // Terminal.app — tty of tab returns "/dev/ttys003"
         let termScript = """
 set output to ""
 if application "Terminal" is running then
@@ -154,10 +152,6 @@ if application "Terminal" is running then
 end if
 return output
 """
-        let termOut = await appleScriptRunner("/usr/bin/osascript", ["-e", termScript])
-        merge(appleScriptOutput: termOut, into: &result)
-
-        // iTerm2 — tty of session also returns "/dev/ttys003"
         let itermScript = """
 set output to ""
 if application "iTerm2" is running then
@@ -179,9 +173,13 @@ if application "iTerm2" is running then
 end if
 return output
 """
-        let itermOut = await appleScriptRunner("/usr/bin/osascript", ["-e", itermScript])
-        merge(appleScriptOutput: itermOut, into: &result)
+        // Run both queries concurrently — halves the time when both apps are open.
+        async let termOut  = appleScriptRunner("/usr/bin/osascript", ["-e", termScript])
+        async let itermOut = appleScriptRunner("/usr/bin/osascript", ["-e", itermScript])
 
+        var result: [String: String] = [:]
+        merge(appleScriptOutput: await termOut,  into: &result)
+        merge(appleScriptOutput: await itermOut, into: &result)
         return result
     }
 
@@ -205,6 +203,9 @@ return output
 
     // MARK: - Default shell runner
 
+    /// Runs a subprocess and returns its stdout, killing it after `timeout` seconds.
+    /// Without a timeout, a hung `lsof` or `osascript` call would stall
+    /// `list_terminal_sessions` indefinitely, blocking the MCP handshake.
     private static let defaultShell: Runner = { path, args in
         await withCheckedContinuation { continuation in
             let proc = Process()
@@ -213,14 +214,30 @@ return output
             let pipe = Pipe()
             proc.standardOutput = pipe
             proc.standardError = Pipe()
+
+            // Resumed flag prevents double-resume if the process exits before the timeout fires.
+            var resumed = false
+            let resume: (String) -> Void = { output in
+                guard !resumed else { return }
+                resumed = true
+                continuation.resume(returning: output)
+            }
+
             proc.terminationHandler = { _ in
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                continuation.resume(returning: String(data: data, encoding: .utf8) ?? "")
+                resume(String(data: data, encoding: .utf8) ?? "")
             }
+
+            // Kill the process and return empty if it hasn't finished within 8 seconds.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 8) {
+                if proc.isRunning { proc.terminate() }
+                resume("")
+            }
+
             do {
                 try proc.run()
             } catch {
-                continuation.resume(returning: "")
+                resume("")
             }
         }
     }
