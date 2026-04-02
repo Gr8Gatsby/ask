@@ -15,6 +15,7 @@ import os
 import socket as socket_lib
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Optional
@@ -56,12 +57,16 @@ class TestHarness:
         self._auto_respond = False
         # Per-tool mock responses: tool_name -> result dict returned to the script
         self._tool_responses: dict = {}
+        self._home_override: Optional[str] = None
 
-    def start(self, wait_for_socket=True):
+    def start(self, wait_for_socket=True, home_override: Optional[str] = None):
         env = os.environ.copy()
         env['ASK_SOCKET_PATH'] = TEST_SOCKET
         env['ASK_SESSIONS_PATH'] = '/tmp/test-codex-sessions.json'
         env['ASK_SKIP_DISCOVERY'] = '1'
+        if home_override:
+            env['HOME'] = home_override
+            self._home_override = home_override
         self.proc = subprocess.Popen(
             [sys.executable, SCRIPT],
             stdin=subprocess.PIPE,
@@ -848,6 +853,47 @@ def test_permission_session_grouping():
     h.stop()
 
 
+def test_hook_installer_writes_unfiltered_pretool_hook():
+    print('\nTest 13: hook installer writes PreToolUse entry without matcher filtering')
+    home_dir = tempfile.TemporaryDirectory()
+    try:
+        h = TestHarness()
+        h.start(home_override=home_dir.name)
+
+        if not h.do_handshake():
+            h.stop()
+            return
+
+        hooks_path = os.path.join(home_dir.name, '.codex', 'hooks.json')
+        deadline = time.time() + 3
+        while time.time() < deadline and not os.path.exists(hooks_path):
+            time.sleep(0.05)
+
+        if not os.path.exists(hooks_path):
+            fail('hooks.json created by installer', 'file missing')
+        else:
+            with open(hooks_path) as f:
+                hooks = json.load(f)
+            pre_entries = hooks.get('hooks', {}).get('PreToolUse', [])
+            if not pre_entries:
+                fail('PreToolUse entry present', 'missing or empty')
+            else:
+                entry = pre_entries[0]
+                if 'matcher' in entry:
+                    fail('PreToolUse entry omits matcher (daemon handles filtering)', f"matcher={entry['matcher']!r}")
+                else:
+                    ok('PreToolUse entry omits matcher (daemon handles filtering)')
+                commands = [h.get('command', '') for h in entry.get('hooks', []) if h.get('type') == 'command']
+                if any('pre_tool_use.py' in cmd for cmd in commands):
+                    ok('PreToolUse entry targets pre_tool_use.py hook script')
+                else:
+                    fail('PreToolUse entry targets pre_tool_use.py', f'commands: {commands!r}')
+
+        h.stop()
+    finally:
+        home_dir.cleanup()
+
+
 def _run_isolated(sessions_file: str, seed: dict, socket_events: list) -> dict:
     """Helper: start the script with a seeded sessions file, run socket events, return saved file."""
     with open(sessions_file, 'w') as f:
@@ -1069,6 +1115,7 @@ TESTS = [
     test_permission_waits_indefinitely,
     test_session_sticky_ttl,
     test_permission_session_grouping,
+    test_hook_installer_writes_unfiltered_pretool_hook,
     test_pid_sessions_not_persisted,
     test_startup_does_not_bump_last_seen,
     test_list_terminal_sessions_discovery,

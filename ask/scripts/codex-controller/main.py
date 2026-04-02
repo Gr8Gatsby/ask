@@ -92,7 +92,6 @@ def _write_hooks_json(hooks_dir: str):
             ],
             'PreToolUse': [
                 {
-                    'matcher': 'tool == "Bash"',
                     'hooks': [{'type': 'command', 'command': pre}]
                 }
             ],
