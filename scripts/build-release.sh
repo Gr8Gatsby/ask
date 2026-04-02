@@ -123,20 +123,24 @@ ENTEOF
 fi
 
 # ── Archive + export app ──────────────────────────────────────────────────────
-echo "==> Archiving…"
+# Archive without code signing to bypass Xcode's provisioning profile
+# requirement for iCloud/CloudKit entitlements. We sign manually with codesign
+# after export, which correctly embeds entitlements for Developer ID distribution.
+echo "==> Archiving (unsigned)…"
 xcodebuild archive \
     -project "$ASKMAC_DIR/AskMac.xcodeproj" \
     -scheme AskMac \
     -configuration Release \
     -archivePath "$BUILD_DIR/AskMac.xcarchive" \
+    CODE_SIGNING_REQUIRED=NO \
+    CODE_SIGNING_ALLOWED=NO \
+    CODE_SIGN_IDENTITY="" \
     CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
     MARKETING_VERSION="$VERSION"
 
-echo "==> Exporting app bundle…"
-xcodebuild -exportArchive \
-    -archivePath "$BUILD_DIR/AskMac.xcarchive" \
-    -exportPath "$BUILD_DIR/export" \
-    -exportOptionsPlist "$ASKMAC_DIR/ExportOptions.plist"
+echo "==> Extracting app bundle from archive…"
+mkdir -p "$BUILD_DIR/export"
+cp -R "$BUILD_DIR/AskMac.xcarchive/Products/Applications/AskMac.app" "$BUILD_DIR/export/"
 
 APP_PATH="$BUILD_DIR/export/AskMac.app"
 [[ -d "$APP_PATH" ]] || { echo "ERROR: $APP_PATH not found"; exit 1; }
