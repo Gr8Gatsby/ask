@@ -47,14 +47,10 @@ targets:
         INFOPLIST_FILE: Sources/AskMac/Info.plist
         MARKETING_VERSION: "0.7.0"
         CURRENT_PROJECT_VERSION: "1"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "Developer ID Application: Kevin Hill (B5J28L8ARB)"
+        PROVISIONING_PROFILE_SPECIFIER: ""
         CODE_SIGN_ENTITLEMENTS: Sources/AskMac/AskMac.entitlements
-      configs:
-        Debug:
-          CODE_SIGN_STYLE: Automatic
-          CODE_SIGN_IDENTITY: "Apple Development"
-        Release:
-          CODE_SIGN_STYLE: Manual
-          CODE_SIGN_IDENTITY: "Developer ID Application"
     dependencies:
       - target: AskMacCore
       - package: Sparkle

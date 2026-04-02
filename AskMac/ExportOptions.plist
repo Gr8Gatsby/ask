@@ -8,8 +8,6 @@
 	<string>B5J28L8ARB</string>
 	<key>signingStyle</key>
 	<string>manual</string>
-	<key>signingCertificate</key>
-	<string>Developer ID Application</string>
 	<key>stripSwiftSymbols</key>
 	<true/>
 </dict>
