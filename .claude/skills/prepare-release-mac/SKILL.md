@@ -89,7 +89,13 @@ Open `docs/spec.md` and add a new row at the top of the Change Log table:
 
 Keep it to one line. Use today's date in `YYYY-MM-DD` format.
 
-## Step 8 — Commit
+## Step 8 — Create a release branch and commit
+
+Create a branch and commit the version bump:
+
+```bash
+git checkout -b release/mac-{version}
+```
 
 Stage only the files changed:
 - `AskMac/project.yml`
@@ -97,6 +103,28 @@ Stage only the files changed:
 
 Commit with message: `chore(mac): bump version to {version}`
 
-## Step 9 — Output release notes
+## Step 9 — Open a PR
 
-Print the final release notes to the conversation so the user can copy them for use as the git tag annotation when they run `/release-mac`.
+Push the branch and open a PR targeting `main`:
+
+```bash
+git push -u origin release/mac-{version}
+gh pr create --title "chore(mac): release v{version}" --head release/mac-{version} --base main --body "..."
+```
+
+The PR body should include:
+- A one-sentence summary of the release
+- A "Test plan" checklist:
+  - [ ] Merge PR
+  - [ ] Run `/release-mac` to tag v{version}
+  - [ ] Run `/build-pkg-mac` to build and publish artifacts
+
+Return to `main` after pushing:
+```bash
+git checkout main
+git reset --hard origin/main
+```
+
+## Step 10 — Output release notes
+
+Print the final release notes to the conversation — they will be used as the tag annotation when the user runs `/release-mac` after merging.
