@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import CloudKit
 
 // MARK: - Session Row (in ScriptDetailView session list)
 
@@ -47,9 +48,10 @@ struct SessionRowView: View {
 
 /// Ephemeral status of an outgoing user message — lives only in SessionChatView state.
 enum MessageSendStatus {
-    case sending    // onRespond in-flight
-    case sent       // onRespond returned (CloudKit write succeeded)
-    case failed     // onRespond threw
+    case sending    // CloudKit write in-flight
+    case sent       // CloudKit write succeeded
+    case delivered  // Mac daemon received and routed to script
+    case failed     // CloudKit write threw
 }
 
 // MARK: - Session Chat View
@@ -62,12 +64,15 @@ struct SessionChatView: View {
     let onRespond: (RKBlock, String) async -> Void
 
     @Environment(\.modelContext) private var modelContext
+    @Environment(iOSCloudKitService.self) private var cloudKit
     @Query private var entries: [ChatEntry]
 
     @State private var draft = ""
     @State private var isSending = false
     /// Tracks per-entry send status for outgoing messages while this view is open.
     @State private var sendStatuses: [String: MessageSendStatus] = [:]
+    /// Maps entryID → messageID for messages pending Mac delivery confirmation.
+    @State private var pendingDelivery: [String: String] = [:]
 
     private let sessionId: String
     private let initialProject: String
@@ -219,7 +224,7 @@ struct SessionChatView: View {
                 }
             )
         case "blockResponse":
-            BlockResponseLabel(entry: entry)
+            EmptyView() // Reply is now shown inside the InlineBlockCard
         case "event":
             SystemEventLabel(text: entry.text)
         default:
@@ -363,14 +368,15 @@ struct SessionChatView: View {
     }
 
     private func send() async {
-        guard let block = liveBlock else { return }
+        guard isActive else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isSending else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         isSending = true
         draft = ""
 
-        // Insert entry immediately and track its ID for status display
+        // Insert entry immediately; use entryID as the CloudKit record name
+        // so we can poll for the Mac's readAt delivery receipt later.
         let entry = ChatEntry(
             sessionId: sessionId, role: "user", entryKind: "message", text: text
         )
@@ -379,22 +385,44 @@ struct SessionChatView: View {
         sendStatuses[entry.entryID] = .sending
 
         do {
-            try await onRespondThrowing(block, text)
+            try await cloudKit.sendMessage(
+                machineID: machineID,
+                text: text,
+                messageID: entry.entryID,
+                sessionID: sessionId,
+                scriptID: scriptID
+            )
             sendStatuses[entry.entryID] = .sent
-            // Clear "sent" checkmark after a few seconds
-            Task {
-                try? await Task.sleep(for: .seconds(4))
-                sendStatuses.removeValue(forKey: entry.entryID)
-            }
+            // Watch for Mac delivery confirmation
+            pendingDelivery[entry.entryID] = entry.entryID
+            Task { await pollDelivery(entryID: entry.entryID) }
         } catch {
             sendStatuses[entry.entryID] = .failed
         }
         isSending = false
     }
 
-    /// Wraps the non-throwing `onRespond` so `send()` can catch errors.
-    private func onRespondThrowing(_ block: RKBlock, _ value: String) async throws {
-        await onRespond(block, value)
+    /// Polls the AskMessage record until Mac writes `readAt`, then marks as delivered.
+    private func pollDelivery(entryID: String) async {
+        let maxAttempts = 30   // ~60s at 2s intervals
+        for _ in 0..<maxAttempts {
+            try? await Task.sleep(for: .seconds(2))
+            guard pendingDelivery[entryID] != nil else { return }  // cancelled externally
+            let readAt = await cloudKit.fetchMessageReadAt(messageID: entryID)
+            if readAt != nil {
+                sendStatuses[entryID] = .delivered
+                pendingDelivery.removeValue(forKey: entryID)
+                await cloudKit.deleteMessage(messageID: entryID)
+                // Clear "delivered" label after a few seconds
+                try? await Task.sleep(for: .seconds(4))
+                sendStatuses.removeValue(forKey: entryID)
+                return
+            }
+        }
+        // Timed out — clear status without marking failed (message may still arrive)
+        pendingDelivery.removeValue(forKey: entryID)
+        try? await Task.sleep(for: .seconds(4))
+        sendStatuses.removeValue(forKey: entryID)
     }
 }
 
@@ -410,18 +438,14 @@ private struct ChatBubbleView: View {
     }
 
     var body: some View {
-        HStack(alignment: .top) {
-            if entry.role == "user" { Spacer(minLength: 60) }
-            VStack(alignment: entry.role == "user" ? .trailing : .leading, spacing: 4) {
-                if entry.role == "assistant" {
+        Group {
+            if entry.role == "assistant" {
+                // Full-width, no bubble
+                VStack(alignment: .leading, spacing: 4) {
                     Text(entry.text)
                         .font(.subheadline)
                         .lineLimit(isExpanded ? nil : 4)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(.systemGray5))
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
                     if needsExpansion {
                         Button(isExpanded ? "Show less" : "Show more") {
                             withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
@@ -429,25 +453,28 @@ private struct ChatBubbleView: View {
                         .font(.caption2)
                         .foregroundStyle(Color.accentColor)
                     }
-                } else {
-                    Text(entry.text)
-                        .font(.subheadline)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(
-                            sendStatus == .failed ? Color.red.opacity(0.8) : Color.accentColor
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .opacity(sendStatus == .sending ? 0.7 : 1.0)
-
-                    // Delivery status label
-                    if let status = sendStatus {
-                        deliveryLabel(status)
+                }
+            } else {
+                // Right-aligned user bubble
+                HStack {
+                    Spacer(minLength: 60)
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Text(entry.text)
+                            .font(.subheadline)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(
+                                sendStatus == .failed ? Color.red.opacity(0.8) : Color.accentColor
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 16))
+                            .opacity(sendStatus == .sending ? 0.7 : 1.0)
+                        if let status = sendStatus {
+                            deliveryLabel(status)
+                        }
                     }
                 }
             }
-            if entry.role != "user" { Spacer(minLength: 60) }
         }
         .padding(.vertical, 2)
     }
@@ -462,6 +489,9 @@ private struct ChatBubbleView: View {
             case .sent:
                 Image(systemName: "checkmark")
                 Text("Sent")
+            case .delivered:
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                Text("Delivered")
             case .failed:
                 Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
                 Text("Failed").foregroundStyle(.red)
@@ -480,8 +510,21 @@ private struct InlineBlockCard: View {
     let liveBlock: RKBlock?
     let onRespond: (RKBlock, String) async -> Void
 
+    @State private var isExpanded = false
+
     private var isResolved: Bool { entry.resolvedValue != nil }
     private var isLive: Bool { liveBlock != nil && !isResolved }
+
+    /// Body text from the block JSON captured at resolution time.
+    private var storedBody: String? {
+        guard let json = entry.blockJSON,
+              let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let payload = obj["payload"] as? [String: Any],
+              let body = payload["body"] as? String, !body.isEmpty
+        else { return nil }
+        return body
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -491,15 +534,49 @@ private struct InlineBlockCard: View {
                 })
                 .padding(12)
             } else {
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle")
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
-                    Text(isResolved ? "Chose: \(entry.resolvedValue!)" : entry.text)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
+                } label: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "lock.shield")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(entry.text)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            if storedBody != nil {
+                                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        if isExpanded, let body = storedBody {
+                            Text(body)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .fontDesign(.monospaced)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(8)
+                                .background(Color(.systemGray6))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        HStack {
+                            Spacer()
+                            Text(entry.resolvedValue ?? entry.text)
+                                .font(.caption)
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Color.accentColor)
+                                .clipShape(Capsule())
+                        }
+                    }
+                    .padding(12)
                 }
-                .padding(12)
+                .buttonStyle(.plain)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -512,7 +589,6 @@ private struct InlineBlockCard: View {
                     lineWidth: 1
                 )
         )
-        .opacity(isLive ? 1.0 : 0.65)
         .padding(.vertical, 4)
     }
 }

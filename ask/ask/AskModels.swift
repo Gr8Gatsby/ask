@@ -81,6 +81,9 @@ enum CKSchema {
         static let text = "text"
         static let fromDevice = "fromDevice"
         static let timestamp = "timestamp"
+        static let sessionID = "sessionID"
+        static let scriptID = "scriptID"
+        static let readAt = "readAt"
     }
 
     enum Event {
@@ -434,6 +437,9 @@ struct AskMessage: Identifiable {
     let text: String
     let fromDevice: String   // "mac" or "iphone"
     let timestamp: Date
+    let sessionID: String?
+    let scriptID: String?
+    let readAt: Date?
 
     var fromIPhone: Bool { fromDevice == "iphone" }
 
@@ -451,6 +457,9 @@ struct AskMessage: Identifiable {
         self.text = text
         self.fromDevice = fromDevice
         self.timestamp = timestamp
+        self.sessionID = record[CKSchema.Message.sessionID] as? String
+        self.scriptID = record[CKSchema.Message.scriptID] as? String
+        self.readAt = record[CKSchema.Message.readAt] as? Date
     }
 }
 

@@ -144,6 +144,24 @@ final class MCPConnection: @unchecked Sendable {
         ])
     }
 
+    /// Sends a chat_message notification to the script's stdin.
+    /// Used for free-form chat messages from the iOS session chat view.
+    func deliverChatMessage(sessionID: String, messageID: String, text: String) {
+        send([
+            "jsonrpc": "2.0",
+            "method": "notifications/message",
+            "params": [
+                "level": "info",
+                "data": [
+                    "type": "chat_message",
+                    "sessionId": sessionID,
+                    "messageId": messageID,
+                    "text": text
+                ]
+            ]
+        ])
+    }
+
     // MARK: - Inbound (script → daemon)
 
     private func handleLine(_ line: String) async {

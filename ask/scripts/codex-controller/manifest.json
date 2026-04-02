@@ -1,7 +1,7 @@
 {
   "id": "codex-controller",
   "name": "Codex",
-  "version": "1.15.24",
+  "version": "1.16.0",
   "description": "Codex CLI session supervisor — routes permissions and notifications to iPhone",
   "entry": "main.py",
   "icon": "sparkles",

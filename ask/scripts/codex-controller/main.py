@@ -311,6 +311,13 @@ class MCPClient:
                 if q:
                     await q.put(value)
 
+            elif data.get('type') == 'chat_message':
+                session_id = data.get('sessionId', '')
+                text = data.get('text', '')
+                if session_id and text:
+                    print(f'[codex-controller] chat_message sessionId={session_id!r}', file=sys.stderr)
+                    asyncio.create_task(self._route_to_terminal(session_id, text))
+
     async def wait_for_block_response(self, block_id):
         """Wait indefinitely for the user to respond via iOS."""
         q = asyncio.Queue()

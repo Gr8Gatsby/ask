@@ -179,8 +179,8 @@ final class CloudKitService {
         return timestamp
     }
 
-    /// Fetches messages from the iPhone (fromDevice="iphone") newer than `since`.
-    func fetchNewMessages(machineID: String, since: Date) async throws -> [(messageID: String, text: String, timestamp: Date)] {
+    /// Fetches messages from the iPhone (fromDevice="iphone") newer than `since`, excluding already-read ones.
+    func fetchNewMessages(machineID: String, since: Date) async throws -> [(messageID: String, text: String, timestamp: Date, sessionID: String?, scriptID: String?)] {
         let predicate = NSPredicate(
             format: "%K == %@ AND %K == %@ AND %K > %@",
             CKSchema.Message.machineID, machineID,
@@ -196,8 +196,20 @@ final class CloudKitService {
                   let text = record[CKSchema.Message.text] as? String,
                   let timestamp = record[CKSchema.Message.timestamp] as? Date
             else { return nil }
-            return (messageID: messageID, text: text, timestamp: timestamp)
+            // Skip messages already marked as read by a previous daemon run
+            if record[CKSchema.Message.readAt] as? Date != nil { return nil }
+            let sessionID = record[CKSchema.Message.sessionID] as? String
+            let scriptID = record[CKSchema.Message.scriptID] as? String
+            return (messageID: messageID, text: text, timestamp: timestamp, sessionID: sessionID, scriptID: scriptID)
         }
+    }
+
+    /// Writes `readAt` to an AskMessage record so the iOS app can confirm delivery.
+    func markMessageRead(messageID: String) async {
+        let recordID = CKRecord.ID(recordName: messageID)
+        guard let record = try? await database.record(for: recordID) else { return }
+        record[CKSchema.Message.readAt] = Date()
+        _ = try? await database.save(record)
     }
 
     // MARK: - Startup cleanup

@@ -32,7 +32,7 @@ struct AskMacApp: App {
         Task {
             await ck.checkAccountStatus()
             hb.start()
-            mw.start()
+            mw.start(scriptManager: sm)
             sm.start()
             rp.start(scriptManager: sm)
             // Purge old records in the background after services are running.

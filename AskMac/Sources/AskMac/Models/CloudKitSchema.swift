@@ -79,6 +79,9 @@ enum CKSchema {
         static let text = "text"
         static let fromDevice = "fromDevice"
         static let timestamp = "timestamp"
+        static let sessionID = "sessionID"
+        static let scriptID = "scriptID"
+        static let readAt = "readAt"
     }
 
     enum Response {
