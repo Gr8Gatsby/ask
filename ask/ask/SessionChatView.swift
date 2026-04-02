@@ -43,6 +43,15 @@ struct SessionRowView: View {
     }
 }
 
+// MARK: - Message send status
+
+/// Ephemeral status of an outgoing user message — lives only in SessionChatView state.
+enum MessageSendStatus {
+    case sending    // onRespond in-flight
+    case sent       // onRespond returned (CloudKit write succeeded)
+    case failed     // onRespond threw
+}
+
 // MARK: - Session Chat View
 
 struct SessionChatView: View {
@@ -53,12 +62,12 @@ struct SessionChatView: View {
     let onRespond: (RKBlock, String) async -> Void
 
     @Environment(\.modelContext) private var modelContext
-    @Environment(\.dismiss) private var dismiss
     @Query private var entries: [ChatEntry]
 
     @State private var draft = ""
     @State private var isSending = false
-    @State private var sessionEndedTask: Task<Void, Never>?
+    /// Tracks per-entry send status for outgoing messages while this view is open.
+    @State private var sendStatuses: [String: MessageSendStatus] = [:]
 
     private let sessionId: String
     private let initialProject: String
@@ -103,6 +112,7 @@ struct SessionChatView: View {
         }
     }
 
+    /// True while the session block is present in allBlocks.
     private var isActive: Bool { liveBlock != nil }
 
     private var displayProject: String {
@@ -113,13 +123,13 @@ struct SessionChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Reconnecting banner — shown when block is temporarily absent (script restart)
+            if !isActive {
+                reconnectingBanner
+            }
             chatThread
             Divider()
-            if isActive {
-                composeBar
-            } else {
-                endedNotice
-            }
+            composeBar
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -144,26 +154,25 @@ struct SessionChatView: View {
                 appendInlineBlockEntry(block)
             }
         }
-        .onChange(of: isActive) { _, active in
-            if !active {
-                sessionEndedTask?.cancel()
-                sessionEndedTask = Task {
-                    // Grace period: transient block disappearances (script restart) last ~6 s
-                    try? await Task.sleep(for: .seconds(8))
-                    guard !Task.isCancelled else { return }
-                    await MainActor.run {
-                        deleteChatData()
-                        dismiss()
-                    }
-                }
-            } else {
-                sessionEndedTask?.cancel()
-                sessionEndedTask = nil
-            }
+        // No auto-dismiss or auto-cleanup on isActive change.
+        // The reconnecting banner handles the disconnected UI state.
+        // History is preserved through script restarts.
+    }
+
+    // MARK: - Reconnecting banner
+
+    private var reconnectingBanner: some View {
+        HStack(spacing: 8) {
+            ProgressView().scaleEffect(0.75).tint(.secondary)
+            Text("Reconnecting…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
-        .onDisappear {
-            sessionEndedTask?.cancel()
-        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .background(Color(.systemGray6))
+        .transition(.move(edge: .top).combined(with: .opacity))
+        .animation(.easeInOut(duration: 0.25), value: isActive)
     }
 
     // MARK: - Chat thread
@@ -196,7 +205,10 @@ struct SessionChatView: View {
     private func chatEntryView(for entry: ChatEntry) -> some View {
         switch entry.entryKind {
         case "message":
-            ChatBubbleView(entry: entry)
+            ChatBubbleView(
+                entry: entry,
+                sendStatus: sendStatuses[entry.entryID]
+            )
         case "inlineBlock":
             InlineBlockCard(
                 entry: entry,
@@ -224,7 +236,7 @@ struct SessionChatView: View {
     private var composeBar: some View {
         HStack(alignment: .center, spacing: 0) {
             TextField(
-                livePayload?.placeholder ?? "Reply…",
+                isActive ? (livePayload?.placeholder ?? "Reply…") : "Reconnecting…",
                 text: $draft,
                 axis: .vertical
             )
@@ -232,7 +244,8 @@ struct SessionChatView: View {
             .padding(.vertical, 12)
             .lineLimit(1...5)
             .font(.body)
-            .onSubmit { if !isSending { Task { await send() } } }
+            .disabled(!isActive)
+            .onSubmit { if !isSending && isActive { Task { await send() } } }
 
             if hasText || isSending {
                 Button { Task { await send() } } label: {
@@ -250,7 +263,7 @@ struct SessionChatView: View {
                     .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .disabled(isSending)
+                .disabled(isSending || !isActive)
                 .padding(.trailing, 8)
                 .transition(.scale(scale: 0.5).combined(with: .opacity))
             }
@@ -265,18 +278,19 @@ struct SessionChatView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .padding(.bottom, 8)
-    }
-
-    private var endedNotice: some View {
-        Text("Session ended")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .padding(.vertical, 16)
+        .opacity(isActive ? 1.0 : 0.5)
     }
 
     @ViewBuilder
     private var statusLabel: some View {
-        if let payload = livePayload {
+        if !isActive {
+            HStack(spacing: 3) {
+                ProgressView().scaleEffect(0.45).tint(.secondary)
+                Text("Reconnecting…")
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        } else if let payload = livePayload {
             if payload.isWorking == true {
                 HStack(spacing: 3) {
                     ProgressView().scaleEffect(0.45).tint(.secondary)
@@ -289,10 +303,6 @@ struct SessionChatView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
-        } else {
-            Text("Ended")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -352,17 +362,6 @@ struct SessionChatView: View {
         try? modelContext.save()
     }
 
-    private func deleteChatData() {
-        let id = sessionId
-        let fetch = FetchDescriptor<ChatEntry>(
-            predicate: #Predicate { $0.sessionId == id }
-        )
-        if let toDelete = try? modelContext.fetch(fetch) {
-            for entry in toDelete { modelContext.delete(entry) }
-        }
-        try? modelContext.save()
-    }
-
     private func send() async {
         guard let block = liveBlock else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -370,12 +369,32 @@ struct SessionChatView: View {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         isSending = true
         draft = ""
-        modelContext.insert(ChatEntry(
+
+        // Insert entry immediately and track its ID for status display
+        let entry = ChatEntry(
             sessionId: sessionId, role: "user", entryKind: "message", text: text
-        ))
+        )
+        modelContext.insert(entry)
         try? modelContext.save()
-        await onRespond(block, text)
+        sendStatuses[entry.entryID] = .sending
+
+        do {
+            try await onRespondThrowing(block, text)
+            sendStatuses[entry.entryID] = .sent
+            // Clear "sent" checkmark after a few seconds
+            Task {
+                try? await Task.sleep(for: .seconds(4))
+                sendStatuses.removeValue(forKey: entry.entryID)
+            }
+        } catch {
+            sendStatuses[entry.entryID] = .failed
+        }
         isSending = false
+    }
+
+    /// Wraps the non-throwing `onRespond` so `send()` can catch errors.
+    private func onRespondThrowing(_ block: RKBlock, _ value: String) async throws {
+        await onRespond(block, value)
     }
 }
 
@@ -383,6 +402,7 @@ struct SessionChatView: View {
 
 private struct ChatBubbleView: View {
     let entry: ChatEntry
+    var sendStatus: MessageSendStatus?
     @State private var isExpanded = false
 
     private var needsExpansion: Bool {
@@ -415,13 +435,41 @@ private struct ChatBubbleView: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
-                        .background(Color.accentColor)
+                        .background(
+                            sendStatus == .failed ? Color.red.opacity(0.8) : Color.accentColor
+                        )
                         .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .opacity(sendStatus == .sending ? 0.7 : 1.0)
+
+                    // Delivery status label
+                    if let status = sendStatus {
+                        deliveryLabel(status)
+                    }
                 }
             }
             if entry.role != "user" { Spacer(minLength: 60) }
         }
         .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func deliveryLabel(_ status: MessageSendStatus) -> some View {
+        HStack(spacing: 3) {
+            switch status {
+            case .sending:
+                ProgressView().scaleEffect(0.5).tint(.secondary)
+                Text("Sending…")
+            case .sent:
+                Image(systemName: "checkmark")
+                Text("Sent")
+            case .failed:
+                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
+                Text("Failed").foregroundStyle(.red)
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 }
 
