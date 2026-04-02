@@ -13,7 +13,7 @@
 	<key>provisioningProfiles</key>
 	<dict>
 		<key>simple.ask</key>
-		<string>Ask App Store</string>
+		<string>XC simple ask</string>
 	</dict>
 	<key>stripSwiftSymbols</key>
 	<true/>

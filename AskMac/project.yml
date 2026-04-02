@@ -51,7 +51,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinhill.askmac
         INFOPLIST_FILE: Sources/AskMac/Info.plist
-        MARKETING_VERSION: "0.7.0"
+        MARKETING_VERSION: "0.7.1"
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: "Developer ID Application: Kevin Hill (B5J28L8ARB)"
