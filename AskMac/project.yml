@@ -47,7 +47,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinhill.askmac
         INFOPLIST_FILE: Sources/AskMac/Info.plist
-        MARKETING_VERSION: "1.0.0"
+        MARKETING_VERSION: "0.7.0"
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "Developer ID Application"

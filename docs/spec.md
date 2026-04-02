@@ -800,6 +800,7 @@ If the Mac is offline or has not polled recently, the message remains in a trans
 
 | Date | Change |
 |---|---|
+| 2026-04-02 | Mac v0.7.0: first alpha — PKG installer, Sparkle auto-updates, Scripts/Feed/Machine tabs, agent session supervision, end-to-end message delivery confirmation |
 | 2026-03-28 | Initial spec created |
 | 2026-03-28 | Added security model: cryptographic pairing, Scripts Vault, capability declarations, threat model |
 | 2026-03-28 | Mac companion service layer v1: CloudKit schema, HeartbeatService, JobWatcher, JobExecutor, minimal menu bar UI |

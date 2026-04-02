@@ -35,10 +35,22 @@ BUILD_NUMBER="$(date +%s)"
 
 echo "==> Building AskMac ${VERSION} (build ${BUILD_NUMBER})"
 
+# ── Load Apple credentials from Keychain if not already set ───────────────────
+for var in APPLE_ID APPLE_ID_PASSWORD APPLE_TEAM_ID; do
+    if [[ -z "${!var:-}" ]]; then
+        val=$(security find-generic-password -a "$USER" -s "$var" -w 2>/dev/null || true)
+        if [[ -n "$val" ]]; then
+            export "$var"="$val"
+            echo "==> Loaded $var from Keychain"
+        fi
+    fi
+done
+
 # ── Validate prerequisites ─────────────────────────────────────────────────────
 for var in APPLE_ID APPLE_ID_PASSWORD APPLE_TEAM_ID; do
     if [[ -z "${!var:-}" ]]; then
-        echo "ERROR: \$$var is not set."
+        echo "ERROR: \$$var is not set and not found in Keychain."
+        echo "  Store it with: security add-generic-password -a \"\$USER\" -s $var -w \"value\""
         exit 1
     fi
 done
