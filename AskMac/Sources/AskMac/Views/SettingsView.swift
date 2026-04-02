@@ -25,12 +25,13 @@ private func svgToWhite(_ svg: String) -> NSImage? {
 // MARK: - Top-level tab
 
 private enum MacTab: String, CaseIterable {
-    case scripts, feed, machine
+    case scripts, feed, blocks, machine
 
     var label: String {
         switch self {
         case .scripts: "Scripts"
         case .feed:    "Feed"
+        case .blocks:  "Blocks"
         case .machine: "Machine"
         }
     }
@@ -54,6 +55,8 @@ struct MacScriptsView: View {
             case .feed:
                 MacFeedView()
                     .environment(actionHistory)
+            case .blocks:
+                BlocksBuilderView()
             case .machine:
                 MachineDetailView()
                     .environment(settings)
@@ -520,16 +523,32 @@ private struct ScriptDetailView: View {
     }
 }
 
+// MARK: - Feed filter
+
+private enum FeedFilter: Hashable {
+    case all
+    case kind(HistoryEventKind)
+    case source(String)
+}
+
 // MARK: - Feed view
 
 private struct MacFeedView: View {
     @Environment(ActionHistoryService.self) private var history
-    @State private var sourceFilter: String? = nil   // nil = all
+    @State private var feedFilter: FeedFilter? = .all
     @State private var selectedEvent: HistoryEvent?
 
     private var filteredEvents: [HistoryEvent] {
-        guard let filter = sourceFilter else { return history.events }
-        return history.events.filter { $0.source == filter }
+        switch feedFilter {
+        case .all, nil:         return history.events
+        case .kind(let k):      return history.events.filter { $0.kind == k }
+        case .source(let s):    return history.events.filter { $0.source == s }
+        }
+    }
+
+    // Per-kind counts shown in the type section
+    private func count(for kind: HistoryEventKind) -> Int {
+        history.events.filter { $0.kind == kind }.count
     }
 
     private struct SourceStat: Identifiable {
@@ -562,10 +581,11 @@ private struct MacFeedView: View {
         }
     }
 
-    // MARK: Sidebar — analytics
+    // MARK: Sidebar — analytics + filters
 
     private var feedSidebar: some View {
-        List(selection: $sourceFilter) {
+        List(selection: $feedFilter) {
+            // All
             Section {
                 HStack {
                     Label("All Activity", systemImage: "clock.arrow.circlepath")
@@ -573,10 +593,20 @@ private struct MacFeedView: View {
                     Text("\(history.events.count)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .monospacedDigit()
                 }
-                .tag(Optional<String>.none)
+                .tag(FeedFilter.all)
             }
 
+            // By type
+            Section("By Type") {
+                kindRow(kind: .scriptCrashed,  label: "Crashes",   icon: "exclamationmark.triangle.fill")
+                kindRow(kind: .blockResponse,  label: "Responses",  icon: "hand.point.up.left")
+                kindRow(kind: .scriptEnabled,  label: "Enabled",    icon: "play.circle.fill")
+                kindRow(kind: .scriptDisabled, label: "Disabled",   icon: "stop.circle.fill")
+            }
+
+            // By script
             if !sourceStats.isEmpty {
                 Section("By Script") {
                     ForEach(sourceStats) { stat in
@@ -596,13 +626,30 @@ private struct MacFeedView: View {
                                 .foregroundStyle(.secondary)
                                 .monospacedDigit()
                         }
-                        .tag(Optional(stat.name))
+                        .tag(FeedFilter.source(stat.name))
                     }
                 }
             }
         }
         .listStyle(.sidebar)
         .navigationSplitViewColumnWidth(min: 200, ideal: 220)
+    }
+
+    @ViewBuilder
+    private func kindRow(kind: HistoryEventKind, label: String, icon: String) -> some View {
+        let n = count(for: kind)
+        if n > 0 {
+            HStack {
+                Label(label, systemImage: icon)
+                    .foregroundStyle(kind.color)
+                Spacer()
+                Text("\(n)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            .tag(FeedFilter.kind(kind))
+        }
     }
 
     // MARK: Detail — event list
