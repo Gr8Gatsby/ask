@@ -31,6 +31,6 @@
 
 	<!-- Sparkle EdDSA public key — replace PLACEHOLDER with output of Sparkle's generate_keys tool -->
 	<key>SUPublicEDKey</key>
-	<string>SPARKLE_PUBLIC_KEY_PLACEHOLDER</string>
+	<string>jbCfz3kJ7jtaLmJd5HTmZc1o0I5nLB+JBxTPbdqfFyQ=</string>
 </dict>
 </plist>

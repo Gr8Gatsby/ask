@@ -26,6 +26,26 @@ SPARKLE_SIGN="$REPO_ROOT/sparkle/bin/sign_update"
 SIGN_APP="Developer ID Application"
 SIGN_PKG="Developer ID Installer"
 
+# Staple with backup/restore to prevent xcrun stapler from corrupting the file
+# on failure (it modifies the file even when it fails, invalidating the hash).
+# Retries up to 3 times with 15s delay for CDN propagation. Warns but continues
+# on persistent failure — notarization alone is sufficient for Gatekeeper.
+staple_with_retry() {
+    local file="$1"
+    local backup="${file}.pre-staple-backup"
+    cp "$file" "$backup"
+    for i in 1 2 3; do
+        cp "$backup" "$file"
+        xcrun stapler staple "$file" && rm -f "$backup" && return 0
+        echo "    Staple attempt $i failed, retrying in 15s…"
+        sleep 15
+    done
+    cp "$backup" "$file"
+    rm -f "$backup"
+    echo "WARNING: stapler failed for $(basename "$file") — file restored to pre-staple state."
+    echo "         Notarization was accepted; Gatekeeper will verify online at first launch."
+}
+
 # ── Version ────────────────────────────────────────────────────────────────────
 VERSION="${1:-}"
 if [[ -z "$VERSION" ]]; then
@@ -71,6 +91,37 @@ fi
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR/pkgs"
 
+# ── Generate Xcode project ────────────────────────────────────────────────────
+echo "==> Generating Xcode project from project.yml…"
+if ! command -v xcodegen &>/dev/null; then
+    echo "ERROR: xcodegen not found. Run: brew install xcodegen"; exit 1
+fi
+(cd "$ASKMAC_DIR" && xcodegen generate)
+
+# Guard: xcodegen can overwrite entitlements with an empty file if run in certain states.
+ENTITLEMENTS="$ASKMAC_DIR/Sources/AskMac/AskMac.entitlements"
+if ! grep -q "icloud-container-identifiers" "$ENTITLEMENTS"; then
+    echo "ERROR: xcodegen overwrote AskMac.entitlements — restoring CloudKit entitlements."
+    cat > "$ENTITLEMENTS" << 'ENTEOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.simple.ask</string>
+	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
+	<key>com.apple.security.network.client</key>
+	<true/>
+</dict>
+</plist>
+ENTEOF
+fi
+
 # ── Archive + export app ──────────────────────────────────────────────────────
 echo "==> Archiving…"
 xcodebuild archive \
@@ -95,7 +146,20 @@ echo "==> Bundling scripts into app…"
 BUNDLE_SCRIPTS="$APP_PATH/Contents/Resources/Scripts"
 mkdir -p "$BUNDLE_SCRIPTS"
 for script_dir in "$SCRIPTS_SRC"/*/; do
-    cp -r "$script_dir" "$BUNDLE_SCRIPTS/$(basename "$script_dir")"
+    dest="$BUNDLE_SCRIPTS/$(basename "$script_dir")"
+    rsync -a --exclude='.build' --exclude='*.xcodeproj' "$script_dir" "$dest/"
+done
+
+echo "==> Signing bundled binaries…"
+find "$BUNDLE_SCRIPTS" -type f | while read -r bin; do
+    if file "$bin" | grep -q "Mach-O"; then
+        echo "    Signing $bin"
+        codesign --force \
+            --sign "$SIGN_APP" \
+            --timestamp \
+            --options runtime \
+            "$bin"
+    fi
 done
 
 echo "==> Re-signing app after adding resources…"
@@ -158,7 +222,7 @@ xcrun notarytool submit "$PKG_PATH" \
     --password "$APPLE_ID_PASSWORD" \
     --team-id "$APPLE_TEAM_ID" \
     --wait
-xcrun stapler staple "$PKG_PATH"
+staple_with_retry "$PKG_PATH"
 
 # ── Installer DMG ─────────────────────────────────────────────────────────────
 echo "==> Creating installer DMG…"
@@ -196,7 +260,7 @@ xcrun notarytool submit "$SPARKLE_DMG" \
     --password "$APPLE_ID_PASSWORD" \
     --team-id "$APPLE_TEAM_ID" \
     --wait
-xcrun stapler staple "$SPARKLE_DMG"
+staple_with_retry "$SPARKLE_DMG"
 
 # ── Sparkle signature ─────────────────────────────────────────────────────────
 echo "==> Generating Sparkle EdDSA signature…"
