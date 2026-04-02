@@ -264,7 +264,10 @@ staple_with_retry "$SPARKLE_DMG"
 
 # ── Sparkle signature ─────────────────────────────────────────────────────────
 echo "==> Generating Sparkle EdDSA signature…"
-SIGNATURE=$("$SPARKLE_SIGN" "$SPARKLE_DMG")
+# sign_update outputs: sparkle:edSignature="BASE64" length="SIZE"
+# Extract just the base64 signature value for embedding in appcast XML.
+SIGN_OUTPUT=$("$SPARKLE_SIGN" "$SPARKLE_DMG")
+SIGNATURE=$(echo "$SIGN_OUTPUT" | sed 's/.*edSignature="\([^"]*\)".*/\1/')
 FILE_SIZE=$(stat -f%z "$SPARKLE_DMG")
 
 # ── Update appcast ────────────────────────────────────────────────────────────
