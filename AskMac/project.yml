@@ -41,6 +41,12 @@ targets:
           - "**/*.entitlements"
     entitlements:
       path: Sources/AskMac/AskMac.entitlements
+      properties:
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.simple.ask
+        com.apple.developer.icloud-services:
+          - CloudKit
+        com.apple.security.network.client: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinhill.askmac
