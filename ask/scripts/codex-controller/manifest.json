@@ -10,7 +10,7 @@
     {
       "id": "codex",
       "name": "OpenAI Codex CLI",
-      "check": "source ~/.zshrc 2>/dev/null; codex --version 2>/dev/null || which codex",
+      "check": "PATH=\"$HOME/.local/bin:$HOME/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\" codex --version 2>/dev/null",
       "install": "npm install -g @openai/codex",
       "install_url": "https://github.com/openai/codex"
     }

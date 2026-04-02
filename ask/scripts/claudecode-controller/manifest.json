@@ -10,7 +10,7 @@
     {
       "id": "claude",
       "name": "Claude Code",
-      "check": "source ~/.zshrc 2>/dev/null; claude --version 2>/dev/null || which claude",
+      "check": "PATH=\"$HOME/.local/bin:$HOME/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\" claude --version",
       "min_version": "1.0.0",
       "install": "npm install -g @anthropic-ai/claude-code",
       "install_url": "https://claude.ai/code"
