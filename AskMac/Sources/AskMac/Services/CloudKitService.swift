@@ -25,7 +25,7 @@ final class CloudKitService {
     func checkAccountStatus() async {
         do {
             accountStatus = try await container.accountStatus()
-            logger.info("iCloud account status: \(self.accountStatus.debugDescription)")
+            logger.info("iCloud account status: \(self.accountStatus.rawValue)")
         } catch {
             accountStatus = .couldNotDetermine
             logger.error("iCloud account status check failed: \(error)")
