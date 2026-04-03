@@ -684,14 +684,17 @@ private struct ScriptDetailView: View {
                         previewBranded.toggle()
                         if cardFlipped { cardFlipped = false }
                     } label: {
-                        Text("Brand")
-                            .font(.caption)
-                            .fontWeight(previewBranded ? .semibold : .regular)
-                            .foregroundStyle(previewBranded ? Color.white : Color(white: 0.2))
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 4)
-                            .background(previewBranded ? Color.accentColor : Color(white: 0.88))
-                            .clipShape(Capsule())
+                        HStack(spacing: 4) {
+                            Image(systemName: previewBranded ? "checkmark.square.fill" : "square")
+                            Text("Show brand")
+                        }
+                        .font(.caption)
+                        .fontWeight(previewBranded ? .semibold : .regular)
+                        .foregroundStyle(previewBranded ? Color.white : Color(white: 0.2))
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(previewBranded ? Color.accentColor : Color(white: 0.88))
+                        .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
                 }
