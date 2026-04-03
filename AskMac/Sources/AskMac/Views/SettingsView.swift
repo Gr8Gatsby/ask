@@ -154,7 +154,10 @@ struct MacScriptsView: View {
 
 private struct ScriptsTabView: View {
     @Environment(ScriptManager.self) private var scriptManager
+    @Environment(AppSettings.self) private var settings
     @State private var selectedScriptID: String?
+    @State private var showVaultPicker = false
+    @State private var vaultPathText: String = ""
 
     var body: some View {
         NavigationSplitView {
@@ -170,9 +173,58 @@ private struct ScriptsTabView: View {
                             .tag(script.id)
                     }
                 }
+
+                Section {
+                    DisclosureGroup {
+                        Toggle("Include App Bundle Scripts", isOn: Binding(
+                            get: { settings.usesBundledScripts },
+                            set: { settings.usesBundledScripts = $0 }
+                        ))
+                        .font(.caption)
+
+                        HStack(spacing: 4) {
+                            TextField("Vault Path", text: $vaultPathText)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.caption)
+                                .onSubmit { applyVaultPathText() }
+                            Button { showVaultPicker = true } label: {
+                                Image(systemName: "folder")
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Choose folder")
+                        }
+
+                        if let bundlePath = Bundle.main.resourceURL?.appendingPathComponent("Scripts").abbreviatingWithTildeInPath,
+                           settings.usesBundledScripts {
+                            Text(bundlePath)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+
+                        Text("Vault scripts override bundle scripts with the same ID.")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    } label: {
+                        Label("Scripts Vault", systemImage: "lock")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 220, ideal: 240)
+            .onAppear {
+                vaultPathText = settings.vaultPath?.abbreviatingWithTildeInPath ?? "~/.ask/scripts"
+            }
+            .fileImporter(isPresented: $showVaultPicker, allowedContentTypes: [.folder]) { result in
+                if case .success(let url) = result {
+                    _ = url.startAccessingSecurityScopedResource()
+                    settings.vaultPath = url
+                    vaultPathText = url.abbreviatingWithTildeInPath
+                }
+            }
         } detail: {
             if let id = selectedScriptID,
                let script = scriptManager.scripts.first(where: { $0.id == id }) {
@@ -185,6 +237,13 @@ private struct ScriptsTabView: View {
                 )
             }
         }
+    }
+
+    private func applyVaultPathText() {
+        let expanded = vaultPathText.hasPrefix("~")
+            ? FileManager.default.homeDirectoryForCurrentUser.path + vaultPathText.dropFirst()
+            : vaultPathText
+        settings.vaultPath = URL(fileURLWithPath: expanded)
     }
 }
 
@@ -1653,7 +1712,6 @@ private enum MachineSection: String, CaseIterable, Identifiable {
     case cloud    = "Cloud"
     case devices  = "Devices"
     case machine  = "Machine"
-    case vault    = "Scripts Vault"
     case sessions = "Sessions"
     case about    = "About"
 
@@ -1664,7 +1722,6 @@ private enum MachineSection: String, CaseIterable, Identifiable {
         case .cloud:    "icloud"
         case .devices:  "iphone"
         case .machine:  "desktopcomputer"
-        case .vault:    "folder"
         case .sessions: "cpu"
         case .about:    "info.circle"
         }
@@ -1676,8 +1733,6 @@ private struct MachineDetailView: View {
     @Environment(HeartbeatService.self) private var heartbeat
 
     @State private var selectedSection: MachineSection? = .cloud
-    @State private var showVaultPicker = false
-    @State private var vaultPathText: String = ""
     @State private var agentSessions: [AgentSession] = []
     @State private var liveProcesses: [LiveProcess] = []
 
@@ -1694,23 +1749,12 @@ private struct MachineDetailView: View {
             case .cloud:    machineCloudSection
             case .devices:  machineDevicesSection
             case .machine:  machineMachineSection
-            case .vault:    machineVaultSection
             case .sessions: machineSessionsSection
             case .about:    machineAboutSection
             }
         }
         .navigationTitle("Machine")
         .onAppear { refreshSessions() }
-        .fileImporter(
-            isPresented: $showVaultPicker,
-            allowedContentTypes: [.folder]
-        ) { result in
-            if case .success(let url) = result {
-                _ = url.startAccessingSecurityScopedResource()
-                settings.vaultPath = url
-                vaultPathText = url.abbreviatingWithTildeInPath
-            }
-        }
     }
 
     // MARK: Section: Cloud
@@ -1895,56 +1939,6 @@ private struct MachineDetailView: View {
         .formStyle(.grouped)
         .navigationTitle("Machine")
     }
-
-    // MARK: Section: Scripts Vault
-
-    private var machineVaultSection: some View {
-        Form {
-            Section {
-                Toggle("Include App Bundle Scripts", isOn: Binding(
-                    get: { settings.usesBundledScripts },
-                    set: { settings.usesBundledScripts = $0 }
-                ))
-
-                if let bundlePath = Bundle.main.resourceURL?.appendingPathComponent("Scripts").abbreviatingWithTildeInPath {
-                    Text(bundlePath)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                HStack(spacing: 6) {
-                    TextField("Vault Path", text: $vaultPathText)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.body)
-                        .onSubmit { applyVaultPathText() }
-                    Button { showVaultPicker = true } label: {
-                        Image(systemName: "folder")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Choose folder")
-                }
-            } header: {
-                Text("Scripts Vault")
-            } footer: {
-                Text("Vault scripts override bundle scripts with the same ID.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
-        .navigationTitle("Scripts Vault")
-        .onAppear {
-            vaultPathText = settings.vaultPath?.abbreviatingWithTildeInPath ?? "~/.ask/scripts"
-        }
-    }
-
-    private func applyVaultPathText() {
-        let expanded = vaultPathText.hasPrefix("~")
-            ? FileManager.default.homeDirectoryForCurrentUser.path + vaultPathText.dropFirst()
-            : vaultPathText
-        settings.vaultPath = URL(fileURLWithPath: expanded)
-    }
-
 
     // MARK: Section: Sessions
 
