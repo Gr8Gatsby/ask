@@ -800,6 +800,7 @@ If the Mac is offline or has not polled recently, the message remains in a trans
 
 | Date | Change |
 |---|---|
+| 2026-04-03 | iOS: tool activity folded into session card (collapsible ActivityHistoryCard with count + time span); activity_feed standalone card suppressed; chat injects activity group cards after each work burst |
 | 2026-04-03 | iOS: rich markdown rendering in session chat (code blocks, bold/italic/inline code), stop-session button, cleaner resolved confirmation cards |
 | 2026-04-02 | Mac v0.7.1: fix CloudKit Production sync, prevent entitlement blanking on rebuild, loosen Claude Code and Codex dependency detection |
 | 2026-04-02 | iOS v0.7.0: first TestFlight release — machine picker, session supervision, permission prompts, bidirectional messaging, push notifications, CloudKit Production sync |

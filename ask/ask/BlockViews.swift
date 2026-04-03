@@ -1217,26 +1217,10 @@ struct AgentSessionBlockView: View {
                 .background(Color(.systemGray6))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
-                // Tool history feed
+                // Tool history — collapsible activity card
                 if let history = payload.toolHistory, !history.isEmpty {
-                    VStack(alignment: .leading, spacing: 3) {
-                        ForEach(history.reversed().prefix(5), id: \.ts) { entry in
-                            HStack(spacing: 6) {
-                                Image(systemName: toolIcon(entry.tool))
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                                    .frame(width: 12)
-                                Text(toolActivityText(entry.tool, entry.preview))
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                Spacer()
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 4)
-                    .padding(.top, 2)
+                    ActivityHistoryCard(history: history, maxCollapsed: 5)
+                        .padding(.top, 2)
                 }
 
                 // Sent message bubble
@@ -1411,11 +1395,96 @@ struct RepoPickerSheet: View {
 
 // MARK: - Relative time helper
 
-private func relativeTime(_ ts: Double) -> String {
+func relativeTime(_ ts: Double) -> String {
     let date = Date(timeIntervalSince1970: ts)
     let formatter = RelativeDateTimeFormatter()
     formatter.unitsStyle = .short
     return formatter.localizedString(for: date, relativeTo: Date())
+}
+
+// MARK: - Activity History Card (reused in session card + chat)
+
+struct ActivityHistoryCard: View {
+    let history: [ToolHistoryEntry]
+    var maxCollapsed: Int = 5
+
+    @State private var isExpanded = false
+
+    private var sorted: [ToolHistoryEntry] { history.sorted { $0.ts > $1.ts } }
+
+    /// Total time span in seconds between oldest and newest entry.
+    private var spanSeconds: Double {
+        guard let first = history.map(\.ts).min(),
+              let last  = history.map(\.ts).max() else { return 0 }
+        return last - first
+    }
+
+    private var spanLabel: String {
+        let secs = Int(spanSeconds)
+        if secs < 60 { return secs == 0 ? "" : "\(secs)s" }
+        return "\(secs / 60)m \(secs % 60)s"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header row — always visible
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chart.bar.xaxis")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    Text("\(history.count) action\(history.count == 1 ? "" : "s")")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    if !spanLabel.isEmpty {
+                        Text("·")
+                            .font(.caption2)
+                            .foregroundStyle(.quaternary)
+                        Text(spanLabel)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    Spacer()
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.quaternary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                Divider().padding(.horizontal, 8)
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(sorted.prefix(maxCollapsed), id: \.ts) { entry in
+                        HStack(spacing: 8) {
+                            Image(systemName: toolIcon(entry.tool))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 14, alignment: .center)
+                            Text(toolActivityText(entry.tool, entry.preview))
+                                .font(.caption2)
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer()
+                            Text(relativeTime(entry.ts))
+                                .font(.caption2)
+                                .foregroundStyle(.quaternary)
+                                .fixedSize()
+                        }
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 8)
+            }
+        }
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
 }
 
 // MARK: - ActivityFeed

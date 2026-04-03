@@ -477,6 +477,7 @@ struct HomeView: View {
                 withAnimation(.easeOut(duration: 0.25)) {
                     blocks = fresh.filter { !$0.isFeedBlock || $0.requiresResponse }
                         .filter { $0.blockType != .alert }
+                        .filter { $0.blockType != .activityFeed }
                 }
             }
         }
@@ -565,6 +566,7 @@ struct HomeView: View {
                     if isEnabled, let fresh = try? await cloudKit.fetchBlocks(machineID: machine.id) {
                         let filtered = fresh.filter { !$0.isFeedBlock || $0.requiresResponse }
                             .filter { $0.blockType != .alert }
+                            .filter { $0.blockType != .activityFeed }
                         if filtered.isEmpty {
                             consecutiveEmpty += 1
                             if consecutiveEmpty >= 2 {

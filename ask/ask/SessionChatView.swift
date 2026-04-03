@@ -83,6 +83,8 @@ struct SessionChatView: View {
     @State private var sendStatuses: [String: MessageSendStatus] = [:]
     /// Maps entryID → messageID for messages pending Mac delivery confirmation.
     @State private var pendingDelivery: [String: String] = [:]
+    /// Timestamp of the most recent tool history entry we've already captured into the chat.
+    @State private var lastCapturedActivityTs: Double = 0
 
     private let sessionId: String
     private let initialProject: String
@@ -178,6 +180,7 @@ struct SessionChatView: View {
         }
         .onChange(of: livePayload?.lastMessage) { _, newMsg in
             guard let msg = newMsg, !msg.isEmpty else { return }
+            captureActivityGroup()
             appendAssistantEntry(msg)
         }
         .onChange(of: linkedConfirmations.map(\.id)) { _, currentIDs in
@@ -252,6 +255,8 @@ struct SessionChatView: View {
             )
         case "blockResponse":
             EmptyView() // Reply is now shown inside the InlineBlockCard
+        case "activityGroup":
+            ActivityGroupCard(entry: entry)
         case "event":
             SystemEventLabel(text: entry.text)
         default:
@@ -354,6 +359,26 @@ struct SessionChatView: View {
             ))
         }
         for block in linkedConfirmations { appendInlineBlockEntry(block) }
+        try? modelContext.save()
+    }
+
+    private func captureActivityGroup() {
+        guard let history = livePayload?.toolHistory, !history.isEmpty else { return }
+        // Only capture entries newer than what we've already snapshotted
+        let newEntries = history.filter { $0.ts > lastCapturedActivityTs }
+        guard !newEntries.isEmpty else { return }
+        if let newest = newEntries.map(\.ts).max() {
+            lastCapturedActivityTs = newest
+        }
+        guard let data = try? JSONEncoder().encode(newEntries),
+              let json = String(data: data, encoding: .utf8) else { return }
+        modelContext.insert(ChatEntry(
+            sessionId: sessionId,
+            role: "system",
+            entryKind: "activityGroup",
+            text: "\(newEntries.count) actions",
+            blockJSON: json
+        ))
         try? modelContext.save()
     }
 
@@ -715,6 +740,93 @@ private struct BlockResponseLabel: View {
                 .clipShape(Capsule())
         }
         .padding(.vertical, 1)
+    }
+}
+
+// MARK: - Activity Group Card (injected into chat after each work burst)
+
+private struct ActivityGroupCard: View {
+    let entry: ChatEntry
+    @State private var isExpanded = false
+
+    private var entries: [ToolHistoryEntry] {
+        guard let json = entry.blockJSON,
+              let data = json.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([ToolHistoryEntry].self, from: data)
+        else { return [] }
+        return decoded.sorted { $0.ts > $1.ts }
+    }
+
+    private var spanLabel: String {
+        let tss = entries.map(\.ts)
+        guard let first = tss.min(), let last = tss.max(), last > first else { return "" }
+        let secs = Int(last - first)
+        return secs < 60 ? "\(secs)s" : "\(secs / 60)m \(secs % 60)s"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chart.bar.xaxis")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(entry.text)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    if !spanLabel.isEmpty {
+                        Text("·")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        Text(spanLabel)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(entries, id: \.ts) { e in
+                        HStack(spacing: 8) {
+                            Image(systemName: toolIcon(e.tool))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 14, alignment: .center)
+                            Text(toolActivityText(e.tool, e.preview))
+                                .font(.caption2)
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer()
+                            Text(relativeTime(e.ts))
+                                .font(.caption2)
+                                .foregroundStyle(.quaternary)
+                                .fixedSize()
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+            }
+        }
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color(.separator).opacity(0.3), lineWidth: 0.5)
+        )
+        .padding(.vertical, 3)
     }
 }
 
