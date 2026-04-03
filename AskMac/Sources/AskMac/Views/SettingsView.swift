@@ -262,6 +262,7 @@ private struct ScriptDetailView: View {
     @State private var cardFlipped = false
     @State private var previewBranded = true
     @State private var previewScheme: CardColorSchemePreview = .light
+    @State private var showTools = false
     @State private var checkDrafts: [String: String] = [:]
     @State private var checkResults: [String: Bool?] = [:]
     @State private var checkOutput: [String: String] = [:]
@@ -284,8 +285,20 @@ private struct ScriptDetailView: View {
             VStack(alignment: .leading, spacing: 16) {
                 scriptCard
 
-                HStack(alignment: .top, spacing: 16) {
-                    // Left: live preview
+                // Toggle bar — only shown when the script declares tools
+                if !script.tools.isEmpty {
+                    Picker("", selection: $showTools) {
+                        Text("Live Preview").tag(false)
+                        Text("Methods").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+
+                if showTools {
+                    scriptToolsPanel
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
                     VStack(alignment: .leading, spacing: 12) {
                         if script.status == .crashed, let error = script.lastError {
                             crashBanner(error)
@@ -314,12 +327,6 @@ private struct ScriptDetailView: View {
                         }
                     }
                     .frame(maxWidth: .infinity)
-
-                    // Right: script tools panel (only when tools declared)
-                    if !script.tools.isEmpty {
-                        scriptToolsPanel
-                            .frame(maxWidth: .infinity)
-                    }
                 }
             }
             .padding(20)
