@@ -684,18 +684,25 @@ private struct InlineBlockCard: View {
                 .padding(12)
             } else {
                 Button {
+                    guard storedBody != nil else { return }
                     withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
                 } label: {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 6) {
                             Image(systemName: "lock.shield")
-                                .font(.caption)
+                                .font(.caption2)
                                 .foregroundStyle(.secondary)
                             Text(entry.text)
                                 .font(.caption)
                                 .fontWeight(.medium)
                                 .foregroundStyle(.secondary)
-                            Spacer()
+                                .lineLimit(1)
+                            Spacer(minLength: 4)
+                            if let resolved = entry.resolvedValue {
+                                Text(resolved)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
                             if storedBody != nil {
                                 Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                                     .font(.caption2)
@@ -712,17 +719,9 @@ private struct InlineBlockCard: View {
                                 .background(Color(.systemGray6))
                                 .clipShape(RoundedRectangle(cornerRadius: 6))
                         }
-                        HStack {
-                            Spacer()
-                            if let resolved = entry.resolvedValue {
-                                Label(resolved, systemImage: "checkmark.circle.fill")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .labelStyle(.titleAndIcon)
-                            }
-                        }
                     }
-                    .padding(12)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
                 }
                 .buttonStyle(.plain)
             }
