@@ -91,7 +91,9 @@ struct SessionChatView: View {
 
     init(
         sessionBlockID: String,
-        sessionPayload: RKAgentSessionPayload,
+        sessionID: String,
+        project: String,
+        livePayload: RKAgentSessionPayload?,
         allBlocks: [RKBlock],
         scriptID: String,
         machineID: String,
@@ -102,11 +104,10 @@ struct SessionChatView: View {
         self.scriptID = scriptID
         self.machineID = machineID
         self.onRespond = onRespond
-        self.sessionId = sessionPayload.sessionId
-        self.initialProject = sessionPayload.project
-        let id = sessionPayload.sessionId
+        self.sessionId = sessionID
+        self.initialProject = project
         _entries = Query(
-            filter: #Predicate<ChatEntry> { $0.sessionId == id },
+            filter: #Predicate<ChatEntry> { $0.sessionId == sessionID },
             sort: \.timestamp,
             order: .forward
         )
@@ -162,8 +163,8 @@ struct SessionChatView: View {
                     Button {
                         showStopConfirm = true
                     } label: {
-                        Image(systemName: "xmark.circle")
-                            .foregroundStyle(.secondary)
+                        Image(systemName: "xmark")
+                            .fontWeight(.semibold)
                     }
                     .confirmationDialog("Stop Session?", isPresented: $showStopConfirm) {
                         Button("Stop Session", role: .destructive) {
@@ -342,7 +343,11 @@ struct SessionChatView: View {
             if payload.isWorking == true {
                 HStack(spacing: 3) {
                     ProgressView().scaleEffect(0.45).tint(.secondary)
-                    Text("Working…")
+                    if let tool = payload.currentTool {
+                        Text(toolActivityText(tool, payload.currentPreview))
+                    } else {
+                        Text("Working…")
+                    }
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)

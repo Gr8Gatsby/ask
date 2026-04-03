@@ -4,6 +4,15 @@ import CloudKit
 import UserNotifications
 import SwiftData
 
+// MARK: - Navigation value for session chat
+
+/// Carries enough context to render SessionChatView even after the live block disappears.
+struct AgentSessionNavValue: Hashable {
+    let blockID: String
+    let sessionID: String
+    let project: String
+}
+
 // MARK: - Script group model
 
 /// A view-model grouping all blocks emitted by a single script.
@@ -881,7 +890,7 @@ struct ScriptDetailView: View {
                         ForEach(sessionBlocks) { block in
                             if let payload = block.agentSessionPayload {
                                 let confCount = sessionConfirmations(for: payload.sessionId).count
-                                NavigationLink(value: block.id) {
+                                NavigationLink(value: AgentSessionNavValue(blockID: block.id, sessionID: payload.sessionId, project: payload.project)) {
                                     SessionRowView(
                                         payload: payload,
                                         confirmationCount: confCount
@@ -927,18 +936,18 @@ struct ScriptDetailView: View {
                 }
             }
             // Session chat navigation
-            .navigationDestination(for: String.self) { sessionBlockID in
-                if let block = allBlocks.first(where: { $0.id == sessionBlockID && $0.blockType == .agentSession }),
-                   let payload = block.agentSessionPayload {
-                    SessionChatView(
-                        sessionBlockID: sessionBlockID,
-                        sessionPayload: payload,
-                        allBlocks: allBlocks,
-                        scriptID: scriptID,
-                        machineID: activeMachine?.id ?? "",
-                        onRespond: onRespond
-                    )
-                }
+            .navigationDestination(for: AgentSessionNavValue.self) { nav in
+                let livePayload = allBlocks.first(where: { $0.id == nav.blockID })?.agentSessionPayload
+                SessionChatView(
+                    sessionBlockID: nav.blockID,
+                    sessionID: nav.sessionID,
+                    project: nav.project,
+                    livePayload: livePayload,
+                    allBlocks: allBlocks,
+                    scriptID: scriptID,
+                    machineID: activeMachine?.id ?? "",
+                    onRespond: onRespond
+                )
             }
             // Detail block push (list→detail pattern)
             .navigationDestination(isPresented: $isShowingDetail) {
