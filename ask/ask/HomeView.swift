@@ -818,6 +818,7 @@ struct ScriptDetailView: View {
     @State private var cachedName: String = ""
 
     @State private var restartBobOffset: CGFloat = 0
+    @State private var hadSessions: Bool = false
 
     private var group: ScriptGroup {
         ScriptGroup(scriptID: scriptID, blocks: allBlocks.filter { $0.scriptID == scriptID && $0.blockType != .tile })
@@ -910,7 +911,16 @@ struct ScriptDetailView: View {
             .listSectionSpacing(.compact)
             .scrollContentBackground(.hidden)
             .background(useBrandColors ? (brandGroup.brandBackground ?? Color(.systemGroupedBackground)) : Color(.systemGroupedBackground))
-            .overlay { if isEmpty { restartingOverlay } }
+            .overlay { if isEmpty && !hadSessions { restartingOverlay } }
+            .onChange(of: sessionBlocks.isEmpty) { _, nowEmpty in
+                if !nowEmpty { hadSessions = true }
+                if nowEmpty && hadSessions {
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(300))
+                        dismiss()
+                    }
+                }
+            }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {

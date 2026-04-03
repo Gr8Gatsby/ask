@@ -73,6 +73,7 @@ struct SessionChatView: View {
     let onRespond: (RKBlock, String) async -> Void
 
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
     @Environment(iOSCloudKitService.self) private var cloudKit
     @Query private var entries: [ChatEntry]
 
@@ -200,6 +201,11 @@ struct SessionChatView: View {
                     sessionId: sessionId, role: "system", entryKind: "event", text: "Session ended"
                 ))
                 try? modelContext.save()
+                // Auto-pop back to script screen after a brief moment
+                Task {
+                    try? await Task.sleep(for: .milliseconds(800))
+                    dismiss()
+                }
             }
         }
         // Reconnecting banner handles the disconnected UI state.
