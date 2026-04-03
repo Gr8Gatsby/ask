@@ -45,6 +45,28 @@ private func svgToWhite(_ svg: String) -> NSImage? {
     return NSImage(data: data)
 }
 
+// MARK: - Color hex helpers
+
+private extension Color {
+    init?(hex: String) {
+        let h = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard h.count == 6, let value = UInt64(h, radix: 16) else { return nil }
+        self.init(
+            red:   Double((value >> 16) & 0xFF) / 255,
+            green: Double((value >>  8) & 0xFF) / 255,
+            blue:  Double( value        & 0xFF) / 255
+        )
+    }
+
+    var hexString: String {
+        guard let c = NSColor(self).usingColorSpace(.sRGB) else { return "#000000" }
+        return String(format: "#%02X%02X%02X",
+            Int((c.redComponent   * 255).rounded()),
+            Int((c.greenComponent * 255).rounded()),
+            Int((c.blueComponent  * 255).rounded()))
+    }
+}
+
 // MARK: - Top-level tab
 
 private enum MacTab: String, CaseIterable {
@@ -268,6 +290,11 @@ private struct ScriptDetailView: View {
     @State private var checkOutput: [String: String] = [:]
     @State private var checkRunning: Set<String> = []
     @State private var savedDeps: Set<String> = []
+    // Brand override state
+    @State private var brandColorPickerColor: Color = .white
+    @State private var brandHex: String = ""
+    @State private var brandColorSaved = false
+    @State private var svgDropTargeted = false
     // Schedule editor state (feed scripts)
     @State private var scheduleHourDisplay: Int = 9   // 1–12
     @State private var scheduleIsPM: Bool = false
@@ -503,6 +530,19 @@ private struct ScriptDetailView: View {
                 .buttonStyle(.plain)
                 .help("Reveal in Finder")
 
+                if hasBrand {
+                    Button {
+                        withAnimation(.spring(duration: 0.5)) { cardFlipped = true }
+                    } label: {
+                        Image(systemName: "paintpalette")
+                            .font(.body)
+                            .foregroundStyle(brandForegroundPrimary)
+                            .padding(8)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Edit brand colors")
+                }
+
                 if script.scriptType == "feed" && script.schedule != nil {
                     Button {
                         withAnimation(.spring(duration: 0.5)) { cardFlipped = true }
@@ -607,6 +647,13 @@ private struct ScriptDetailView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    // Brand override editor
+                    if hasBrand {
+                        brandOverrideSection
+                        Divider()
+                            .background(brandForegroundSecondary.opacity(0.2))
+                    }
+
                     // Schedule editor (feed scripts only)
                     if script.scriptType == "feed" && script.schedule != nil {
                         scheduleEditorSection
@@ -707,6 +754,9 @@ private struct ScriptDetailView: View {
         .background(brandBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .onAppear {
+            // Initialise brand color state
+            initBrandColor()
+
             // Initialise schedule state from manifest cron expression
             if let cron = script.schedule {
                 let parts = cron.split(separator: " ")
@@ -953,6 +1003,151 @@ private struct ScriptDetailView: View {
         return sorted.map { names[$0] }.joined(separator: ", ") + " at \(timeStr)"
     }
 
+    // MARK: Brand override editor
+
+    private func initBrandColor() {
+        if let hex = settings.brandColorOverride(for: script.id), let c = Color(hex: hex) {
+            brandColorPickerColor = c
+            brandHex = hex
+        } else {
+            brandColorPickerColor = brandBackground
+            brandHex = brandBackground.hexString
+        }
+    }
+
+    private func saveBrandColor() {
+        let hex = brandHex.hasPrefix("#") ? brandHex : "#\(brandHex)"
+        guard Color(hex: hex) != nil else { return }
+        settings.setBrandColorOverride(scriptID: script.id, hex: hex)
+        brandColorSaved = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { brandColorSaved = false }
+    }
+
+    @discardableResult
+    private func handleIconDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        _ = provider.loadObject(ofClass: URL.self) { url, _ in
+            guard let url, url.pathExtension.lowercased() == "svg",
+                  let svg = try? String(contentsOf: url, encoding: .utf8) else { return }
+            DispatchQueue.main.async { self.settings.setSVGOverride(scriptID: self.script.id, svg: svg) }
+        }
+        return true
+    }
+
+    private func handleIconPaste() {
+        guard let str = NSPasteboard.general.string(forType: .string),
+              str.contains("<svg") else { return }
+        settings.setSVGOverride(scriptID: script.id, svg: str)
+    }
+
+    @ViewBuilder
+    private var brandOverrideSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Brand")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundStyle(brandForegroundPrimary)
+
+            // Background color
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Background Color")
+                    .font(.caption)
+                    .foregroundStyle(brandForegroundSecondary)
+
+                HStack(spacing: 8) {
+                    ColorPicker("", selection: $brandColorPickerColor, supportsOpacity: false)
+                        .labelsHidden()
+                        .onChange(of: brandColorPickerColor) { _, newColor in
+                            brandHex = newColor.hexString
+                            brandColorSaved = false
+                        }
+
+                    TextField("#RRGGBB", text: $brandHex)
+                        .font(.system(.caption, design: .monospaced))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 88)
+                        .onChange(of: brandHex) { _, hex in
+                            if let c = Color(hex: hex) {
+                                brandColorPickerColor = c
+                            }
+                            brandColorSaved = false
+                        }
+
+                    Spacer()
+
+                    if settings.brandColorOverride(for: script.id) != nil {
+                        Button("Reset") {
+                            settings.setBrandColorOverride(scriptID: script.id, hex: nil)
+                            initBrandColor()
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+
+                    Button { saveBrandColor() } label: {
+                        Text(brandColorSaved ? "Saved ✓" : "Save")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                    .disabled(brandColorSaved)
+                }
+            }
+
+            // SVG icon override
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Icon (SVG)")
+                    .font(.caption)
+                    .foregroundStyle(brandForegroundSecondary)
+
+                HStack(spacing: 10) {
+                    // Drop zone
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(
+                                svgDropTargeted ? Color.accentColor : brandForegroundSecondary.opacity(0.3),
+                                style: StrokeStyle(lineWidth: 1.5, dash: [5])
+                            )
+                            .frame(width: 48, height: 48)
+
+                        if let svgStr = settings.svgOverride(for: script.id),
+                           let data = svgStr.data(using: .utf8),
+                           let img = NSImage(data: data) {
+                            Image(nsImage: img)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 34, height: 34)
+                        } else {
+                            Image(systemName: "square.and.arrow.down")
+                                .font(.title3)
+                                .foregroundStyle(brandForegroundTertiary)
+                        }
+                    }
+                    .onDrop(of: [.fileURL], isTargeted: $svgDropTargeted) { providers in
+                        handleIconDrop(providers)
+                    }
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Button("Paste SVG") { handleIconPaste() }
+                            .buttonStyle(.bordered)
+                            .controlSize(.mini)
+
+                        if settings.svgOverride(for: script.id) != nil {
+                            Button("Remove") { settings.setSVGOverride(scriptID: script.id, svg: nil) }
+                                .buttonStyle(.borderless)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Drop .svg file here")
+                                .font(.caption2)
+                                .foregroundStyle(brandForegroundTertiary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private func manifestRow(_ key: String, value: String, monospaced: Bool = false, copyable: Bool = false) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Text(key)
@@ -1095,6 +1290,10 @@ private struct ScriptDetailView: View {
                 ? Color(white: 0.15)
                 : Color(white: 0.96)
         }
+        // User override
+        if let hex = settings.brandColorOverride(for: script.id), let c = Color(hex: hex) {
+            return c
+        }
         switch script.id {
         case "claudecode-controller":
             return effectiveColorScheme == .dark
@@ -1163,8 +1362,11 @@ private struct ScriptDetailView: View {
     /// Icon image adapted for the card's effective color scheme.
     /// Dark background cards get SVG strokes recoloured to white.
     private var cardIcon: NSImage? {
-        if cardIsOnDark, let svg = script.svgString {
-            return svgToWhite(svg) ?? script.iconImage
+        // SVG override takes priority
+        let svgSource = settings.svgOverride(for: script.id) ?? script.svgString
+        if let svg = svgSource {
+            if cardIsOnDark { return svgToWhite(svg) ?? script.iconImage }
+            return NSImage(data: svg.data(using: .utf8) ?? Data()) ?? script.iconImage
         }
         return script.iconImage
     }

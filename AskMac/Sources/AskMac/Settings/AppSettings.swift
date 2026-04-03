@@ -10,6 +10,10 @@ final class AppSettings {
         static let vaultPath = "vaultPath"
         static let disabledScripts = "disabledScripts"
         static let feedScheduleOverrides = "feedScheduleOverrides"
+        static let usesBundledScripts = "usesBundledScripts"
+        static let skippedDepChecks = "skippedDepChecks"
+        static let brandColorOverrides = "brandColorOverrides"
+        static let svgOverrides = "svgOverrides"
     }
 
     private let defaults: UserDefaults
@@ -31,8 +35,27 @@ final class AppSettings {
         didSet { defaults.set(Array(disabledScripts), forKey: Key.disabledScripts) }
     }
 
+    var usesBundledScripts: Bool {
+        didSet { defaults.set(usesBundledScripts, forKey: Key.usesBundledScripts) }
+    }
+
+    /// Keys are "scriptID:depID". If present, the dep check is skipped (treated as passing).
+    var skippedDepChecks: Set<String> {
+        didSet { defaults.set(Array(skippedDepChecks), forKey: Key.skippedDepChecks) }
+    }
+
     /// Schedule overrides from iOS, keyed by scriptID → cron expression.
     private(set) var feedScheduleOverrides: [String: String] = [:]
+
+    /// Per-script brand background color overrides, keyed by scriptID → "#RRGGBB".
+    var brandColorOverrides: [String: String] {
+        didSet { defaults.set(brandColorOverrides, forKey: Key.brandColorOverrides) }
+    }
+
+    /// Per-script SVG icon overrides, keyed by scriptID → raw SVG markup.
+    var svgOverrides: [String: String] {
+        didSet { defaults.set(svgOverrides, forKey: Key.svgOverrides) }
+    }
 
     var isConfigured: Bool {
         !machineName.isEmpty
@@ -81,6 +104,27 @@ final class AppSettings {
         self.disabledScripts = Set(storedDisabled)
 
         self.feedScheduleOverrides = (defaults.dictionary(forKey: Key.feedScheduleOverrides) as? [String: String]) ?? [:]
+
+        // Default to true so app bundle scripts load out of the box
+        if defaults.object(forKey: Key.usesBundledScripts) == nil {
+            defaults.set(true, forKey: Key.usesBundledScripts)
+        }
+        self.usesBundledScripts = defaults.bool(forKey: Key.usesBundledScripts)
+
+        let storedSkipped = defaults.stringArray(forKey: Key.skippedDepChecks) ?? []
+        self.skippedDepChecks = Set(storedSkipped)
+
+        self.brandColorOverrides = (defaults.dictionary(forKey: Key.brandColorOverrides) as? [String: String]) ?? [:]
+        self.svgOverrides = (defaults.dictionary(forKey: Key.svgOverrides) as? [String: String]) ?? [:]
+    }
+
+    func isDepCheckSkipped(scriptID: String, depID: String) -> Bool {
+        skippedDepChecks.contains("\(scriptID):\(depID)")
+    }
+
+    func setDepCheckSkipped(scriptID: String, depID: String, skipped: Bool) {
+        let key = "\(scriptID):\(depID)"
+        if skipped { skippedDepChecks.insert(key) } else { skippedDepChecks.remove(key) }
     }
 
     func setScriptEnabled(_ id: String, enabled: Bool) {
@@ -89,6 +133,15 @@ final class AppSettings {
         } else {
             disabledScripts.insert(id)
         }
+    }
+
+    func brandColorOverride(for scriptID: String) -> String? { brandColorOverrides[scriptID] }
+    func setBrandColorOverride(scriptID: String, hex: String?) {
+        if let hex { brandColorOverrides[scriptID] = hex } else { brandColorOverrides.removeValue(forKey: scriptID) }
+    }
+    func svgOverride(for scriptID: String) -> String? { svgOverrides[scriptID] }
+    func setSVGOverride(scriptID: String, svg: String?) {
+        if let svg { svgOverrides[scriptID] = svg } else { svgOverrides.removeValue(forKey: scriptID) }
     }
 
     func feedScheduleOverride(for scriptID: String) -> String? {
