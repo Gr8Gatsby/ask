@@ -349,6 +349,10 @@ private struct ScriptDetailView: View {
     @State private var checkOutput: [String: String] = [:]
     @State private var checkRunning: Set<String> = []
     @State private var savedDeps: Set<String> = []
+    // Add-dependency form state
+    @State private var addingDep = false
+    @State private var newDepName = ""
+    @State private var newDepCheck = ""
     // Brand override state
     @State private var brandColorPickerColor: Color = .white
     @State private var brandHex: String = ""
@@ -615,18 +619,16 @@ private struct ScriptDetailView: View {
                     .help("Edit schedule")
                 }
 
-                if !script.requires.isEmpty {
-                    Button {
-                        withAnimation(.spring(duration: 0.5)) { cardFlipped = true }
-                    } label: {
-                        Image(systemName: "checklist")
-                            .font(.body)
-                            .foregroundStyle(brandForegroundPrimary)
-                            .padding(8)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Edit dependency checks")
+                Button {
+                    withAnimation(.spring(duration: 0.5)) { cardFlipped = true }
+                } label: {
+                    Image(systemName: "checklist")
+                        .font(.body)
+                        .foregroundStyle(brandForegroundPrimary)
+                        .padding(8)
                 }
+                .buttonStyle(.plain)
+                .help("Edit dependency checks")
             }
             .padding(6)
         }
@@ -716,14 +718,64 @@ private struct ScriptDetailView: View {
                     // Schedule editor (feed scripts only)
                     if script.scriptType == "feed" && script.schedule != nil {
                         scheduleEditorSection
-                        if !script.requires.isEmpty {
-                            Divider()
-                                .background(brandForegroundSecondary.opacity(0.2))
-                            Text("Dependency Checks")
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
-                                .foregroundStyle(brandForegroundPrimary)
+                        Divider()
+                            .background(brandForegroundSecondary.opacity(0.2))
+                    }
+
+                    // Dependency checks header + add button
+                    HStack {
+                        Text("Dependency Checks")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(brandForegroundPrimary)
+                        Spacer()
+                        Button {
+                            addingDep = true
+                            newDepName = ""
+                            newDepCheck = ""
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.caption)
                         }
+                        .buttonStyle(.borderless)
+                        .help("Add dependency check")
+                    }
+
+                    // Inline add form
+                    if addingDep {
+                        VStack(alignment: .leading, spacing: 6) {
+                            TextField("Name (e.g. node)", text: $newDepName)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.caption)
+
+                            TextField("Check command (exit 0 = installed)", text: $newDepCheck)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(.caption2, design: .monospaced))
+
+                            HStack {
+                                Spacer()
+                                Button("Cancel") { addingDep = false }
+                                    .buttonStyle(.borderless)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Button("Add") { addDepCheck() }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.mini)
+                                    .disabled(newDepName.trimmingCharacters(in: .whitespaces).isEmpty ||
+                                              newDepCheck.trimmingCharacters(in: .whitespaces).isEmpty)
+                            }
+                        }
+                        .padding(8)
+                        .background(brandForegroundSecondary.opacity(0.06))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+
+                    if script.requires.isEmpty && !addingDep {
+                        Text("No dependency checks defined.")
+                            .font(.caption)
+                            .foregroundStyle(brandForegroundTertiary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.vertical, 8)
                     }
 
                     ForEach(script.requires, id: \.id) { dep in
@@ -780,6 +832,16 @@ private struct ScriptDetailView: View {
                                 .buttonStyle(.bordered)
                                 .controlSize(.mini)
                                 .disabled((checkDrafts[dep.id] ?? dep.check) == dep.check || savedDeps.contains(dep.id))
+
+                                Button {
+                                    removeDepCheck(dep)
+                                } label: {
+                                    Image(systemName: "trash")
+                                        .font(.caption)
+                                        .foregroundStyle(.red.opacity(0.8))
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Remove dependency check")
                             }
 
                             // Editable check command
@@ -924,6 +986,45 @@ private struct ScriptDetailView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             savedDeps.remove(dep.id)
         }
+    }
+
+    private func addDepCheck() {
+        let name = newDepName.trimmingCharacters(in: .whitespaces)
+        let check = newDepCheck.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, !check.isEmpty,
+              let manifestPath = script.manifestPath,
+              let data = try? Data(contentsOf: manifestPath),
+              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+
+        let id = name.lowercased().replacingOccurrences(of: " ", with: "-")
+        let newEntry: [String: Any] = ["id": id, "name": name, "check": check]
+        var requires = (json["requires"] as? [[String: Any]]) ?? []
+        requires.append(newEntry)
+        json["requires"] = requires
+
+        if let newData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .withoutEscapingSlashes]) {
+            try? newData.write(to: manifestPath)
+        }
+        addingDep = false
+        newDepName = ""
+        newDepCheck = ""
+    }
+
+    private func removeDepCheck(_ dep: ScriptDependency) {
+        guard let manifestPath = script.manifestPath,
+              let data = try? Data(contentsOf: manifestPath),
+              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var requires = json["requires"] as? [[String: Any]] else { return }
+
+        requires.removeAll { $0["id"] as? String == dep.id }
+        json["requires"] = requires.isEmpty ? nil : requires
+
+        if let newData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .withoutEscapingSlashes]) {
+            try? newData.write(to: manifestPath)
+        }
+        checkDrafts.removeValue(forKey: dep.id)
+        checkResults.removeValue(forKey: dep.id)
+        checkOutput.removeValue(forKey: dep.id)
     }
 
     private func saveSchedule() {
