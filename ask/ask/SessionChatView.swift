@@ -703,6 +703,7 @@ private struct InlineBlockCard: View {
                                     .foregroundStyle(.secondary)
                                     .labelStyle(.titleAndIcon)
                             }
+                        }
                     }
                     .padding(12)
                 }
