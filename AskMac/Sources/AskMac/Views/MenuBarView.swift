@@ -5,6 +5,8 @@ struct MenuBarView: View {
     @Environment(ScriptManager.self) private var scriptManager
 
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AppUpdater.self) private var updater
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -24,17 +26,33 @@ struct MenuBarView: View {
 
             Divider()
 
-            // Open app button
-            Button {
-                openWindow(id: "scripts")
-            } label: {
-                Text("Open Ask")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .frame(maxWidth: .infinity)
+            // Bottom: version + open
+            VStack(spacing: 6) {
+                HStack {
+                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Check for Updates") {
+                        updater.checkForUpdates()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .disabled(!updater.canCheckForUpdates)
+                }
+
+                Button {
+                    openWindow(id: "scripts")
+                    dismiss()
+                } label: {
+                    Text("Open Ask")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
             .padding(12)
         }
         .frame(width: 270)
@@ -87,7 +105,7 @@ struct MenuBarView: View {
                 Button {
                     scriptManager.reload()
                 } label: {
-                    Label("Restart Scripts", systemImage: "arrow.clockwise")
+                    Label("Restart", systemImage: "arrow.clockwise")
                         .font(.caption)
                 }
                 .buttonStyle(.bordered)

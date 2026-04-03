@@ -49,6 +49,7 @@ struct AskMacApp: App {
                 .environment(scriptManager)
                 .environment(actionHistory)
                 .environment(scriptUpdater)
+                .environment(updater)
                 .onAppear { scriptUpdater.checkForUpdates() }
         } label: {
             MenuBarLabel(hasActiveScripts: scriptManager.scripts.contains { $0.status == .running })
@@ -72,6 +73,7 @@ struct AskMacApp: App {
                 .environment(heartbeat)
                 .environment(cloudKit)
                 .environment(messageWatcher)
+                .environment(updater)
         }
         .defaultSize(width: 720, height: 520)
         .defaultPosition(.center)

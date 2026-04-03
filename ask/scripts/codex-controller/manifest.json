@@ -1,16 +1,56 @@
 {
   "id": "codex-controller",
   "name": "Codex",
-  "version": "1.16.1",
+  "version": "1.16.3",
   "description": "Codex CLI session supervisor — routes permissions and notifications to iPhone",
   "entry": "main.py",
   "icon": "sparkles",
   "icon_file": "icon.svg",
+  "tools": [
+    {
+      "name": "permission_request",
+      "description": "Routes a Codex tool permission prompt to iPhone for approval. Blocks until the user approves or denies.",
+      "params": [
+        { "name": "tool", "type": "string", "required": true },
+        { "name": "input", "type": "object", "required": false }
+      ]
+    },
+    {
+      "name": "session_active",
+      "description": "Registers or updates a Codex session. Called by the PostToolUse hook after each tool execution.",
+      "params": [
+        { "name": "session_id", "type": "string", "required": true },
+        { "name": "cwd", "type": "string", "required": true }
+      ]
+    },
+    {
+      "name": "session_stop",
+      "description": "Marks a Codex session as stopped and removes it from the active session list.",
+      "params": [
+        { "name": "session_id", "type": "string", "required": true }
+      ]
+    },
+    {
+      "name": "notification",
+      "description": "Pushes a transient alert to iPhone for Codex status updates.",
+      "params": [
+        { "name": "title", "type": "string", "required": true },
+        { "name": "body", "type": "string", "required": false }
+      ]
+    },
+    {
+      "name": "tool_executed",
+      "description": "Notifies that a tool call completed, resolving any pending permission block for that tool.",
+      "params": [
+        { "name": "tool", "type": "string", "required": true }
+      ]
+    }
+  ],
   "requires": [
     {
       "id": "codex",
       "name": "OpenAI Codex CLI",
-      "check": "PATH=\"$HOME/.local/bin:$HOME/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\" codex --version 2>/dev/null",
+      "check": "PATH=$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ 2>/dev/null | sort -V | tail -1)/bin:$HOME/.local/bin:$HOME/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH command -v codex >/dev/null 2>&1",
       "install": "npm install -g @openai/codex",
       "install_url": "https://github.com/openai/codex"
     }

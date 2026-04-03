@@ -39,6 +39,22 @@ targets:
       - path: Sources/AskMac
         excludes:
           - "**/*.entitlements"
+          - "**/Info.plist"
+    info:
+      path: Sources/AskMac/Info.plist
+      properties:
+        CFBundleIdentifier: com.kevinhill.askmac
+        CFBundleName: AskMac
+        CFBundleDisplayName: AskMac
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundlePackageType: APPL
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSHumanReadableCopyright: "© 2026 Kevin Hill"
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        LSUIElement: true
+        SUFeedURL: "https://raw.githubusercontent.com/Gr8Gatsby/ask/main/docs/appcast.xml"
+        SUPublicEDKey: "jbCfz3kJ7jtaLmJd5HTmZc1o0I5nLB+JBxTPbdqfFyQ="
     entitlements:
       path: Sources/AskMac/AskMac.entitlements
       properties:
@@ -50,7 +66,6 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinhill.askmac
-        INFOPLIST_FILE: Sources/AskMac/Info.plist
         MARKETING_VERSION: "0.7.1"
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Manual

@@ -1,6 +1,29 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - Copy Button
+
+private struct CopyButton: View {
+    let value: String
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(value, forType: .string)
+            withAnimation(.easeInOut(duration: 0.15)) { copied = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                withAnimation(.easeInOut(duration: 0.15)) { copied = false }
+            }
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .foregroundStyle(copied ? Color.green : Color.secondary)
+        }
+        .buttonStyle(.borderless)
+        .help("Copy path")
+    }
+}
+
 // MARK: - SVG dark-mode helper
 
 /// Rewrites dark/black fill and stroke values to white so an SVG icon
@@ -20,6 +43,28 @@ private func svgToWhite(_ svg: String) -> NSImage? {
     }
     guard let data = s.data(using: .utf8) else { return nil }
     return NSImage(data: data)
+}
+
+// MARK: - Color hex helpers
+
+private extension Color {
+    init?(hex: String) {
+        let h = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard h.count == 6, let value = UInt64(h, radix: 16) else { return nil }
+        self.init(
+            red:   Double((value >> 16) & 0xFF) / 255,
+            green: Double((value >>  8) & 0xFF) / 255,
+            blue:  Double( value        & 0xFF) / 255
+        )
+    }
+
+    var hexString: String {
+        guard let c = NSColor(self).usingColorSpace(.sRGB) else { return "#000000" }
+        return String(format: "#%02X%02X%02X",
+            Int((c.redComponent   * 255).rounded()),
+            Int((c.greenComponent * 255).rounded()),
+            Int((c.blueComponent  * 255).rounded()))
+    }
 }
 
 // MARK: - Top-level tab
@@ -110,6 +155,7 @@ struct MacScriptsView: View {
 private struct ScriptsTabView: View {
     @Environment(ScriptManager.self) private var scriptManager
     @State private var selectedScriptID: String?
+    @State private var showVault = false
 
     var body: some View {
         NavigationSplitView {
@@ -128,9 +174,45 @@ private struct ScriptsTabView: View {
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 220, ideal: 240)
+            .onAppear {
+                if selectedScriptID == nil {
+                    selectedScriptID = scriptManager.scripts.first?.id
+                }
+            }
+            .onChange(of: scriptManager.scripts.count) { _, count in
+                // Auto-select first script once scripts finish loading
+                if selectedScriptID == nil && count > 0 {
+                    selectedScriptID = scriptManager.scripts.first?.id
+                }
+            }
+            .onChange(of: selectedScriptID) { _, id in
+                if id != nil { showVault = false }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    Divider()
+                    Button {
+                        showVault = true
+                        selectedScriptID = nil
+                    } label: {
+                        Label("Scripts Vault", systemImage: "lock")
+                            .font(.callout)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(showVault ? Color.accentColor.opacity(0.12) : Color.clear)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(showVault ? Color.accentColor : Color.secondary)
+                }
+                .background(.bar)
+            }
         } detail: {
-            if let id = selectedScriptID,
-               let script = scriptManager.scripts.first(where: { $0.id == id }) {
+            if showVault {
+                ScriptsVaultView()
+            } else if let id = selectedScriptID,
+                      let script = scriptManager.scripts.first(where: { $0.id == id }) {
                 ScriptDetailView(script: script, scriptManager: scriptManager)
             } else {
                 ContentUnavailableView(
@@ -140,6 +222,64 @@ private struct ScriptsTabView: View {
                 )
             }
         }
+    }
+}
+
+private struct ScriptsVaultView: View {
+    @Environment(AppSettings.self) private var settings
+    @State private var vaultPathText: String = ""
+    @State private var showVaultPicker = false
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Include App Bundle Scripts", isOn: Binding(
+                    get: { settings.usesBundledScripts },
+                    set: { settings.usesBundledScripts = $0 }
+                ))
+
+                if settings.usesBundledScripts,
+                   let bundlePath = Bundle.main.resourceURL?.appendingPathComponent("Scripts").abbreviatingWithTildeInPath {
+                    Text(bundlePath)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 6) {
+                    TextField("Vault Path", text: $vaultPathText)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { applyVaultPathText() }
+                    Button { showVaultPicker = true } label: {
+                        Image(systemName: "folder")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Choose folder")
+                }
+            } header: {
+                Text("Scripts Vault")
+            } footer: {
+                Text("Vault scripts override bundle scripts with the same ID.")
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Scripts Vault")
+        .onAppear {
+            vaultPathText = settings.vaultPath?.abbreviatingWithTildeInPath ?? "~/.ask/scripts"
+        }
+        .fileImporter(isPresented: $showVaultPicker, allowedContentTypes: [.folder]) { result in
+            if case .success(let url) = result {
+                _ = url.startAccessingSecurityScopedResource()
+                settings.vaultPath = url
+                vaultPathText = url.abbreviatingWithTildeInPath
+            }
+        }
+    }
+
+    private func applyVaultPathText() {
+        let expanded = vaultPathText.hasPrefix("~")
+            ? FileManager.default.homeDirectoryForCurrentUser.path + vaultPathText.dropFirst()
+            : vaultPathText
+        settings.vaultPath = URL(fileURLWithPath: expanded)
     }
 }
 
@@ -165,7 +305,7 @@ private struct ScriptSidebarRow: View {
                     Circle()
                         .fill(statusColor)
                         .frame(width: 6, height: 6)
-                    Text(script.status.label)
+                    Text(statusLabel)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -184,6 +324,10 @@ private struct ScriptSidebarRow: View {
             .controlSize(.small)
         }
         .padding(.vertical, 2)
+    }
+
+    private var statusLabel: String {
+        script.status == .stopped && script.scriptType == "feed" ? "Scheduled" : script.status.label
     }
 
     private var statusColor: Color {
@@ -230,9 +374,32 @@ private struct ScriptDetailView: View {
     let script: ManagedScript
     let scriptManager: ScriptManager
 
+    @Environment(AppSettings.self) private var settings
+
     @State private var cardFlipped = false
     @State private var previewBranded = true
     @State private var previewScheme: CardColorSchemePreview = .light
+    @State private var showTools = false
+    @State private var checkDrafts: [String: String] = [:]
+    @State private var checkResults: [String: Bool?] = [:]
+    @State private var checkOutput: [String: String] = [:]
+    @State private var checkRunning: Set<String> = []
+    @State private var savedDeps: Set<String> = []
+    // Add-dependency form state
+    @State private var addingDep = false
+    @State private var newDepName = ""
+    @State private var newDepCheck = ""
+    // Brand override state
+    @State private var brandColorPickerColor: Color = .white
+    @State private var brandHex: String = ""
+    @State private var brandColorSaved = false
+    @State private var svgDropTargeted = false
+    // Schedule editor state (feed scripts)
+    @State private var scheduleHourDisplay: Int = 9   // 1–12
+    @State private var scheduleIsPM: Bool = false
+    @State private var scheduleMinute: Int = 0         // 0, 15, 30, 45
+    @State private var scheduleDays: Set<Int> = []     // 0=Sun…6=Sat; empty = every day
+    @State private var scheduleSaved = false
 
     private var liveBlocks: [LiveBlock] {
         Array((scriptManager.activeBlocks[script.id] ?? [:]).values)
@@ -244,56 +411,48 @@ private struct ScriptDetailView: View {
             VStack(alignment: .leading, spacing: 16) {
                 scriptCard
 
-                // Card preview controls
-                HStack(spacing: 12) {
-                    Text("Preview")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .textCase(.uppercase)
-                        .tracking(0.4)
-                    Toggle("Brand", isOn: $previewBranded)
-                        .toggleStyle(.button)
-                        .controlSize(.small)
-                        .font(.caption)
-                    Picker("", selection: $previewScheme) {
-                        ForEach(CardColorSchemePreview.allCases, id: \.self) { s in
-                            Text(s.rawValue).tag(s)
-                        }
+                // Toggle bar — only shown when the script declares tools
+                if !script.tools.isEmpty {
+                    Picker("", selection: $showTools) {
+                        Text("Live Preview").tag(false)
+                        Text("Methods").tag(true)
                     }
                     .pickerStyle(.segmented)
-                    .fixedSize()
-                    .onChange(of: previewScheme) { _, _ in
-                        if cardFlipped { cardFlipped = false }
-                    }
-                    .onChange(of: previewBranded) { _, _ in
-                        if cardFlipped { cardFlipped = false }
-                    }
+                    .labelsHidden()
                 }
 
-                if script.status == .crashed, let error = script.lastError {
-                    crashBanner(error)
-                }
-
-                if liveBlocks.isEmpty {
-                    ContentUnavailableView(
-                        "No Active Blocks",
-                        systemImage: "rectangle.stack",
-                        description: Text("This script hasn't emitted any blocks yet.")
-                    )
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 8)
+                if showTools {
+                    scriptToolsPanel
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(liveBlocks) { block in
-                            BlockPreviewView(block: block) { value in
-                                scriptManager.respondToBlock(
-                                    scriptID: script.id,
-                                    blockID: block.id,
-                                    value: value
-                                )
+                    VStack(alignment: .leading, spacing: 12) {
+                        if script.status == .crashed, let error = script.lastError {
+                            crashBanner(error)
+                        }
+
+                        if liveBlocks.isEmpty {
+                            ContentUnavailableView(
+                                "No Active Blocks",
+                                systemImage: "rectangle.stack",
+                                description: Text("This script hasn't emitted any blocks yet.")
+                            )
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 8)
+                        } else {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(liveBlocks) { block in
+                                    BlockPreviewView(block: block) { value in
+                                        scriptManager.respondToBlock(
+                                            scriptID: script.id,
+                                            blockID: block.id,
+                                            value: value
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
+                    .frame(maxWidth: .infinity)
                 }
             }
             .padding(20)
@@ -301,21 +460,83 @@ private struct ScriptDetailView: View {
         .navigationTitle(script.name)
     }
 
-    // MARK: Script card (flippable)
+    // MARK: Script tools panel
+
+    @ViewBuilder
+    private var scriptToolsPanel: some View {
+        if !script.tools.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Tools")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .textCase(.uppercase)
+                    .tracking(0.4)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(script.tools, id: \.name) { tool in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(tool.name)
+                                .font(.system(.caption, design: .monospaced))
+                                .fontWeight(.medium)
+                                .foregroundStyle(.primary)
+
+                            if let desc = tool.description {
+                                Text(desc)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(3)
+                            }
+
+                            if let params = tool.params, !params.isEmpty {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    ForEach(params, id: \.name) { param in
+                                        HStack(spacing: 4) {
+                                            Text(param.name)
+                                                .font(.system(.caption2, design: .monospaced))
+                                                .foregroundStyle(.secondary)
+                                            if let type = param.type {
+                                                Text(type)
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.tertiary)
+                                            }
+                                            if param.required != true {
+                                                Text("opt")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.tertiary)
+                                                    .italic()
+                                            }
+                                        }
+                                    }
+                                }
+                                .padding(.top, 1)
+                            }
+                        }
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.secondary.opacity(0.06))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: Script card
 
     private var scriptCard: some View {
-        ZStack {
-            scriptCardFront
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .opacity(cardFlipped ? 0 : 1)
-            scriptCardBack
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .rotation3DEffect(.degrees(180), axis: (x: 0, y: 1, z: 0))
-                .opacity(cardFlipped ? 1 : 0)
+        Group {
+            if cardFlipped {
+                scriptCardBack
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    .transition(.opacity)
+            } else {
+                scriptCardFront
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    .transition(.opacity)
+            }
         }
         .frame(maxWidth: .infinity, minHeight: 210, maxHeight: 210)
-        .rotation3DEffect(.degrees(cardFlipped ? 180 : 0), axis: (x: 0, y: 1, z: 0), perspective: 0.5)
-        .animation(.spring(duration: 0.5), value: cardFlipped)
+        .animation(.easeInOut(duration: 0.2), value: cardFlipped)
     }
 
     private var scriptCardFront: some View {
@@ -394,16 +615,102 @@ private struct ScriptDetailView: View {
             view.environment(\.colorScheme, scheme)
         }
         .overlay(alignment: .topTrailing) {
-            Button {
-                withAnimation(.spring(duration: 0.5)) { cardFlipped = true }
-            } label: {
-                Image(systemName: "info.circle")
-                    .font(.body)
-                    .foregroundStyle(brandForegroundPrimary)
-                    .padding(12)
+            HStack(spacing: 2) {
+                Button {
+                    if let dir = script.manifestPath?.deletingLastPathComponent() {
+                        NSWorkspace.shared.activateFileViewerSelecting([dir])
+                    }
+                } label: {
+                    Image(systemName: "folder")
+                        .font(.body)
+                        .foregroundStyle(brandForegroundPrimary)
+                        .padding(8)
+                }
+                .buttonStyle(.plain)
+                .help("Reveal in Finder")
+
+                if hasBrand {
+                    Button {
+                        withAnimation(.spring(duration: 0.5)) { cardFlipped = true }
+                    } label: {
+                        Image(systemName: "paintpalette")
+                            .font(.body)
+                            .foregroundStyle(brandForegroundPrimary)
+                            .padding(8)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Edit brand colors")
+                }
+
+                if script.scriptType == "feed" && script.schedule != nil {
+                    Button {
+                        withAnimation(.spring(duration: 0.5)) { cardFlipped = true }
+                    } label: {
+                        Image(systemName: "clock")
+                            .font(.body)
+                            .foregroundStyle(brandForegroundPrimary)
+                            .padding(8)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Edit schedule")
+                }
+
+                Button {
+                    withAnimation(.spring(duration: 0.5)) { cardFlipped = true }
+                } label: {
+                    Image(systemName: "checklist")
+                        .font(.body)
+                        .foregroundStyle(brandForegroundPrimary)
+                        .padding(8)
+                }
+                .buttonStyle(.plain)
+                .help("Edit dependency checks")
             }
-            .buttonStyle(.plain)
-            .help("View manifest details")
+            .padding(6)
+        }
+        .overlay(alignment: .bottomLeading) {
+            HStack(spacing: 6) {
+                // Theme buttons — explicit colours so they're always visible on any card background
+                HStack(spacing: 3) {
+                    ForEach(CardColorSchemePreview.allCases, id: \.self) { s in
+                        Button {
+                            previewScheme = s
+                            if cardFlipped { cardFlipped = false }
+                        } label: {
+                            Text(s.rawValue)
+                                .font(.caption)
+                                .fontWeight(previewScheme == s ? .semibold : .regular)
+                                .foregroundStyle(previewScheme == s ? Color.white : Color(white: 0.2))
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 4)
+                                .background(previewScheme == s ? Color.accentColor : Color(white: 0.88))
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                if hasBrand {
+                    Button {
+                        previewBranded.toggle()
+                        if cardFlipped { cardFlipped = false }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: previewBranded ? "checkmark.square.fill" : "square")
+                            Text("Show brand")
+                        }
+                        .font(.caption)
+                        .fontWeight(previewBranded ? .semibold : .regular)
+                        .foregroundStyle(previewBranded ? Color.white : Color(white: 0.2))
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(previewBranded ? Color.accentColor : Color(white: 0.88))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(12)
         }
         .overlay(alignment: .bottomTrailing) {
             Toggle("", isOn: Binding(
@@ -421,9 +728,9 @@ private struct ScriptDetailView: View {
     }
 
     private var scriptCardBack: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Manifest")
+                Text("Script Settings")
                     .font(.headline)
                     .foregroundStyle(brandForegroundPrimary)
                 Spacer()
@@ -438,44 +745,167 @@ private struct ScriptDetailView: View {
                 .help("Close")
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                manifestRow("ID", value: script.id, monospaced: true)
-                manifestRow("Name", value: script.name)
-                if let version = script.version  { manifestRow("Version", value: "v\(version)") }
-                if let type = script.scriptType  { manifestRow("Type", value: type) }
-                if let schedule = script.schedule { manifestRow("Schedule", value: schedule, monospaced: true) }
-                if let entry = script.entry       { manifestRow("Entry", value: entry, monospaced: true) }
-                if !script.requires.isEmpty {
-                    HStack(alignment: .top, spacing: 8) {
-                        Text("Dependencies")
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .foregroundStyle(brandForegroundTertiary)
-                            .frame(width: 86, alignment: .leading)
-                        VStack(alignment: .leading, spacing: 3) {
-                            ForEach(script.requires, id: \.id) { dep in
-                                let missing = script.missingDeps.contains { $0.id == dep.id }
-                                HStack(spacing: 4) {
-                                    Image(systemName: missing ? "xmark.circle.fill" : "checkmark.circle.fill")
-                                        .font(.caption2)
-                                        .foregroundStyle(missing ? .red : .green)
-                                    Text(dep.name)
-                                        .font(.caption)
-                                        .foregroundStyle(brandForegroundSecondary)
-                                    if missing, let install = dep.install {
-                                        Text("(\(install))")
-                                            .font(.caption2)
-                                            .foregroundStyle(brandForegroundTertiary)
-                                            .fontDesign(.monospaced)
-                                    }
-                                }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    // Brand override editor
+                    if hasBrand {
+                        brandOverrideSection
+                        Divider()
+                            .background(brandForegroundSecondary.opacity(0.2))
+                    }
+
+                    // Schedule editor (feed scripts only)
+                    if script.scriptType == "feed" && script.schedule != nil {
+                        scheduleEditorSection
+                        Divider()
+                            .background(brandForegroundSecondary.opacity(0.2))
+                    }
+
+                    // Dependency checks header + add button
+                    HStack {
+                        Text("Dependency Checks")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(brandForegroundPrimary)
+                        Spacer()
+                        Button {
+                            addingDep = true
+                            newDepName = ""
+                            newDepCheck = ""
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Add dependency check")
+                    }
+
+                    // Inline add form
+                    if addingDep {
+                        VStack(alignment: .leading, spacing: 6) {
+                            TextField("Name (e.g. node)", text: $newDepName)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.caption)
+
+                            TextField("Check command (exit 0 = installed)", text: $newDepCheck)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(.caption2, design: .monospaced))
+
+                            HStack {
+                                Spacer()
+                                Button("Cancel") { addingDep = false }
+                                    .buttonStyle(.borderless)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Button("Add") { addDepCheck() }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.mini)
+                                    .disabled(newDepName.trimmingCharacters(in: .whitespaces).isEmpty ||
+                                              newDepCheck.trimmingCharacters(in: .whitespaces).isEmpty)
                             }
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(brandForegroundSecondary.opacity(0.06))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
-                }
-                if let path = script.manifestPath {
-                    manifestRow("Manifest", value: path.abbreviatingWithTildeInPath, monospaced: true)
+
+                    if script.requires.isEmpty && !addingDep {
+                        Text("No dependency checks defined.")
+                            .font(.caption)
+                            .foregroundStyle(brandForegroundTertiary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.vertical, 8)
+                    }
+
+                    ForEach(script.requires, id: \.id) { dep in
+                        VStack(alignment: .leading, spacing: 6) {
+                            // Row: status icon + name + Run + Save
+                            HStack(spacing: 6) {
+                                Group {
+                                    if checkRunning.contains(dep.id) {
+                                        ProgressView().controlSize(.mini)
+                                    } else if let result = checkResults[dep.id] {
+                                        Image(systemName: result == true ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                            .foregroundStyle(result == true ? Color.green : Color.red)
+                                    } else {
+                                        Image(systemName: "circle.dotted")
+                                            .foregroundStyle(brandForegroundTertiary)
+                                    }
+                                }
+                                .font(.caption)
+                                .frame(width: 14)
+
+                                Text(dep.name)
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                                    .foregroundStyle(brandForegroundPrimary)
+
+                                Toggle("", isOn: Binding(
+                                    get: { !settings.isDepCheckSkipped(scriptID: script.id, depID: dep.id) },
+                                    set: { settings.setDepCheckSkipped(scriptID: script.id, depID: dep.id, skipped: !$0) }
+                                ))
+                                .labelsHidden()
+                                .toggleStyle(.checkbox)
+                                .help("Enable dependency check")
+
+                                Spacer()
+
+                                Button {
+                                    Task { await runDepCheck(dep) }
+                                } label: {
+                                    if checkRunning.contains(dep.id) {
+                                        ProgressView().controlSize(.mini)
+                                    } else {
+                                        Text("Run")
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+                                .disabled(checkRunning.contains(dep.id))
+
+                                Button {
+                                    saveDepCheck(dep)
+                                } label: {
+                                    Text(savedDeps.contains(dep.id) ? "Saved ✓" : "Save")
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+                                .disabled((checkDrafts[dep.id] ?? dep.check) == dep.check || savedDeps.contains(dep.id))
+
+                                Button {
+                                    removeDepCheck(dep)
+                                } label: {
+                                    Image(systemName: "trash")
+                                        .font(.caption)
+                                        .foregroundStyle(.red.opacity(0.8))
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Remove dependency check")
+                            }
+
+                            // Editable check command
+                            TextEditor(text: Binding(
+                                get: { checkDrafts[dep.id] ?? dep.check },
+                                set: { checkDrafts[dep.id] = $0 }
+                            ))
+                            .font(.system(.caption2, design: .monospaced))
+                            .scrollContentBackground(.hidden)
+                            .padding(6)
+                            .background(brandForegroundSecondary.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .frame(minHeight: 44, maxHeight: 80)
+
+                            // Output from last run
+                            if let output = checkOutput[dep.id], !output.isEmpty {
+                                let passed = checkResults[dep.id] == true
+                                Text(output)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(passed ? Color.green : Color.red)
+                                    .lineLimit(4)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -483,12 +913,453 @@ private struct ScriptDetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(brandBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12))
+        .onAppear {
+            // Initialise brand color state
+            initBrandColor()
+
+            // Initialise schedule state from manifest cron expression
+            if let cron = script.schedule {
+                let parts = cron.split(separator: " ")
+                if parts.count == 5,
+                   let min = Int(parts[0]),
+                   let hr  = Int(parts[1]) {
+                    scheduleMinute = [0, 15, 30, 45].contains(min) ? min : 0
+                    scheduleIsPM = hr >= 12
+                    scheduleHourDisplay = { let h = hr % 12; return h == 0 ? 12 : h }()
+                    let dayStr = String(parts[4])
+                    if dayStr == "*" {
+                        scheduleDays = []
+                    } else {
+                        var days = Set<Int>()
+                        for part in dayStr.split(separator: ",") {
+                            let s = String(part)
+                            if s.contains("-"), let dash = s.firstIndex(of: "-") {
+                                let after = s.index(after: dash)
+                                if let start = Int(s[s.startIndex..<dash]),
+                                   let end   = Int(s[after...]) {
+                                    for d in start...end { days.insert(d) }
+                                }
+                            } else if let d = Int(s) {
+                                days.insert(d)
+                            }
+                        }
+                        scheduleDays = days
+                    }
+                }
+            }
+            // Initialise drafts and run checks when back is shown
+            for dep in script.requires {
+                if checkDrafts[dep.id] == nil { checkDrafts[dep.id] = dep.check }
+            }
+            Task {
+                for dep in script.requires { await runDepCheck(dep) }
+            }
+        }
         .ifLet(brandColorScheme) { view, scheme in
             view.environment(\.colorScheme, scheme)
         }
     }
 
-    private func manifestRow(_ key: String, value: String, monospaced: Bool = false) -> some View {
+    private func runDepCheck(_ dep: ScriptDependency) async {
+        let command = checkDrafts[dep.id] ?? dep.check
+
+        // Strip output suppression so we can capture and display what the check found
+        let displayCommand = command
+            .replacingOccurrences(of: " >/dev/null 2>&1", with: "")
+            .replacingOccurrences(of: " 2>/dev/null", with: "")
+            .replacingOccurrences(of: " >/dev/null", with: "")
+
+        checkRunning.insert(dep.id)
+        checkResults[dep.id] = nil
+        checkOutput[dep.id] = ""
+
+        let (passed, output) = await Task.detached(priority: .userInitiated) {
+            // Run original command for authoritative exit code
+            let checkProc = Process()
+            checkProc.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            checkProc.arguments = ["-l", "-c", command]
+            checkProc.standardOutput = Pipe()
+            checkProc.standardError = Pipe()
+            try? checkProc.run()
+            checkProc.waitUntilExit()
+            let passed = checkProc.terminationStatus == 0
+
+            // Run display version to capture output
+            let outPipe = Pipe()
+            let errPipe = Pipe()
+            let displayProc = Process()
+            displayProc.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            displayProc.arguments = ["-l", "-c", displayCommand]
+            displayProc.standardOutput = outPipe
+            displayProc.standardError = errPipe
+            try? displayProc.run()
+            displayProc.waitUntilExit()
+
+            let out = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let combined = (out + err).trimmingCharacters(in: .whitespacesAndNewlines)
+            return (passed, combined)
+        }.value
+
+        checkRunning.remove(dep.id)
+        checkResults[dep.id] = passed
+        checkOutput[dep.id] = output
+    }
+
+    private func saveDepCheck(_ dep: ScriptDependency) {
+        guard let manifestPath = script.manifestPath,
+              let draft = checkDrafts[dep.id],
+              draft != dep.check,
+              let data = try? Data(contentsOf: manifestPath),
+              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var requires = json["requires"] as? [[String: Any]] else { return }
+
+        guard let idx = requires.firstIndex(where: { $0["id"] as? String == dep.id }) else { return }
+        requires[idx]["check"] = draft
+        json["requires"] = requires
+
+        if let newData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .withoutEscapingSlashes]) {
+            try? newData.write(to: manifestPath)
+        }
+        savedDeps.insert(dep.id)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            savedDeps.remove(dep.id)
+        }
+    }
+
+    private func addDepCheck() {
+        let name = newDepName.trimmingCharacters(in: .whitespaces)
+        let check = newDepCheck.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, !check.isEmpty,
+              let manifestPath = script.manifestPath,
+              let data = try? Data(contentsOf: manifestPath),
+              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+
+        let id = name.lowercased().replacingOccurrences(of: " ", with: "-")
+        let newEntry: [String: Any] = ["id": id, "name": name, "check": check]
+        var requires = (json["requires"] as? [[String: Any]]) ?? []
+        requires.append(newEntry)
+        json["requires"] = requires
+
+        if let newData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .withoutEscapingSlashes]) {
+            try? newData.write(to: manifestPath)
+        }
+        addingDep = false
+        newDepName = ""
+        newDepCheck = ""
+    }
+
+    private func removeDepCheck(_ dep: ScriptDependency) {
+        guard let manifestPath = script.manifestPath,
+              let data = try? Data(contentsOf: manifestPath),
+              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var requires = json["requires"] as? [[String: Any]] else { return }
+
+        requires.removeAll { $0["id"] as? String == dep.id }
+        json["requires"] = requires.isEmpty ? nil : requires
+
+        if let newData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .withoutEscapingSlashes]) {
+            try? newData.write(to: manifestPath)
+        }
+        checkDrafts.removeValue(forKey: dep.id)
+        checkResults.removeValue(forKey: dep.id)
+        checkOutput.removeValue(forKey: dep.id)
+    }
+
+    private func saveSchedule() {
+        guard let manifestURL = script.manifestPath else { return }
+        let hr24: Int = {
+            if scheduleIsPM { return scheduleHourDisplay == 12 ? 12 : scheduleHourDisplay + 12 }
+            else             { return scheduleHourDisplay == 12 ? 0  : scheduleHourDisplay }
+        }()
+        let dayStr = scheduleDays.isEmpty ? "*" : scheduleDays.sorted().map(String.init).joined(separator: ",")
+        let cron = "\(scheduleMinute) \(hr24) * * \(dayStr)"
+
+        guard let data = try? Data(contentsOf: manifestURL),
+              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        json["schedule"] = cron
+        if let newData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .withoutEscapingSlashes]) {
+            try? newData.write(to: manifestURL)
+        }
+        scheduleSaved = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { scheduleSaved = false }
+    }
+
+    // MARK: Schedule editor (feed scripts)
+
+    private var scheduleEditorSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Schedule")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundStyle(brandForegroundPrimary)
+
+            // Time of day
+            HStack(spacing: 8) {
+                Text("Time")
+                    .font(.caption)
+                    .foregroundStyle(brandForegroundSecondary)
+                    .frame(width: 36, alignment: .leading)
+
+                Picker("", selection: $scheduleHourDisplay) {
+                    ForEach(1...12, id: \.self) { h in Text("\(h)").tag(h) }
+                }
+                .labelsHidden()
+                .frame(width: 56)
+                .onChange(of: scheduleHourDisplay) { _, _ in scheduleSaved = false }
+
+                Text(":")
+                    .foregroundStyle(brandForegroundSecondary)
+
+                Picker("", selection: $scheduleMinute) {
+                    Text("00").tag(0)
+                    Text("15").tag(15)
+                    Text("30").tag(30)
+                    Text("45").tag(45)
+                }
+                .labelsHidden()
+                .frame(width: 56)
+                .onChange(of: scheduleMinute) { _, _ in scheduleSaved = false }
+
+                Picker("", selection: $scheduleIsPM) {
+                    Text("AM").tag(false)
+                    Text("PM").tag(true)
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 80)
+                .onChange(of: scheduleIsPM) { _, _ in scheduleSaved = false }
+            }
+
+            // Days of week
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 4) {
+                    Text("Days")
+                        .font(.caption)
+                        .foregroundStyle(brandForegroundSecondary)
+                        .frame(width: 36, alignment: .leading)
+
+                    HStack(spacing: 4) {
+                        let dayLabels = ["S","M","T","W","T","F","S"]
+                        ForEach(0..<7, id: \.self) { day in
+                            let selected = scheduleDays.contains(day)
+                            Button {
+                                if selected { scheduleDays.remove(day) }
+                                else        { scheduleDays.insert(day) }
+                                scheduleSaved = false
+                            } label: {
+                                Text(dayLabels[day])
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                                    .frame(width: 26, height: 26)
+                                    .background(selected ? Color.accentColor : brandForegroundSecondary.opacity(0.12))
+                                    .foregroundStyle(selected ? Color.white : brandForegroundPrimary)
+                                    .clipShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                HStack {
+                    Spacer().frame(width: 40)
+                    Text(scheduleSummary)
+                        .font(.caption2)
+                        .foregroundStyle(brandForegroundTertiary)
+                }
+            }
+
+            // Save
+            HStack {
+                if !scheduleDays.isEmpty {
+                    Button("Every day") {
+                        scheduleDays = []
+                        scheduleSaved = false
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .foregroundStyle(Color.accentColor)
+                }
+                Spacer()
+                Button { saveSchedule() } label: {
+                    Text(scheduleSaved ? "Saved ✓" : "Save Schedule")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(scheduleSaved)
+            }
+        }
+    }
+
+    private var scheduleSummary: String {
+        let ampm = scheduleIsPM ? "PM" : "AM"
+        let timeStr = String(format: "%d:%02d %@", scheduleHourDisplay, scheduleMinute, ampm)
+        if scheduleDays.isEmpty { return "Every day at \(timeStr)" }
+        let names = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]
+        let sorted = scheduleDays.sorted()
+        if sorted == [1,2,3,4,5] { return "Weekdays at \(timeStr)" }
+        if sorted == [0,6]       { return "Weekends at \(timeStr)" }
+        return sorted.map { names[$0] }.joined(separator: ", ") + " at \(timeStr)"
+    }
+
+    // MARK: Brand override editor
+
+    private func initBrandColor() {
+        if let hex = settings.brandColorOverride(for: script.id), let c = Color(hex: hex) {
+            brandColorPickerColor = c
+            brandHex = hex
+        }
+        // no override → leave blank (hex = "", picker = .white defaults)
+    }
+
+    private var brandHexIsValid: Bool {
+        let h = brandHex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        return h.count == 6 && UInt64(h, radix: 16) != nil
+    }
+
+    private func saveBrandColor() {
+        guard brandHexIsValid else { return }
+        let hex = brandHex.hasPrefix("#") ? brandHex : "#\(brandHex)"
+        settings.setBrandColorOverride(scriptID: script.id, hex: hex)
+        brandColorSaved = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { brandColorSaved = false }
+    }
+
+    @discardableResult
+    private func handleIconDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        _ = provider.loadObject(ofClass: URL.self) { url, _ in
+            guard let url, url.pathExtension.lowercased() == "svg",
+                  let svg = try? String(contentsOf: url, encoding: .utf8) else { return }
+            DispatchQueue.main.async { self.settings.setSVGOverride(scriptID: self.script.id, svg: svg) }
+        }
+        return true
+    }
+
+    private func handleIconPaste() {
+        guard let str = NSPasteboard.general.string(forType: .string),
+              str.contains("<svg") else { return }
+        settings.setSVGOverride(scriptID: script.id, svg: str)
+    }
+
+    @ViewBuilder
+    private var brandOverrideSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Brand")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundStyle(brandForegroundPrimary)
+
+            // Background color
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Background Color")
+                    .font(.caption)
+                    .foregroundStyle(brandForegroundSecondary)
+
+                HStack(spacing: 8) {
+                    ColorPicker("", selection: $brandColorPickerColor, supportsOpacity: false)
+                        .labelsHidden()
+                        .onChange(of: brandColorPickerColor) { _, newColor in
+                            // Picker → hex (one direction only to avoid circular updates)
+                            brandHex = newColor.hexString
+                            brandColorSaved = false
+                        }
+
+                    TextField("#RRGGBB", text: $brandHex)
+                        .font(.system(.caption, design: .monospaced))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 88)
+                        .onChange(of: brandHex) { _, _ in
+                            brandColorSaved = false
+                        }
+                        .onSubmit {
+                            // Hex → picker only on submit to avoid circular onChange loop
+                            if let c = Color(hex: brandHex) { brandColorPickerColor = c }
+                        }
+
+                    Spacer()
+
+                    Button { saveBrandColor() } label: {
+                        Text(brandColorSaved ? "Saved ✓" : "Save")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                    .disabled(brandColorSaved || !brandHexIsValid)
+                }
+            }
+
+            // SVG icon override
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Icon (SVG)")
+                    .font(.caption)
+                    .foregroundStyle(brandForegroundSecondary)
+
+                HStack(spacing: 10) {
+                    // Drop zone
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(
+                                svgDropTargeted ? Color.accentColor : brandForegroundSecondary.opacity(0.3),
+                                style: StrokeStyle(lineWidth: 1.5, dash: [5])
+                            )
+                            .frame(width: 48, height: 48)
+
+                        if let svgStr = settings.svgOverride(for: script.id),
+                           let data = svgStr.data(using: .utf8),
+                           let img = NSImage(data: data) {
+                            Image(nsImage: img)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 34, height: 34)
+                        } else {
+                            Image(systemName: "square.and.arrow.down")
+                                .font(.title3)
+                                .foregroundStyle(brandForegroundTertiary)
+                        }
+                    }
+                    .onDrop(of: [.fileURL], isTargeted: $svgDropTargeted) { providers in
+                        handleIconDrop(providers)
+                    }
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Button("Paste SVG") { handleIconPaste() }
+                            .buttonStyle(.bordered)
+                            .controlSize(.mini)
+
+                        if settings.svgOverride(for: script.id) != nil {
+                            Button("Remove") { settings.setSVGOverride(scriptID: script.id, svg: nil) }
+                                .buttonStyle(.borderless)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Drop .svg file here")
+                                .font(.caption2)
+                                .foregroundStyle(brandForegroundTertiary)
+                        }
+                    }
+                }
+            }
+
+            // Reset all brand overrides
+            let hasAnyOverride = settings.brandColorOverride(for: script.id) != nil
+                              || settings.svgOverride(for: script.id) != nil
+            if hasAnyOverride {
+                HStack {
+                    Spacer()
+                    Button("Reset Brand") {
+                        settings.setBrandColorOverride(scriptID: script.id, hex: nil)
+                        settings.setSVGOverride(scriptID: script.id, svg: nil)
+                        initBrandColor()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func manifestRow(_ key: String, value: String, monospaced: Bool = false, copyable: Bool = false) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Text(key)
                 .font(.caption)
@@ -502,6 +1373,9 @@ private struct ScriptDetailView: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(2)
+            if copyable {
+                CopyButton(value: value)
+            }
         }
     }
 
@@ -525,10 +1399,14 @@ private struct ScriptDetailView: View {
             Circle()
                 .fill(statusColor)
                 .frame(width: 6, height: 6)
-            Text(script.status.label)
+            Text(cardStatusLabel)
                 .font(.caption)
                 .foregroundStyle(brandForegroundSecondary)
         }
+    }
+
+    private var cardStatusLabel: String {
+        script.status == .stopped && script.scriptType == "feed" ? "Scheduled" : script.status.label
     }
 
     private var statusColor: Color {
@@ -607,29 +1485,31 @@ private struct ScriptDetailView: View {
         }
     }
 
+    private var hasBrand: Bool { true }
+
     // MARK: Brand colors — effective (respects preview toggles)
 
     /// Background actually applied to the card.
     private var brandBackground: Color {
         if !previewBranded {
-            return effectiveColorScheme == .dark
-                ? Color(white: 0.15)
-                : Color.secondary.opacity(0.07)
+            return effectiveColorScheme == .dark ? Color(white: 0.15) : Color(white: 0.96)
         }
+        // User override
+        if let hex = settings.brandColorOverride(for: script.id), let c = Color(hex: hex) {
+            return c
+        }
+        // Built-in script brands
         switch script.id {
         case "claudecode-controller":
             return effectiveColorScheme == .dark
                 ? Color(red: 0.15, green: 0.13, blue: 0.11)
                 : Color(red: 250/255, green: 249/255, blue: 245/255)
         case "github":
-            // GitHub always uses its dark card; light preview switches to a neutral surface
             return effectiveColorScheme == .light
                 ? Color(red: 250/255, green: 250/255, blue: 250/255)
                 : Color(red: 0x24/255, green: 0x29/255, blue: 0x2F/255)
         default:
-            return effectiveColorScheme == .dark
-                ? Color(white: 0.15)
-                : Color.secondary.opacity(0.07)
+            return effectiveColorScheme == .dark ? Color(white: 0.15) : Color(white: 0.96)
         }
     }
 
@@ -648,20 +1528,20 @@ private struct ScriptDetailView: View {
         switch script.id {
         case "claudecode-controller": return Color(red: 202/255, green: 124/255, blue: 94/255)
         case "github":               return Color(red: 0x09/255, green: 0x69/255, blue: 0xDA/255)
-        default: return nil
+        default:                     return nil
         }
     }
 
     private var brandForegroundPrimary: Color {
-        cardIsOnDark ? .white : .primary
+        cardIsOnDark ? .white : Color(white: 0.0)
     }
 
     private var brandForegroundSecondary: Color {
-        cardIsOnDark ? Color(.secondaryLabelColor).opacity(0.85) : .secondary
+        cardIsOnDark ? Color(white: 1.0, opacity: 0.65) : Color(white: 0.0, opacity: 0.55)
     }
 
     private var brandForegroundTertiary: Color {
-        Color(.tertiaryLabelColor)
+        cardIsOnDark ? Color(white: 1.0, opacity: 0.4) : Color(white: 0.0, opacity: 0.35)
     }
 
     // MARK: Icon
@@ -684,8 +1564,11 @@ private struct ScriptDetailView: View {
     /// Icon image adapted for the card's effective color scheme.
     /// Dark background cards get SVG strokes recoloured to white.
     private var cardIcon: NSImage? {
-        if cardIsOnDark, let svg = script.svgString {
-            return svgToWhite(svg) ?? script.iconImage
+        // SVG override takes priority
+        let svgSource = settings.svgOverride(for: script.id) ?? script.svgString
+        if let svg = svgSource {
+            if cardIsOnDark { return svgToWhite(svg) ?? script.iconImage }
+            return NSImage(data: svg.data(using: .utf8) ?? Data()) ?? script.iconImage
         }
         return script.iconImage
     }
@@ -972,7 +1855,6 @@ private enum MachineSection: String, CaseIterable, Identifiable {
     case cloud    = "Cloud"
     case devices  = "Devices"
     case machine  = "Machine"
-    case vault    = "Scripts Vault"
     case sessions = "Sessions"
     case about    = "About"
 
@@ -983,7 +1865,6 @@ private enum MachineSection: String, CaseIterable, Identifiable {
         case .cloud:    "icloud"
         case .devices:  "iphone"
         case .machine:  "desktopcomputer"
-        case .vault:    "folder"
         case .sessions: "cpu"
         case .about:    "info.circle"
         }
@@ -994,8 +1875,8 @@ private struct MachineDetailView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(HeartbeatService.self) private var heartbeat
 
+    @Environment(AppUpdater.self) private var updater
     @State private var selectedSection: MachineSection? = .cloud
-    @State private var showVaultPicker = false
     @State private var agentSessions: [AgentSession] = []
     @State private var liveProcesses: [LiveProcess] = []
 
@@ -1012,22 +1893,12 @@ private struct MachineDetailView: View {
             case .cloud:    machineCloudSection
             case .devices:  machineDevicesSection
             case .machine:  machineMachineSection
-            case .vault:    machineVaultSection
             case .sessions: machineSessionsSection
             case .about:    machineAboutSection
             }
         }
         .navigationTitle("Machine")
         .onAppear { refreshSessions() }
-        .fileImporter(
-            isPresented: $showVaultPicker,
-            allowedContentTypes: [.folder]
-        ) { result in
-            if case .success(let url) = result {
-                _ = url.startAccessingSecurityScopedResource()
-                settings.vaultPath = url
-            }
-        }
     }
 
     // MARK: Section: Cloud
@@ -1187,27 +2058,30 @@ private struct MachineDetailView: View {
                         .textSelection(.enabled)
                 }
             }
-        }
-        .formStyle(.grouped)
-        .navigationTitle("Machine")
-    }
 
-    // MARK: Section: Scripts Vault
-
-    private var machineVaultSection: some View {
-        Form {
-            Section("Scripts Vault") {
-                LabeledContent("Directory") {
-                    Text(settings.vaultPath?.abbreviatingWithTildeInPath ?? "Not set")
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+            Section("MCP Tools") {
+                ForEach([
+                    ("emit_block",            "Display a UI block on the iOS device",         "blockId, blockType, payload, ttl?"),
+                    ("clear_block",           "Remove a UI block from the iOS device",         "blockId"),
+                    ("get_schema",            "Get payload schemas for all block types",        "—"),
+                    ("list_terminal_sessions","List interactive terminal sessions on this Mac", "filter?"),
+                ], id: \.0) { name, desc, params in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(name)
+                            .font(.system(.body, design: .monospaced))
+                        Text(desc)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(params)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.vertical, 2)
                 }
-                Button("Change Vault Directory…") { showVaultPicker = true }
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("Scripts Vault")
+        .navigationTitle("Machine")
     }
 
     // MARK: Section: Sessions
@@ -1284,6 +2158,15 @@ private struct MachineDetailView: View {
                     Text("\(version) (\(build))")
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
+                }
+            }
+
+            Section("Updates") {
+                LabeledContent("Software Update") {
+                    Button("Check for Updates…") {
+                        updater.checkForUpdates()
+                    }
+                    .disabled(!updater.canCheckForUpdates)
                 }
             }
         }

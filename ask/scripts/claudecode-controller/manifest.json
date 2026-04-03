@@ -1,11 +1,60 @@
 {
   "id": "claudecode-controller",
   "name": "Claude Code",
-  "version": "2.13.10",
+  "version": "2.13.11",
   "description": "Claude Code session supervisor — routes permissions and notifications to iPhone",
   "entry": "main.py",
   "icon": "sparkles",
   "icon_file": "icon.svg",
+  "tools": [
+    {
+      "name": "permission_request",
+      "description": "Routes a Claude Code tool permission prompt to iPhone for approval. Blocks until the user approves or denies.",
+      "params": [
+        { "name": "tool", "type": "string", "required": true },
+        { "name": "input", "type": "object", "required": false }
+      ]
+    },
+    {
+      "name": "question",
+      "description": "Routes a multi-choice question from Claude Code to iPhone. Blocks until the user selects an option.",
+      "params": [
+        { "name": "prompt", "type": "string", "required": true },
+        { "name": "options", "type": "array", "required": true }
+      ]
+    },
+    {
+      "name": "session_active",
+      "description": "Registers or updates a Claude Code session. Called by the PostToolUse hook after each tool execution.",
+      "params": [
+        { "name": "session_id", "type": "string", "required": true },
+        { "name": "cwd", "type": "string", "required": true }
+      ]
+    },
+    {
+      "name": "notification",
+      "description": "Pushes a transient alert to iPhone — used for Claude Code status updates and completions.",
+      "params": [
+        { "name": "title", "type": "string", "required": true },
+        { "name": "body", "type": "string", "required": false }
+      ]
+    },
+    {
+      "name": "chat_prompt",
+      "description": "Shows Claude's current input prompt on iPhone so the user can respond from the session block.",
+      "params": [
+        { "name": "session_id", "type": "string", "required": true },
+        { "name": "prompt", "type": "string", "required": true }
+      ]
+    },
+    {
+      "name": "session_stop",
+      "description": "Marks a Claude Code session as stopped and removes it from the active session list.",
+      "params": [
+        { "name": "session_id", "type": "string", "required": true }
+      ]
+    }
+  ],
   "requires": [
     {
       "id": "claude",
