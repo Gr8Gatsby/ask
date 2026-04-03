@@ -23,8 +23,17 @@ struct SessionRowView: View {
                         Text(msg.components(separatedBy: "\n").first(where: { !$0.isEmpty }) ?? msg)
                             .foregroundStyle(.secondary)
                     } else if payload.isWorking == true {
-                        Text("\(payload.agentName ?? "Agent") is working…")
-                            .foregroundStyle(.secondary)
+                        if let tool = payload.currentTool {
+                            HStack(spacing: 4) {
+                                Image(systemName: toolIcon(tool))
+                                    .foregroundStyle(.secondary)
+                                Text(toolActivityText(tool, payload.currentPreview))
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Text("\(payload.agentName ?? "Agent") is working…")
+                                .foregroundStyle(.secondary)
+                        }
                     } else {
                         Text("Session started")
                             .foregroundStyle(.tertiary)

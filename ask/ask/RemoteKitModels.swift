@@ -72,6 +72,12 @@ struct RKClaudeMessagePayload: Codable {
     }
 }
 
+struct ToolHistoryEntry: Codable {
+    let tool: String
+    let preview: String
+    let ts: Double
+}
+
 struct RKAgentSessionPayload: Codable {
     let sessionId: String
     let project: String
@@ -81,6 +87,9 @@ struct RKAgentSessionPayload: Codable {
     let isWorking: Bool?
     let agentName: String?
     let brandColor: String?
+    let currentTool: String?
+    let currentPreview: String?
+    let toolHistory: [ToolHistoryEntry]?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
@@ -91,6 +100,9 @@ struct RKAgentSessionPayload: Codable {
         case isWorking = "is_working"
         case agentName = "agent_name"
         case brandColor = "brand_color"
+        case currentTool = "current_tool"
+        case currentPreview = "current_preview"
+        case toolHistory = "tool_history"
     }
 
     /// Parses `brandColor` hex string (e.g. `#74AA9C`) into a SwiftUI Color.
@@ -103,6 +115,35 @@ struct RKAgentSessionPayload: Codable {
         let g = Double((value >> 8) & 0xFF) / 255
         let b = Double(value & 0xFF) / 255
         return Color(red: r, green: g, blue: b)
+    }
+}
+
+// MARK: - Tool activity helpers
+
+func toolIcon(_ tool: String) -> String {
+    switch tool {
+    case "Edit":   return "pencil"
+    case "Write":  return "doc.badge.plus"
+    case "Read":   return "doc.text"
+    case "Bash":   return "terminal"
+    case "Glob":   return "folder.badge.questionmark"
+    case "Grep":   return "magnifyingglass"
+    case "Agent":  return "sparkles"
+    default:       return "wrench"
+    }
+}
+
+func toolActivityText(_ tool: String, _ preview: String?) -> String {
+    let p = preview.map { $0.isEmpty ? nil : $0 } ?? nil
+    switch tool {
+    case "Edit":  return p.map { "Editing \($0)" }  ?? "Editing file"
+    case "Write": return p.map { "Writing \($0)" }  ?? "Writing file"
+    case "Read":  return p.map { "Reading \($0)" }  ?? "Reading file"
+    case "Bash":  return p.map { "Running: \($0)" } ?? "Running command"
+    case "Glob":  return p.map { "Searching \($0)" } ?? "Searching files"
+    case "Grep":  return p.map { "Searching for \($0)" } ?? "Searching content"
+    case "Agent": return p.map { "Agent: \($0)" }   ?? "Running agent"
+    default:      return p ?? tool
     }
 }
 

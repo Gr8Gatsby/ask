@@ -1,68 +1,71 @@
 {
   "id": "claudecode-controller",
   "name": "Claude Code",
-  "version": "2.13.11",
-  "description": "Claude Code session supervisor — routes permissions and notifications to iPhone",
+  "version": "2.14.0",
+  "description": "Claude Code session supervisor \u2014 routes permissions and notifications to iPhone",
   "entry": "main.py",
   "icon": "sparkles",
   "icon_file": "icon.svg",
   "tools": [
     {
-      "name": "permission_request",
-      "description": "Routes a Claude Code tool permission prompt to iPhone for approval. Blocks until the user approves or denies.",
+      "name": "reply",
+      "description": "Send a message to an active Claude Code session",
       "params": [
-        { "name": "tool", "type": "string", "required": true },
-        { "name": "input", "type": "object", "required": false }
+        {
+          "name": "message",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "session_id",
+          "type": "string",
+          "required": true
+        }
       ]
     },
     {
-      "name": "question",
-      "description": "Routes a multi-choice question from Claude Code to iPhone. Blocks until the user selects an option.",
+      "name": "start_session",
+      "description": "Launch a new Claude Code session in a repository",
       "params": [
-        { "name": "prompt", "type": "string", "required": true },
-        { "name": "options", "type": "array", "required": true }
+        {
+          "name": "path",
+          "type": "string",
+          "required": true
+        }
       ]
     },
     {
-      "name": "session_active",
-      "description": "Registers or updates a Claude Code session. Called by the PostToolUse hook after each tool execution.",
+      "name": "approve",
+      "description": "Approve a pending permission request",
       "params": [
-        { "name": "session_id", "type": "string", "required": true },
-        { "name": "cwd", "type": "string", "required": true }
+        {
+          "name": "block_id",
+          "type": "string",
+          "required": true
+        }
       ]
     },
     {
-      "name": "notification",
-      "description": "Pushes a transient alert to iPhone — used for Claude Code status updates and completions.",
+      "name": "deny",
+      "description": "Deny a pending permission request",
       "params": [
-        { "name": "title", "type": "string", "required": true },
-        { "name": "body", "type": "string", "required": false }
+        {
+          "name": "block_id",
+          "type": "string",
+          "required": true
+        }
       ]
     },
     {
-      "name": "chat_prompt",
-      "description": "Shows Claude's current input prompt on iPhone so the user can respond from the session block.",
+      "name": "stop_session",
+      "description": "Interrupt the currently running Claude Code session",
       "params": [
-        { "name": "session_id", "type": "string", "required": true },
-        { "name": "prompt", "type": "string", "required": true }
+        {
+          "name": "session_id",
+          "type": "string",
+          "required": true
+        }
       ]
-    },
-    {
-      "name": "session_stop",
-      "description": "Marks a Claude Code session as stopped and removes it from the active session list.",
-      "params": [
-        { "name": "session_id", "type": "string", "required": true }
-      ]
-    }
-  ],
-  "requires": [
-    {
-      "id": "claude",
-      "name": "Claude Code",
-      "check": "PATH=\"$HOME/.local/bin:$HOME/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\" claude --version",
-      "min_version": "1.0.0",
-      "install": "npm install -g @anthropic-ai/claude-code",
-      "install_url": "https://claude.ai/code"
     }
   ]
 }

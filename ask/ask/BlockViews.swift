@@ -1096,9 +1096,21 @@ struct AgentSessionBlockView: View {
                                 .lineLimit(1)
                                 .truncationMode(.tail)
                         } else if isCollapsed, payload.isWorking == true {
-                            Text("\(payload.agentName ?? "Claude") is working…")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            if let tool = payload.currentTool {
+                                HStack(spacing: 4) {
+                                    Image(systemName: toolIcon(tool))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    Text(toolActivityText(tool, payload.currentPreview))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            } else {
+                                Text("\(payload.agentName ?? "Claude") is working…")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                         Spacer()
                         Image(systemName: isCollapsed ? "chevron.down" : "chevron.up")
@@ -1163,14 +1175,23 @@ struct AgentSessionBlockView: View {
                     } else if !lastSeenMessage.isEmpty {
                         ClaudeMarkdownView(text: lastSeenMessage)
                     } else if payload.isWorking == true {
-                        // No context yet — agent just started
-                        HStack(spacing: 6) {
+                        HStack(spacing: 8) {
                             ProgressView()
                                 .scaleEffect(0.7)
                                 .tint(payload.brandColorValue)
-                            Text("\(payload.agentName ?? "Claude") is working…")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                            if let tool = payload.currentTool {
+                                Image(systemName: toolIcon(tool))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(toolActivityText(tool, payload.currentPreview))
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            } else {
+                                Text("\(payload.agentName ?? "Claude") is working…")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     } else {
                         // No context yet — session waiting for first input
@@ -1183,6 +1204,28 @@ struct AgentSessionBlockView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color(.systemGray6))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                // Tool history feed
+                if let history = payload.toolHistory, !history.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(history.reversed().prefix(5), id: \.ts) { entry in
+                            HStack(spacing: 6) {
+                                Image(systemName: toolIcon(entry.tool))
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                    .frame(width: 12)
+                                Text(toolActivityText(entry.tool, entry.preview))
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer()
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 4)
+                    .padding(.top, 2)
+                }
 
                 // Sent message bubble
                 if !sentMessage.isEmpty && !isClosing && !closeTimedOut {
