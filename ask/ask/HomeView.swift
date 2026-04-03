@@ -478,6 +478,7 @@ struct HomeView: View {
                     blocks = fresh.filter { !$0.isFeedBlock || $0.requiresResponse }
                         .filter { $0.blockType != .alert }
                         .filter { $0.blockType != .activityFeed }
+                        .filter { $0.blockType != .sessionEvent }
                 }
             }
         }
@@ -567,6 +568,7 @@ struct HomeView: View {
                         let filtered = fresh.filter { !$0.isFeedBlock || $0.requiresResponse }
                             .filter { $0.blockType != .alert }
                             .filter { $0.blockType != .activityFeed }
+                        .filter { $0.blockType != .sessionEvent }
                         if filtered.isEmpty {
                             consecutiveEmpty += 1
                             if consecutiveEmpty >= 2 {

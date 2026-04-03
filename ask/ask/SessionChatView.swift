@@ -162,8 +162,8 @@ struct SessionChatView: View {
                     Button {
                         showStopConfirm = true
                     } label: {
-                        Image(systemName: "stop.circle")
-                            .foregroundStyle(.red.opacity(0.8))
+                        Image(systemName: "xmark.circle")
+                            .foregroundStyle(.secondary)
                     }
                     .confirmationDialog("Stop Session?", isPresented: $showStopConfirm) {
                         Button("Stop Session", role: .destructive) {
@@ -177,6 +177,10 @@ struct SessionChatView: View {
         }
         .onAppear {
             seedInitialEntries()
+            // Catch any message that arrived while the view was closed
+            if let msg = livePayload?.lastMessage, !msg.isEmpty {
+                appendAssistantEntry(msg)
+            }
         }
         .onChange(of: livePayload?.lastMessage) { _, newMsg in
             guard let msg = newMsg, !msg.isEmpty else { return }
@@ -189,8 +193,15 @@ struct SessionChatView: View {
                 appendInlineBlockEntry(block)
             }
         }
-        // No auto-dismiss or auto-cleanup on isActive change.
-        // The reconnecting banner handles the disconnected UI state.
+        .onChange(of: isActive) { wasActive, nowActive in
+            if wasActive && !nowActive {
+                modelContext.insert(ChatEntry(
+                    sessionId: sessionId, role: "system", entryKind: "event", text: "Session ended"
+                ))
+                try? modelContext.save()
+            }
+        }
+        // Reconnecting banner handles the disconnected UI state.
         // History is preserved through script restarts.
     }
 
