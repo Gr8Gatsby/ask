@@ -154,10 +154,8 @@ struct MacScriptsView: View {
 
 private struct ScriptsTabView: View {
     @Environment(ScriptManager.self) private var scriptManager
-    @Environment(AppSettings.self) private var settings
     @State private var selectedScriptID: String?
-    @State private var showVaultPicker = false
-    @State private var vaultPathText: String = ""
+    @State private var showVault = false
 
     var body: some View {
         NavigationSplitView {
@@ -173,61 +171,37 @@ private struct ScriptsTabView: View {
                             .tag(script.id)
                     }
                 }
-
-                Section {
-                    DisclosureGroup {
-                        Toggle("Include App Bundle Scripts", isOn: Binding(
-                            get: { settings.usesBundledScripts },
-                            set: { settings.usesBundledScripts = $0 }
-                        ))
-                        .font(.caption)
-
-                        HStack(spacing: 4) {
-                            TextField("Vault Path", text: $vaultPathText)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.caption)
-                                .onSubmit { applyVaultPathText() }
-                            Button { showVaultPicker = true } label: {
-                                Image(systemName: "folder")
-                            }
-                            .buttonStyle(.borderless)
-                            .help("Choose folder")
-                        }
-
-                        if let bundlePath = Bundle.main.resourceURL?.appendingPathComponent("Scripts").abbreviatingWithTildeInPath,
-                           settings.usesBundledScripts {
-                            Text(bundlePath)
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-
-                        Text("Vault scripts override bundle scripts with the same ID.")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    } label: {
-                        Label("Scripts Vault", systemImage: "lock")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 220, ideal: 240)
-            .onAppear {
-                vaultPathText = settings.vaultPath?.abbreviatingWithTildeInPath ?? "~/.ask/scripts"
+            .onChange(of: selectedScriptID) { _, id in
+                if id != nil { showVault = false }
             }
-            .fileImporter(isPresented: $showVaultPicker, allowedContentTypes: [.folder]) { result in
-                if case .success(let url) = result {
-                    _ = url.startAccessingSecurityScopedResource()
-                    settings.vaultPath = url
-                    vaultPathText = url.abbreviatingWithTildeInPath
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    Divider()
+                    Button {
+                        showVault = true
+                        selectedScriptID = nil
+                    } label: {
+                        Label("Scripts Vault", systemImage: "lock")
+                            .font(.callout)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(showVault ? Color.accentColor.opacity(0.12) : Color.clear)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(showVault ? Color.accentColor : Color.secondary)
                 }
+                .background(.bar)
             }
         } detail: {
-            if let id = selectedScriptID,
-               let script = scriptManager.scripts.first(where: { $0.id == id }) {
+            if showVault {
+                ScriptsVaultView()
+            } else if let id = selectedScriptID,
+                      let script = scriptManager.scripts.first(where: { $0.id == id }) {
                 ScriptDetailView(script: script, scriptManager: scriptManager)
             } else {
                 ContentUnavailableView(
@@ -235,6 +209,57 @@ private struct ScriptsTabView: View {
                     systemImage: "terminal",
                     description: Text("Choose a script from the sidebar to view its active blocks.")
                 )
+            }
+        }
+    }
+}
+
+private struct ScriptsVaultView: View {
+    @Environment(AppSettings.self) private var settings
+    @State private var vaultPathText: String = ""
+    @State private var showVaultPicker = false
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Include App Bundle Scripts", isOn: Binding(
+                    get: { settings.usesBundledScripts },
+                    set: { settings.usesBundledScripts = $0 }
+                ))
+
+                if settings.usesBundledScripts,
+                   let bundlePath = Bundle.main.resourceURL?.appendingPathComponent("Scripts").abbreviatingWithTildeInPath {
+                    Text(bundlePath)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 6) {
+                    TextField("Vault Path", text: $vaultPathText)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { applyVaultPathText() }
+                    Button { showVaultPicker = true } label: {
+                        Image(systemName: "folder")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Choose folder")
+                }
+            } header: {
+                Text("Scripts Vault")
+            } footer: {
+                Text("Vault scripts override bundle scripts with the same ID.")
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Scripts Vault")
+        .onAppear {
+            vaultPathText = settings.vaultPath?.abbreviatingWithTildeInPath ?? "~/.ask/scripts"
+        }
+        .fileImporter(isPresented: $showVaultPicker, allowedContentTypes: [.folder]) { result in
+            if case .success(let url) = result {
+                _ = url.startAccessingSecurityScopedResource()
+                settings.vaultPath = url
+                vaultPathText = url.abbreviatingWithTildeInPath
             }
         }
     }
