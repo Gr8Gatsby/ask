@@ -550,6 +550,52 @@ class MCPClient:
                     return body, parts
         return None
 
+    @staticmethod
+    def _detect_codex_permission(content: str):
+        """Detect Codex's native 'Would you like to run the following command?' UI.
+
+        Returns (title, body, options, key_map) or None.
+        title   — short header for the iOS card
+        body    — reason + command shown in the expandable section
+        options — clean labels: ['Yes', 'Always Allow', 'No']
+        key_map — {label: tmux_key_string} e.g. {'Yes': 'y', 'No': 'Escape'}
+        """
+        import re
+        ansi_re = re.compile(r'\x1b\[[0-9;]*[mGKHFJABCDsuhl]|\x1b[()][AB012]|\x1b\][^\x07]*\x07|\r')
+        lines = [ansi_re.sub('', l) for l in content.splitlines()]
+        text = '\n'.join(lines)
+
+        # Must contain the Codex permission header
+        if 'Would you like to run the following command' not in text:
+            return None
+
+        # Extract Reason
+        reason = ''
+        reason_m = re.search(r'Reason:\s*(.+?)(?=\n\s*\n|\n\s*\$|\Z)', text, re.DOTALL)
+        if reason_m:
+            reason = ' '.join(reason_m.group(1).split())
+
+        # Extract $ command line
+        command = ''
+        cmd_m = re.search(r'^\s*\$\s+(.+)$', text, re.MULTILINE)
+        if cmd_m:
+            command = cmd_m.group(1).strip()
+
+        # Must have the numbered options
+        if not re.search(r'1\.\s+Yes', text):
+            return None
+
+        body_parts = []
+        if reason:
+            body_parts.append(reason)
+        if command:
+            body_parts.append(f'$ {command}')
+        body = '\n'.join(body_parts)
+
+        options   = ['Yes', 'Always Allow', 'No']
+        key_map   = {'Yes': 'y', 'Always Allow': 'p', 'No': 'Escape'}
+        return 'Allow command?', body, options, key_map
+
     async def _monitor_tmux_pane(self, tmux_target: str):
         """Poll a tmux pane for interactive prompts and surface them to iOS."""
         import hashlib as _hl
@@ -571,23 +617,35 @@ class MCPClient:
             except Exception:
                 break  # pane is gone
 
-            result = self._parse_tmux_prompt(content)
+            codex_perm = self._detect_codex_permission(content)
+            generic    = None if codex_perm else self._parse_tmux_prompt(content)
             content_hash = _hl.md5(content.encode()).hexdigest()[:8]
 
-            if result:
+            if codex_perm or generic:
                 idle_streak = 0
                 poll_interval = 1
                 if content_hash != last_hash:
                     last_hash = content_hash
-                    body, options = result
-                    captured = (tmux_target, options, block_id)
-                    self._response_callbacks[block_id] = (
-                        lambda v, c=captured: self._on_tmux_prompt_reply(c[0], c[1], v, c[2])
-                    )
-                    payload = {'title': body, 'body': '', 'options': options}
+                    session_id = self._session_id_for_tmux(tmux_target) or ''
+                    if codex_perm:
+                        title, body, options, key_map = codex_perm
+                        captured = (tmux_target, options, key_map, block_id)
+                        self._response_callbacks[block_id] = (
+                            lambda v, c=captured: self._on_codex_permission_reply(c[0], c[1], c[2], v, c[3])
+                        )
+                        payload = {'title': title, 'body': body, 'options': options}
+                    else:
+                        body, options = generic
+                        captured = (tmux_target, options, block_id)
+                        self._response_callbacks[block_id] = (
+                            lambda v, c=captured: self._on_tmux_prompt_reply(c[0], c[1], v, c[2])
+                        )
+                        payload = {'title': body, 'body': '', 'options': options}
+                    if session_id:
+                        payload['session_id'] = session_id
                     try:
                         await self.emit_block(block_id, 'confirmation', payload, ttl=300)
-                        print(f'[codex-controller] tmux prompt surfaced for {tmux_target}', file=sys.stderr)
+                        print(f'[codex-controller] prompt surfaced for {tmux_target} (codex={bool(codex_perm)})', file=sys.stderr)
                     except Exception as e:
                         print(f'[codex-controller] tmux prompt emit failed: {e}', file=sys.stderr)
             else:
@@ -647,6 +705,37 @@ class MCPClient:
             pass
         # Trigger response capture so the session block updates with what
         # Codex does after the user approves/rejects the command.
+        session_id = self._session_id_for_tmux(tmux_target)
+        if session_id:
+            asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
+
+    async def _on_codex_permission_reply(self, tmux_target: str, options: list,
+                                          key_map: dict, value: str, block_id: str):
+        """Route a Codex-native permission response using direct letter keys."""
+        key = key_map.get(value)
+        if not key:
+            return
+        try:
+            p = await asyncio.create_subprocess_exec(
+                'tmux', 'send-keys', '-t', tmux_target, key,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+            await p.communicate()
+            # 'Escape' doesn't need Enter; letter keys (y/p) need Enter to confirm
+            if key != 'Escape':
+                await asyncio.sleep(0.1)
+                p = await asyncio.create_subprocess_exec(
+                    'tmux', 'send-keys', '-t', tmux_target, 'Enter',
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                )
+                await p.communicate()
+        except Exception as e:
+            print(f'[codex-controller] codex permission reply failed: {e}', file=sys.stderr)
+        self._response_callbacks.pop(block_id, None)
+        try:
+            await self.clear_block(block_id)
+        except Exception:
+            pass
         session_id = self._session_id_for_tmux(tmux_target)
         if session_id:
             asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
