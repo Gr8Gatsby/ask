@@ -26,18 +26,20 @@ struct MenuBarView: View {
 
             Divider()
 
-            // Bottom: update check + open
-            HStack(spacing: 8) {
-                Button {
-                    updater.checkForUpdates()
-                    dismiss()
-                } label: {
-                    Label("Check for Updates", systemImage: "arrow.triangle.2.circlepath")
+            // Bottom: version + open
+            VStack(spacing: 6) {
+                HStack {
+                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
                         .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Check for Updates") {
+                        updater.checkForUpdates()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .disabled(!updater.canCheckForUpdates)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(!updater.canCheckForUpdates)
 
                 Button {
                     openWindow(id: "scripts")
@@ -103,7 +105,7 @@ struct MenuBarView: View {
                 Button {
                     scriptManager.reload()
                 } label: {
-                    Label("Restart Scripts", systemImage: "arrow.clockwise")
+                    Label("Restart", systemImage: "arrow.clockwise")
                         .font(.caption)
                 }
                 .buttonStyle(.bordered)

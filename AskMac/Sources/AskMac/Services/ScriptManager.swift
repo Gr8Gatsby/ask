@@ -22,6 +22,18 @@ struct ScriptDependency: Codable {
     }
 }
 
+struct ScriptToolParam: Codable {
+    let name: String
+    let type: String?
+    let required: Bool?
+}
+
+struct ScriptTool: Codable {
+    let name: String
+    let description: String?
+    let params: [ScriptToolParam]?
+}
+
 struct ScriptManifest: Codable {
     let id: String
     let name: String
@@ -33,11 +45,12 @@ struct ScriptManifest: Codable {
     let type: String?       // "tile" (default) or "feed"
     let schedule: String?   // cron expression, e.g. "0 9 * * *" (feed scripts only)
     let requires: [ScriptDependency]?
+    let tools: [ScriptTool]?
 
     var isFeed: Bool { type == "feed" }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, version, description, entry, icon, type, schedule, requires
+        case id, name, version, description, entry, icon, type, schedule, requires, tools
         case iconFile = "icon_file"
     }
 }
@@ -60,6 +73,7 @@ struct ManagedScript: Identifiable {
     var scriptType: String?              // "tile" (default) or "feed"
     var schedule: String?               // cron expression for feed scripts
     var requires: [ScriptDependency] = [] // all declared dependencies
+    var tools: [ScriptTool] = []         // public tools declared in manifest
     var entry: String?                  // manifest entry point (relative path)
     var manifestPath: URL?              // path to the manifest.json file
 
@@ -86,7 +100,6 @@ struct ManagedScript: Identifiable {
 final class ScriptManager {
     private let cloudKit: CloudKitService
     private let machineID: String
-    private let scriptsDir: URL
     private let settings: AppSettings
 
     private(set) var scripts: [ManagedScript] = []
@@ -109,8 +122,20 @@ final class ScriptManager {
         self.settings = settings
         self.actionHistory = actionHistory
         self.feedScheduler = FeedScheduler()
-        self.scriptsDir = settings.vaultPath ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".ask/scripts")
+    }
+
+    /// Ordered list of directories to scan for scripts.
+    /// Bundled scripts come first; vault scripts come second and override bundled ones with the same ID.
+    private func scriptDirs() -> [URL] {
+        var dirs: [URL] = []
+        if settings.usesBundledScripts,
+           let bundled = Bundle.main.resourceURL?.appendingPathComponent("Scripts") {
+            dirs.append(bundled)
+        }
+        if let vault = settings.vaultPath {
+            dirs.append(vault)
+        }
+        return dirs
     }
 
     func start() {
@@ -147,16 +172,29 @@ final class ScriptManager {
     /// immediate run if not currently running).
     func reload() {
         let fm = FileManager.default
-        guard let subdirs = try? fm.contentsOfDirectory(
-            at: scriptsDir,
-            includingPropertiesForKeys: [.isDirectoryKey]
-        ) else { return }
+        // Collect all script directories from all sources; later sources override earlier ones.
+        var allDirs: [(dir: URL, manifestURL: URL)] = []
+        var seen: [String: Int] = [:]
+        for sourceDir in scriptDirs() {
+            guard let subdirs = try? fm.contentsOfDirectory(at: sourceDir, includingPropertiesForKeys: [.isDirectoryKey]) else { continue }
+            for dir in subdirs {
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
+                let manifestURL = dir.appendingPathComponent("manifest.json")
+                guard let data = try? Data(contentsOf: manifestURL),
+                      let manifest = try? JSONDecoder().decode(ScriptManifest.self, from: data)
+                else { continue }
+                if let existing = seen[manifest.id] {
+                    allDirs[existing] = (dir, manifestURL)
+                } else {
+                    seen[manifest.id] = allDirs.count
+                    allDirs.append((dir, manifestURL))
+                }
+            }
+        }
 
-        for dir in subdirs {
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
-            let manifestURL = dir.appendingPathComponent("manifest.json")
-            guard let data = try? Data(contentsOf: manifestURL),
+        for (dir, _) in allDirs {
+            guard let data = try? Data(contentsOf: dir.appendingPathComponent("manifest.json")),
                   let manifest = try? JSONDecoder().decode(ScriptManifest.self, from: data)
             else { continue }
 
@@ -273,16 +311,29 @@ final class ScriptManager {
 
     private func discoverAndLaunch() {
         let fm = FileManager.default
-        guard let subdirs = try? fm.contentsOfDirectory(
-            at: scriptsDir,
-            includingPropertiesForKeys: [.isDirectoryKey]
-        ) else { return }
+        // Collect all script directories from all sources; later sources override earlier ones.
+        var allDirs: [(dir: URL, manifestURL: URL)] = []
+        var seen: [String: Int] = [:]  // scriptID → index in allDirs
+        for sourceDir in scriptDirs() {
+            guard let subdirs = try? fm.contentsOfDirectory(at: sourceDir, includingPropertiesForKeys: [.isDirectoryKey]) else { continue }
+            for dir in subdirs {
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
+                let manifestURL = dir.appendingPathComponent("manifest.json")
+                guard let data = try? Data(contentsOf: manifestURL),
+                      let manifest = try? JSONDecoder().decode(ScriptManifest.self, from: data)
+                else { continue }
+                if let existing = seen[manifest.id] {
+                    allDirs[existing] = (dir, manifestURL)  // vault overrides bundled
+                } else {
+                    seen[manifest.id] = allDirs.count
+                    allDirs.append((dir, manifestURL))
+                }
+            }
+        }
 
-        for dir in subdirs {
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
-            let manifestURL = dir.appendingPathComponent("manifest.json")
-            guard let data = try? Data(contentsOf: manifestURL),
+        for (dir, _) in allDirs {
+            guard let data = try? Data(contentsOf: dir.appendingPathComponent("manifest.json")),
                   let manifest = try? JSONDecoder().decode(ScriptManifest.self, from: data)
             else { continue }
             let iconCandidate = manifest.iconFile ?? "icon.svg"
@@ -539,6 +590,7 @@ final class ScriptManager {
         guard let requires = manifest.requires, !requires.isEmpty else { return [] }
         var failed: [ScriptDependency] = []
         for dep in requires {
+            if settings.isDepCheckSkipped(scriptID: manifest.id, depID: dep.id) { continue }
             let passed = await runDepCheck(dep)
             if !passed { failed.append(dep) }
         }
@@ -659,7 +711,7 @@ final class ScriptManager {
         } else {
             let svgString = manifests[id]?.svgString
             let dir = manifests[id]?.dir
-            scripts.append(ManagedScript(id: id, name: name, version: manifest?.version, description: manifest?.description, icon: icon, iconImage: iconImage, svgString: svgString, status: status, isEnabled: isEnabled, scriptType: manifest?.type, schedule: manifest?.schedule, requires: manifest?.requires ?? [], entry: manifest?.entry, manifestPath: dir.map { $0.appendingPathComponent("manifest.json") }))
+            scripts.append(ManagedScript(id: id, name: name, version: manifest?.version, description: manifest?.description, icon: icon, iconImage: iconImage, svgString: svgString, status: status, isEnabled: isEnabled, scriptType: manifest?.type, schedule: manifest?.schedule, requires: manifest?.requires ?? [], tools: manifest?.tools ?? [], entry: manifest?.entry, manifestPath: dir.map { $0.appendingPathComponent("manifest.json") }))
         }
     }
 }

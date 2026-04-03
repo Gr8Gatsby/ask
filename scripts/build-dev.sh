@@ -57,7 +57,7 @@ xcodebuild archive \
     CODE_SIGN_STYLE=Manual \
     "CODE_SIGN_IDENTITY=Developer ID Application: Kevin Hill (B5J28L8ARB)" \
     CODE_SIGN_ENTITLEMENTS="$ASKMAC_DIR/Sources/AskMac/AskMac.entitlements" \
-    | grep -E '^(Build|Archive|error:|warning: (?!.*\.swift:))'
+    | grep -E '^(Build|Archive|error:)'
 
 echo "==> Exporting .app…"
 xcodebuild -exportArchive \
