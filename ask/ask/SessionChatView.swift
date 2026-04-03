@@ -78,6 +78,7 @@ struct SessionChatView: View {
 
     @State private var draft = ""
     @State private var isSending = false
+    @State private var showStopConfirm = false
     /// Tracks per-entry send status for outgoing messages while this view is open.
     @State private var sendStatuses: [String: MessageSendStatus] = [:]
     /// Maps entryID → messageID for messages pending Mac delivery confirmation.
@@ -152,6 +153,23 @@ struct SessionChatView: View {
                     Text(displayProject)
                         .font(.headline)
                     statusLabel
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                if isActive, let block = liveBlock {
+                    Button {
+                        showStopConfirm = true
+                    } label: {
+                        Image(systemName: "stop.circle")
+                            .foregroundStyle(.red.opacity(0.8))
+                    }
+                    .confirmationDialog("Stop Session?", isPresented: $showStopConfirm) {
+                        Button("Stop Session", role: .destructive) {
+                            Task { await onRespond(block, "__close_session__") }
+                        }
+                    } message: {
+                        Text("Sends Ctrl+C to the running Claude Code session.")
+                    }
                 }
             }
         }
@@ -435,6 +453,89 @@ struct SessionChatView: View {
     }
 }
 
+// MARK: - Markdown renderer (code-block aware)
+
+private struct MarkdownTextView: View {
+    let text: String
+    let isExpanded: Bool
+
+    private struct Segment: Identifiable {
+        let id = UUID()
+        let isCode: Bool
+        let lang: String
+        let content: String
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(segments.enumerated()), id: \.element.id) { index, seg in
+                if seg.isCode {
+                    codeBlock(seg.content)
+                } else {
+                    textBlock(seg.content, isFirst: index == 0)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func textBlock(_ content: String, isFirst: Bool) -> some View {
+        let trimmed = content.trimmingCharacters(in: .newlines)
+        if !trimmed.isEmpty {
+            Text(.init(trimmed))
+                .font(.subheadline)
+                .lineLimit((!isExpanded && isFirst && !hasCodeBlocks) ? 6 : nil)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func codeBlock(_ code: String) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Text(code.trimmingCharacters(in: .newlines))
+                .font(.system(.caption, design: .monospaced))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+        }
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var hasCodeBlocks: Bool {
+        segments.contains(where: { $0.isCode })
+    }
+
+    private var segments: [Segment] {
+        var result: [Segment] = []
+        var rest = text
+        while !rest.isEmpty {
+            guard let fenceStart = rest.range(of: "```") else {
+                result.append(Segment(isCode: false, lang: "", content: rest))
+                break
+            }
+            let before = String(rest[..<fenceStart.lowerBound])
+            if !before.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                result.append(Segment(isCode: false, lang: "", content: before))
+            }
+            rest = String(rest[fenceStart.upperBound...])
+            // Optional language tag on first line
+            let langEnd = rest.firstIndex(of: "\n") ?? rest.endIndex
+            let lang = String(rest[..<langEnd]).trimmingCharacters(in: .whitespaces)
+            rest = langEnd < rest.endIndex ? String(rest[rest.index(after: langEnd)...]) : ""
+            // Find closing fence
+            if let fenceEnd = rest.range(of: "```") {
+                result.append(Segment(isCode: true, lang: lang, content: String(rest[..<fenceEnd.lowerBound])))
+                rest = String(rest[fenceEnd.upperBound...])
+                if rest.hasPrefix("\n") { rest = String(rest.dropFirst()) }
+            } else {
+                result.append(Segment(isCode: true, lang: lang, content: rest))
+                break
+            }
+        }
+        return result
+    }
+}
+
 // MARK: - Chat Bubble
 
 private struct ChatBubbleView: View {
@@ -442,19 +543,16 @@ private struct ChatBubbleView: View {
     var sendStatus: MessageSendStatus?
     @State private var isExpanded = false
 
+    private var hasCodeBlocks: Bool { entry.text.contains("```") }
     private var needsExpansion: Bool {
-        entry.role == "assistant" && entry.text.count > 240
+        entry.role == "assistant" && !hasCodeBlocks && entry.text.count > 300
     }
 
     var body: some View {
         Group {
             if entry.role == "assistant" {
-                // Full-width, no bubble
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(entry.text)
-                        .font(.subheadline)
-                        .lineLimit(isExpanded ? nil : 4)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    MarkdownTextView(text: entry.text, isExpanded: isExpanded)
                     if needsExpansion {
                         Button(isExpanded ? "Show less" : "Show more") {
                             withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
@@ -574,14 +672,12 @@ private struct InlineBlockCard: View {
                         }
                         HStack {
                             Spacer()
-                            Text(entry.resolvedValue ?? entry.text)
-                                .font(.caption)
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .background(Color.accentColor)
-                                .clipShape(Capsule())
-                        }
+                            if let resolved = entry.resolvedValue {
+                                Label(resolved, systemImage: "checkmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .labelStyle(.titleAndIcon)
+                            }
                     }
                     .padding(12)
                 }

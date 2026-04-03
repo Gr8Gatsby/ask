@@ -291,7 +291,8 @@ struct RKBlock: Identifiable {
     var requiresResponse: Bool {
         switch blockType {
         case .confirmation, .prompt, .chatPrompt, .picker, .list, .detail, .agentSession, .startSession: return true
-        case .alert, .status, .infoCard, .iconCard, .claudeMessage, .tile, .countdown, .feedItem: return false
+        case .alert, .status, .infoCard, .iconCard, .claudeMessage, .tile, .countdown, .feedItem,
+             .activityFeed, .compactSummary, .sessionEvent: return false
         }
     }
 
