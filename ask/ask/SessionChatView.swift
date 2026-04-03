@@ -86,6 +86,9 @@ struct SessionChatView: View {
     @State private var pendingDelivery: [String: String] = [:]
     /// Timestamp of the most recent tool history entry we've already captured into the chat.
     @State private var lastCapturedActivityTs: Double = 0
+    /// In-memory dedup for assistant messages — guards against race where SwiftData
+    /// @Query hasn't updated yet when a second onChange fires.
+    @State private var lastAppendedAssistantText: String = ""
 
     private let sessionId: String
     private let initialProject: String
@@ -161,18 +164,29 @@ struct SessionChatView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 if isActive, let block = liveBlock {
-                    Button {
-                        showStopConfirm = true
-                    } label: {
-                        Image(systemName: "xmark")
-                            .fontWeight(.semibold)
+                    HStack(spacing: 12) {
+                        let isFullAuto = livePayload?.permissionMode == "full-auto"
+                        Button {
+                            let next = isFullAuto ? "__supervised__" : "__full_auto__"
+                            Task { await onRespond(block, next) }
+                        } label: {
+                            Image(systemName: isFullAuto ? "lock.open" : "lock")
+                                .fontWeight(.semibold)
+                        }
+                        .tint(isFullAuto ? .orange : .secondary)
+                        Button {
+                            showStopConfirm = true
+                        } label: {
+                            Image(systemName: "xmark")
+                                .fontWeight(.semibold)
+                        }
                     }
                     .confirmationDialog("Stop Session?", isPresented: $showStopConfirm) {
                         Button("Stop Session", role: .destructive) {
                             Task { await onRespond(block, "__close_session__") }
                         }
                     } message: {
-                        Text("Sends Ctrl+C to the running Claude Code session.")
+                        Text("Sends Ctrl+C to the running Codex session.")
                     }
                 }
             }
@@ -405,8 +419,12 @@ struct SessionChatView: View {
     }
 
     private func appendAssistantEntry(_ text: String) {
+        // In-memory dedup: guards against the race where SwiftData @Query hasn't
+        // updated yet when a second onChange fires with the same text.
+        guard text != lastAppendedAssistantText else { return }
         let last = entries.last(where: { $0.role == "assistant" && $0.entryKind == "message" })
         guard text != last?.text else { return }
+        lastAppendedAssistantText = text
         modelContext.insert(ChatEntry(
             sessionId: sessionId, role: "assistant", entryKind: "message", text: text
         ))

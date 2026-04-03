@@ -26,9 +26,10 @@ SOCKET_PATH    = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/so
 BLOCK_TILE     = 'codex-controller-tile'
 SESSION_TTL    = 3600  # seconds — block TTL and session load cutoff
 
-CODEX_CONFIG_PATH  = os.path.expanduser('~/.codex/config.toml')
-CODEX_HOOKS_PATH   = os.path.expanduser('~/.codex/hooks.json')
-ALLOWLIST_PATH     = os.path.expanduser('~/.ask/codex_allowlist.json')
+CODEX_CONFIG_PATH    = os.path.expanduser('~/.codex/config.toml')
+CODEX_HOOKS_PATH     = os.path.expanduser('~/.codex/hooks.json')
+ALLOWLIST_PATH       = os.path.expanduser('~/.ask/codex_allowlist.json')
+PERMISSION_MODE_PATH = os.path.expanduser('~/.ask/codex_permission_mode.json')
 SESSIONS_PATH     = os.environ.get('ASK_SESSIONS_PATH', os.path.expanduser('~/.ask/codex_sessions.json'))
 STATUS_PATH       = os.path.expanduser('~/.ask/status/codex-controller.json')
 LOG_PATH          = os.path.expanduser('~/.ask/logs/codex-controller.log')
@@ -80,12 +81,15 @@ def _ensure_config_flag():
 
 
 def _write_hooks_json(hooks_dir: str):
-    """Write ~/.codex/hooks.json with absolute paths to our hook scripts."""
-    pre    = os.path.join(hooks_dir, 'pre_tool_use.py')
-    post   = os.path.join(hooks_dir, 'post_tool_use.py')
-    start  = os.path.join(hooks_dir, 'session_start.py')
-    stop   = os.path.join(hooks_dir, 'session_stop.py')
-    prompt = os.path.join(hooks_dir, 'user_prompt_submit.py')
+    """Write ~/.codex/hooks.json with absolute paths to our hook scripts.
+    All hooks are invoked via 'python3 <path>' to avoid relying on execute
+    permission bits, which rsync/unzip may not preserve."""
+    py = sys.executable  # same interpreter running this script
+    pre    = f'{py} {os.path.join(hooks_dir, "pre_tool_use.py")}'
+    post   = f'{py} {os.path.join(hooks_dir, "post_tool_use.py")}'
+    start  = f'{py} {os.path.join(hooks_dir, "session_start.py")}'
+    stop   = f'{py} {os.path.join(hooks_dir, "session_stop.py")}'
+    prompt = f'{py} {os.path.join(hooks_dir, "user_prompt_submit.py")}'
 
     hooks = {
         'hooks': {
@@ -627,13 +631,26 @@ class MCPClient:
                 if content_hash != last_hash:
                     last_hash = content_hash
                     session_id = self._session_id_for_tmux(tmux_target) or ''
-                    if codex_perm:
+                    # In full-auto mode, silently approve Codex's native permission UI
+                    if codex_perm and self._load_permission_mode() == 'full-auto':
+                        _, _, _, key_map = codex_perm
+                        asyncio.create_task(
+                            self._on_codex_permission_reply(tmux_target, [], key_map, 'Yes', block_id)
+                        )
+                    elif codex_perm:
                         title, body, options, key_map = codex_perm
                         captured = (tmux_target, options, key_map, block_id)
                         self._response_callbacks[block_id] = (
                             lambda v, c=captured: self._on_codex_permission_reply(c[0], c[1], c[2], v, c[3])
                         )
                         payload = {'title': title, 'body': body, 'options': options}
+                        if session_id:
+                            payload['session_id'] = session_id
+                        try:
+                            await self.emit_block(block_id, 'confirmation', payload, ttl=300)
+                            print(f'[codex-controller] codex permission surfaced for {tmux_target}', file=sys.stderr)
+                        except Exception as e:
+                            print(f'[codex-controller] tmux prompt emit failed: {e}', file=sys.stderr)
                     else:
                         body, options = generic
                         captured = (tmux_target, options, block_id)
@@ -641,13 +658,13 @@ class MCPClient:
                             lambda v, c=captured: self._on_tmux_prompt_reply(c[0], c[1], v, c[2])
                         )
                         payload = {'title': body, 'body': '', 'options': options}
-                    if session_id:
-                        payload['session_id'] = session_id
-                    try:
-                        await self.emit_block(block_id, 'confirmation', payload, ttl=300)
-                        print(f'[codex-controller] prompt surfaced for {tmux_target} (codex={bool(codex_perm)})', file=sys.stderr)
-                    except Exception as e:
-                        print(f'[codex-controller] tmux prompt emit failed: {e}', file=sys.stderr)
+                        if session_id:
+                            payload['session_id'] = session_id
+                        try:
+                            await self.emit_block(block_id, 'confirmation', payload, ttl=300)
+                            print(f'[codex-controller] generic prompt surfaced for {tmux_target}', file=sys.stderr)
+                        except Exception as e:
+                            print(f'[codex-controller] tmux prompt emit failed: {e}', file=sys.stderr)
             else:
                 if last_hash:
                     last_hash = ''
@@ -1263,6 +1280,7 @@ end tell'''
         if last_message:
             payload['last_message'] = last_message
         payload['is_working'] = session_id in self._working_sessions
+        payload['permission_mode'] = self._load_permission_mode()
         activity = self._current_tools.get(session_id)
         if activity and session_id in self._working_sessions:
             payload['current_tool'] = activity['tool']
@@ -1287,6 +1305,10 @@ end tell'''
         self._response_callbacks[block_id] = lambda v: self._on_session_reply(session_id, v)
         if value == '__close_session__':
             await self._close_session(session_id)
+        elif value in ('__full_auto__', '__supervised__'):
+            mode = 'full-auto' if value == '__full_auto__' else 'supervised'
+            self._save_permission_mode(mode)
+            asyncio.create_task(self._emit_session_block(session_id))
         elif value:
             await self._route_to_terminal(session_id, value)
 
@@ -1814,11 +1836,15 @@ end tell
             msg_type = msg.get('type', '')
 
             if msg_type == 'permission_request':
-                response = await self._handle_blocking(
-                    writer,
-                    self._build_permission_block(msg),
-                    default='Deny',
-                )
+                # In full-auto mode auto-approve without routing to iOS
+                if self._load_permission_mode() == 'full-auto':
+                    response = {'value': 'Allow'}
+                else:
+                    response = await self._handle_blocking(
+                        writer,
+                        self._build_permission_block(msg),
+                        default='Deny',
+                    )
                 if response.get('value') == 'Always Allow':
                     self._add_to_allowlist(msg.get('preview', ''))
                     response = {'value': 'Allow'}
@@ -1991,6 +2017,22 @@ end tell
         self._working_sessions.add(session_id)
         prompt_label = f'You: {prompt[:120]}' if prompt else ''
         asyncio.create_task(self._emit_session_block(session_id, last_message=prompt_label))
+
+    def _load_permission_mode(self) -> str:
+        try:
+            with open(PERMISSION_MODE_PATH) as f:
+                return json.load(f).get('mode', 'supervised')
+        except Exception:
+            return 'supervised'
+
+    def _save_permission_mode(self, mode: str):
+        try:
+            os.makedirs(os.path.dirname(PERMISSION_MODE_PATH), exist_ok=True)
+            with open(PERMISSION_MODE_PATH, 'w') as f:
+                json.dump({'mode': mode}, f)
+            _log(f'[codex] permission mode → {mode!r}')
+        except Exception as e:
+            _log(f'[codex] permission mode save failed: {e}')
 
     def _add_to_allowlist(self, pattern: str):
         pattern = pattern.strip()
