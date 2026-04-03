@@ -1194,15 +1194,18 @@ private struct ScriptDetailView: View {
         if let hex = settings.brandColorOverride(for: script.id), let c = Color(hex: hex) {
             brandColorPickerColor = c
             brandHex = hex
-        } else {
-            brandColorPickerColor = brandBackground
-            brandHex = brandBackground.hexString
         }
+        // no override → leave blank (hex = "", picker = .white defaults)
+    }
+
+    private var brandHexIsValid: Bool {
+        let h = brandHex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        return h.count == 6 && UInt64(h, radix: 16) != nil
     }
 
     private func saveBrandColor() {
+        guard brandHexIsValid else { return }
         let hex = brandHex.hasPrefix("#") ? brandHex : "#\(brandHex)"
-        guard Color(hex: hex) != nil else { return }
         settings.setBrandColorOverride(scriptID: script.id, hex: hex)
         brandColorSaved = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { brandColorSaved = false }
@@ -1243,6 +1246,7 @@ private struct ScriptDetailView: View {
                     ColorPicker("", selection: $brandColorPickerColor, supportsOpacity: false)
                         .labelsHidden()
                         .onChange(of: brandColorPickerColor) { _, newColor in
+                            // Picker → hex (one direction only to avoid circular updates)
                             brandHex = newColor.hexString
                             brandColorSaved = false
                         }
@@ -1251,11 +1255,12 @@ private struct ScriptDetailView: View {
                         .font(.system(.caption, design: .monospaced))
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 88)
-                        .onChange(of: brandHex) { _, hex in
-                            if let c = Color(hex: hex) {
-                                brandColorPickerColor = c
-                            }
+                        .onChange(of: brandHex) { _, _ in
                             brandColorSaved = false
+                        }
+                        .onSubmit {
+                            // Hex → picker only on submit to avoid circular onChange loop
+                            if let c = Color(hex: brandHex) { brandColorPickerColor = c }
                         }
 
                     Spacer()
@@ -1265,7 +1270,7 @@ private struct ScriptDetailView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.mini)
-                    .disabled(brandColorSaved)
+                    .disabled(brandColorSaved || !brandHexIsValid)
                 }
             }
 
@@ -1468,13 +1473,6 @@ private struct ScriptDetailView: View {
 
     private var hasBrand: Bool { true }
 
-    /// Stable hue (0–1) derived from the script ID via djb2 hash.
-    private var defaultBrandHue: Double {
-        var hash: UInt32 = 5381
-        for c in script.id.unicodeScalars { hash = hash &* 33 &+ c.value }
-        return Double(hash % 360) / 360.0
-    }
-
     // MARK: Brand colors — effective (respects preview toggles)
 
     /// Background actually applied to the card.
@@ -1497,10 +1495,7 @@ private struct ScriptDetailView: View {
                 ? Color(red: 250/255, green: 250/255, blue: 250/255)
                 : Color(red: 0x24/255, green: 0x29/255, blue: 0x2F/255)
         default:
-            // Auto-generate a subtle tint from the script ID
-            return effectiveColorScheme == .dark
-                ? Color(hue: defaultBrandHue, saturation: 0.25, brightness: 0.18)
-                : Color(hue: defaultBrandHue, saturation: 0.08, brightness: 0.96)
+            return effectiveColorScheme == .dark ? Color(white: 0.15) : Color(white: 0.96)
         }
     }
 
@@ -1519,8 +1514,7 @@ private struct ScriptDetailView: View {
         switch script.id {
         case "claudecode-controller": return Color(red: 202/255, green: 124/255, blue: 94/255)
         case "github":               return Color(red: 0x09/255, green: 0x69/255, blue: 0xDA/255)
-        default:
-            return Color(hue: defaultBrandHue, saturation: 0.65, brightness: 0.60)
+        default:                     return nil
         }
     }
 
