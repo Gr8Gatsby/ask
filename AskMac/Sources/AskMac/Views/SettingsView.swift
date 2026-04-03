@@ -1875,6 +1875,7 @@ private struct MachineDetailView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(HeartbeatService.self) private var heartbeat
 
+    @Environment(AppUpdater.self) private var updater
     @State private var selectedSection: MachineSection? = .cloud
     @State private var agentSessions: [AgentSession] = []
     @State private var liveProcesses: [LiveProcess] = []
@@ -2157,6 +2158,15 @@ private struct MachineDetailView: View {
                     Text("\(version) (\(build))")
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
+                }
+            }
+
+            Section("Updates") {
+                LabeledContent("Software Update") {
+                    Button("Check for Updates…") {
+                        updater.checkForUpdates()
+                    }
+                    .disabled(!updater.canCheckForUpdates)
                 }
             }
         }

@@ -6,6 +6,7 @@ struct MenuBarView: View {
 
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
+    @Environment(AppUpdater.self) private var updater
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -25,18 +26,31 @@ struct MenuBarView: View {
 
             Divider()
 
-            // Open app button
-            Button {
-                openWindow(id: "scripts")
-                dismiss()
-            } label: {
-                Text("Open Ask")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .frame(maxWidth: .infinity)
+            // Bottom: update check + open
+            HStack(spacing: 8) {
+                Button {
+                    updater.checkForUpdates()
+                    dismiss()
+                } label: {
+                    Label("Check for Updates", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(!updater.canCheckForUpdates)
+
+                Button {
+                    openWindow(id: "scripts")
+                    dismiss()
+                } label: {
+                    Text("Open Ask")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
             .padding(12)
         }
         .frame(width: 270)
