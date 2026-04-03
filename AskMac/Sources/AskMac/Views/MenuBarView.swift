@@ -5,6 +5,7 @@ struct MenuBarView: View {
     @Environment(ScriptManager.self) private var scriptManager
 
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -27,6 +28,7 @@ struct MenuBarView: View {
             // Open app button
             Button {
                 openWindow(id: "scripts")
+                dismiss()
             } label: {
                 Text("Open Ask")
                     .font(.subheadline)

@@ -174,6 +174,17 @@ private struct ScriptsTabView: View {
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 220, ideal: 240)
+            .onAppear {
+                if selectedScriptID == nil {
+                    selectedScriptID = scriptManager.scripts.first?.id
+                }
+            }
+            .onChange(of: scriptManager.scripts.count) { _, count in
+                // Auto-select first script once scripts finish loading
+                if selectedScriptID == nil && count > 0 {
+                    selectedScriptID = scriptManager.scripts.first?.id
+                }
+            }
             .onChange(of: selectedScriptID) { _, id in
                 if id != nil { showVault = false }
             }
