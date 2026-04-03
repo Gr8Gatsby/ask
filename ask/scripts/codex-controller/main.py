@@ -26,8 +26,9 @@ SOCKET_PATH    = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/so
 BLOCK_TILE     = 'codex-controller-tile'
 SESSION_TTL    = 3600  # seconds — block TTL and session load cutoff
 
-CODEX_CONFIG_PATH = os.path.expanduser('~/.codex/config.toml')
-CODEX_HOOKS_PATH  = os.path.expanduser('~/.codex/hooks.json')
+CODEX_CONFIG_PATH  = os.path.expanduser('~/.codex/config.toml')
+CODEX_HOOKS_PATH   = os.path.expanduser('~/.codex/hooks.json')
+ALLOWLIST_PATH     = os.path.expanduser('~/.ask/codex_allowlist.json')
 SESSIONS_PATH     = os.environ.get('ASK_SESSIONS_PATH', os.path.expanduser('~/.ask/codex_sessions.json'))
 STATUS_PATH       = os.path.expanduser('~/.ask/status/codex-controller.json')
 LOG_PATH          = os.path.expanduser('~/.ask/logs/codex-controller.log')
@@ -80,10 +81,11 @@ def _ensure_config_flag():
 
 def _write_hooks_json(hooks_dir: str):
     """Write ~/.codex/hooks.json with absolute paths to our hook scripts."""
-    pre  = os.path.join(hooks_dir, 'pre_tool_use.py')
-    post = os.path.join(hooks_dir, 'post_tool_use.py')
-    start = os.path.join(hooks_dir, 'session_start.py')
-    stop = os.path.join(hooks_dir, 'session_stop.py')
+    pre    = os.path.join(hooks_dir, 'pre_tool_use.py')
+    post   = os.path.join(hooks_dir, 'post_tool_use.py')
+    start  = os.path.join(hooks_dir, 'session_start.py')
+    stop   = os.path.join(hooks_dir, 'session_stop.py')
+    prompt = os.path.join(hooks_dir, 'user_prompt_submit.py')
 
     hooks = {
         'hooks': {
@@ -102,6 +104,9 @@ def _write_hooks_json(hooks_dir: str):
             ],
             'Stop': [
                 {'hooks': [{'type': 'command', 'command': stop}]}
+            ],
+            'UserPromptSubmit': [
+                {'hooks': [{'type': 'command', 'command': prompt}]}
             ],
         }
     }
@@ -134,6 +139,12 @@ class MCPClient:
         self._capture_tasks: dict = {}
         # CWDs the user explicitly launched via Start Session — pid-* sessions only surface for these
         self._recently_launched_cwds: set = set()
+        # session_id -> (text, timestamp) — suppresses duplicate routes within 3s
+        self._last_routed: dict = {}
+        # session_id -> {tool, preview, ts} — current tool being used
+        self._current_tools: dict = {}
+        # session_id -> [{tool, preview, ts}] — recent tool history
+        self._tool_histories: dict = {}
         # Tile state
         self._active_confirmations = 0
         self._tile_body: Optional[str] = None
@@ -1119,6 +1130,7 @@ end tell'''
                 self._sessions[session_id]['project'] = self._project_label(cwd, session_id)
             self._sessions[session_id]['last_seen'] = time.time()
         self._working_sessions.discard(session_id)
+        self._current_tools.pop(session_id, None)
         # Cancel any tmux pane monitor for this session
         tmux_target = self._sessions.get(session_id, {}).get('tmux_target')
         if tmux_target:
@@ -1162,6 +1174,11 @@ end tell'''
         if last_message:
             payload['last_message'] = last_message
         payload['is_working'] = session_id in self._working_sessions
+        activity = self._current_tools.get(session_id)
+        if activity and session_id in self._working_sessions:
+            payload['current_tool'] = activity['tool']
+            if activity.get('preview'):
+                payload['current_preview'] = activity['preview']
         self._response_callbacks[block_id] = lambda v: self._on_session_reply(session_id, v)
         try:
             if session_id in self._sessions:
@@ -1450,6 +1467,15 @@ end tell
     async def _route_to_terminal(self, session_id: str, text: str):
         """Route text to the terminal running this session.
         Uses tmux send-keys for tmux-launched sessions; clipboard+osascript otherwise."""
+        # Deduplicate: iOS sends both a chat_message notification and a user_response
+        # block reply for the same user input. Suppress the second arrival within 3s.
+        now = time.time()
+        last = self._last_routed.get(session_id)
+        if last and last[0] == text and now - last[1] < 3.0:
+            _log(f'[codex] duplicate route suppressed for session {session_id[:8]}')
+            return
+        self._last_routed[session_id] = (text, now)
+
         session = self._sessions.get(session_id, {})
         tmux_target = session.get('tmux_target')
         if tmux_target:
@@ -1582,6 +1608,7 @@ tell application "System Events"
     delay 0.4
     keystroke return
 end tell'''
+        delivered = False
         try:
             proc = await asyncio.create_subprocess_exec(
                 'osascript', '-e', script,
@@ -1592,12 +1619,33 @@ end tell'''
             err_str = err.decode().strip() if err else ''
             if proc.returncode != 0 or err_str:
                 _log(f'[codex] osascript error (rc={proc.returncode}): {err_str}')
+                # Accessibility permission revoked (error 1002) — fall back to TIOCSTI
+                if full_tty and ('1002' in err_str or 'not allowed to send keystrokes' in err_str):
+                    _log(f'[codex] falling back to TIOCSTI for {full_tty}')
+                    delivered = await self._write_tiocsti(full_tty, text)
             else:
                 _log(f'[codex] osascript succeeded — message delivered to terminal')
-                if full_tty:
-                    asyncio.create_task(self._capture_terminal_response(session_id, full_tty))
+                delivered = True
         except Exception as e:
             _log(f'[codex] _route_to_terminal exception: {e}')
+        if delivered and full_tty:
+            asyncio.create_task(self._capture_terminal_response(session_id, full_tty))
+
+    async def _write_tiocsti(self, full_tty: str, text: str) -> bool:
+        """Stuff text + newline into a TTY input queue via TIOCSTI ioctl.
+        Works without Accessibility permission. Requires the calling process
+        to own the TTY (same user). Returns True on success."""
+        try:
+            import fcntl, termios
+            fd = os.open(full_tty, os.O_RDWR | os.O_NOCTTY)
+            for byte in (text + '\n').encode('utf-8'):
+                fcntl.ioctl(fd, termios.TIOCSTI, bytes([byte]))
+            os.close(fd)
+            _log(f'[codex] TIOCSTI delivered {len(text)} chars to {full_tty}')
+            return True
+        except Exception as e:
+            _log(f'[codex] TIOCSTI failed: {e}')
+            return False
 
     async def _capture_terminal_response(self, session_id: str, full_tty: str):
         """Poll Terminal.app tab contents until Codex finishes responding, then emit."""
@@ -1678,6 +1726,9 @@ end tell
                     self._build_permission_block(msg),
                     default='Deny',
                 )
+                if response.get('value') == 'Always Allow':
+                    self._add_to_allowlist(msg.get('preview', ''))
+                    response = {'value': 'Allow'}
                 if not writer.is_closing():
                     writer.write(json.dumps(response, ensure_ascii=False).encode())
                     await writer.drain()
@@ -1695,6 +1746,9 @@ end tell
 
             elif msg_type == 'session_stop':
                 self._handle_session_stop(msg)
+
+            elif msg_type == 'user_prompt_submit':
+                self._handle_user_prompt_submit(msg)
 
         except Exception as e:
             print(f'[codex-controller] socket client error: {e}', file=sys.stderr)
@@ -1784,6 +1838,15 @@ end tell
         payload = {'title': f'Allow {tool}?', 'body': preview, 'options': options}
         if session_id:
             payload['session_id'] = session_id
+        # Update live tool activity so the session subtitle shows the pending tool
+        if session_id and session_id in self._sessions:
+            entry = {'tool': tool, 'preview': preview, 'ts': time.time()}
+            self._current_tools[session_id] = entry
+            history = self._tool_histories.setdefault(session_id, [])
+            history.append(entry)
+            if len(history) > 20:
+                del history[:-20]
+            asyncio.create_task(self._emit_session_block(session_id))
         try:
             await self.emit_block(block_id, 'confirmation', payload)
             if session_id:
@@ -1824,6 +1887,38 @@ end tell
         # Use _start_capture for deduplication: cancels any in-flight capture
         # for this session and starts a fresh one.
         self._start_capture(session_id, delay=2)
+
+    def _handle_user_prompt_submit(self, msg):
+        session_id = msg.get('session_id', '')
+        cwd = msg.get('cwd', '')
+        prompt = msg.get('prompt', '').strip()
+        if not session_id:
+            return
+        self._register_session(session_id, cwd)
+        self._working_sessions.add(session_id)
+        prompt_label = f'You: {prompt[:120]}' if prompt else ''
+        asyncio.create_task(self._emit_session_block(session_id, last_message=prompt_label))
+
+    def _add_to_allowlist(self, pattern: str):
+        pattern = pattern.strip()
+        if not pattern:
+            return
+        try:
+            if os.path.exists(ALLOWLIST_PATH):
+                with open(ALLOWLIST_PATH) as f:
+                    data = json.load(f)
+            else:
+                data = {'patterns': []}
+            patterns = data.get('patterns', [])
+            if pattern not in patterns:
+                patterns.append(pattern)
+                data['patterns'] = patterns
+                os.makedirs(os.path.dirname(ALLOWLIST_PATH), exist_ok=True)
+                with open(ALLOWLIST_PATH, 'w') as f:
+                    json.dump(data, f, indent=2)
+                _log(f'[codex] added to allowlist: {pattern!r}')
+        except Exception as e:
+            _log(f'[codex] allowlist write failed: {e}')
 
     async def _handle_notification(self, msg):
         block_id = str(uuid.uuid4())
