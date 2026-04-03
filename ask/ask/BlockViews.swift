@@ -181,6 +181,18 @@ struct BlockView: View {
             if let p = block.startSessionPayload {
                 StartSessionBlockView(payload: p, onRespond: onRespond)
             }
+        case .activityFeed:
+            if let p = block.activityFeedPayload {
+                ActivityFeedBlockView(payload: p)
+            }
+        case .compactSummary:
+            if let p = block.compactSummaryPayload {
+                CompactSummaryBlockView(payload: p)
+            }
+        case .sessionEvent:
+            if let p = block.sessionEventPayload {
+                SessionEventBlockView(payload: p)
+            }
         }
     }
 
@@ -1394,5 +1406,154 @@ struct RepoPickerSheet: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Relative time helper
+
+private func relativeTime(_ ts: Double) -> String {
+    let date = Date(timeIntervalSince1970: ts)
+    let formatter = RelativeDateTimeFormatter()
+    formatter.unitsStyle = .short
+    return formatter.localizedString(for: date, relativeTo: Date())
+}
+
+// MARK: - ActivityFeed
+
+struct ActivityFeedBlockView: View {
+    let payload: RKActivityFeedPayload
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: "chart.bar.xaxis")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text(payload.project)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                Spacer()
+                Text("Activity")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+            }
+
+            Divider()
+
+            if payload.entries.isEmpty {
+                Text("No activity yet")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.vertical, 4)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(payload.entries.reversed().prefix(15), id: \.ts) { entry in
+                        HStack(spacing: 8) {
+                            Image(systemName: toolIcon(entry.tool))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 14, alignment: .center)
+                            Text(toolActivityText(entry.tool, entry.preview))
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer()
+                            Text(relativeTime(entry.ts))
+                                .font(.caption2)
+                                .foregroundStyle(.quaternary)
+                                .fixedSize()
+                        }
+                    }
+                }
+            }
+        }
+        .padding(12)
+    }
+}
+
+// MARK: - CompactSummary
+
+struct CompactSummaryBlockView: View {
+    let payload: RKCompactSummaryPayload
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Context Summary")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                    Text(payload.project)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text(payload.trigger == "manual" ? "Manual" : "Auto")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color(.systemGray5))
+                    .clipShape(Capsule())
+            }
+
+            if !payload.summary.isEmpty {
+                Divider()
+                Text(payload.summary)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let ts = payload.ts {
+                HStack {
+                    Spacer()
+                    Text(relativeTime(ts))
+                        .font(.caption2)
+                        .foregroundStyle(.quaternary)
+                }
+            }
+        }
+        .padding(12)
+    }
+}
+
+// MARK: - SessionEvent
+
+struct SessionEventBlockView: View {
+    let payload: RKSessionEventPayload
+
+    private var isStarted: Bool { payload.event == "started" }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: isStarted ? "play.circle.fill" : "stop.circle.fill")
+                .font(.title2)
+                .foregroundStyle(isStarted ? Color.green : Color.red)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(isStarted ? "Session started" : "Session ended")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                Text(payload.project)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if let ts = payload.ts {
+                Text(relativeTime(ts))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(12)
     }
 }

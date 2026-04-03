@@ -252,6 +252,10 @@ class MCPClient:
         digest = hashlib.sha256(session_id.encode()).hexdigest()[:8]
         return f'claudecode-session-{digest}'
 
+    def _activity_feed_block_id(self, session_id: str) -> str:
+        digest = hashlib.sha256(session_id.encode()).hexdigest()[:8]
+        return f'claudecode-activity-{digest}'
+
     def _start_session_block_id(self) -> str:
         return 'claudecode-start-session'
 
@@ -711,6 +715,10 @@ class MCPClient:
                 task.cancel()
         print(f'[claudecode-controller] session stopped: {session_id}', file=sys.stderr)
         asyncio.create_task(self._emit_session_block(session_id, last_message=last_message))
+        project = self._sessions.get(session_id, {}).get('project', 'Claude Code')
+        asyncio.create_task(self.emit_block(str(uuid.uuid4()), 'session_event', {
+            'event': 'stopped', 'project': project, 'cwd': cwd, 'ts': time.time()
+        }, ttl=3600))
 
     async def _emit_session_block(self, session_id: str, last_message: str = '', touch_last_seen: bool = True):
         """Emit (or re-emit) the claude_session block for this session.
@@ -1321,6 +1329,17 @@ end tell
             await asyncio.sleep(0.3)
             self._pending_activity_emits.pop(session_id, None)
             await self._emit_session_block(session_id)
+            # Also update the activity_feed block with the latest tool history
+            sess = self._sessions.get(session_id, {})
+            project = sess.get('project', 'Claude Code')
+            feed_entries = list(self._tool_histories.get(session_id, []))
+            if feed_entries:
+                feed_block_id = self._activity_feed_block_id(session_id)
+                await self.emit_block(feed_block_id, 'activity_feed', {
+                    'session_id': session_id,
+                    'project': project,
+                    'entries': feed_entries,
+                }, ttl=3600)
         self._pending_activity_emits[session_id] = asyncio.create_task(_emit())
 
     def _handle_user_prompt(self, msg):
@@ -1343,6 +1362,10 @@ end tell
         is_new = self._register_session(session_id, cwd)
         if is_new:
             asyncio.create_task(self._emit_session_block(session_id))
+        project = self._sessions.get(session_id, {}).get('project', 'Claude Code')
+        asyncio.create_task(self.emit_block(str(uuid.uuid4()), 'session_event', {
+            'event': 'started', 'project': project, 'cwd': cwd, 'ts': time.time()
+        }, ttl=3600))
 
     async def _handle_pre_compact(self, msg):
         """PreCompact hook — notify iPhone that context is being summarized."""
@@ -1357,17 +1380,22 @@ end tell
         })
 
     async def _handle_post_compact(self, msg):
-        """PostCompact hook — send compaction summary to iPhone."""
+        """PostCompact hook — emit compact_summary block to iPhone."""
         session_id = msg.get('session_id', '')
+        trigger = msg.get('trigger', 'auto')
         summary = msg.get('summary', '').strip()
+        cwd = msg.get('cwd', '')
         project = self._sessions.get(session_id, {}).get('project', 'Claude Code')
         if not summary:
             return
-        await self._handle_notification({
-            'title': f'Context summary — {project}',
-            'body': summary[:300],
-            'icon': 'doc.text',
-        })
+        block_id = f'claudecode-compact-{session_id[:16]}' if session_id else str(uuid.uuid4())
+        await self.emit_block(block_id, 'compact_summary', {
+            'session_id': session_id,
+            'project': project,
+            'trigger': trigger,
+            'summary': summary[:1000],
+            'ts': time.time(),
+        }, ttl=86400)
 
     async def start_socket_server(self):
         os.makedirs(os.path.dirname(SOCKET_PATH), exist_ok=True)

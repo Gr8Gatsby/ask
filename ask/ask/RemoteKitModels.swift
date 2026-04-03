@@ -21,6 +21,9 @@ enum RKBlockType: String, Codable {
     case detail
     case feedItem = "feed_item"
     case startSession = "start_session"
+    case activityFeed = "activity_feed"
+    case compactSummary = "compact_summary"
+    case sessionEvent = "session_event"
 }
 
 // MARK: - Block payloads
@@ -225,6 +228,48 @@ struct RKStartSessionPayload: Codable {
     let repos: [RKRepo]
 }
 
+struct RKActivityFeedPayload: Codable {
+    let sessionId: String
+    let project: String
+    let entries: [ToolHistoryEntry]
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case project
+        case entries
+    }
+}
+
+struct RKCompactSummaryPayload: Codable {
+    let sessionId: String
+    let project: String
+    let trigger: String
+    let summary: String
+    let ts: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case project
+        case trigger
+        case summary
+        case ts
+    }
+}
+
+struct RKSessionEventPayload: Codable {
+    let event: String   // "started" | "stopped"
+    let project: String
+    let cwd: String?
+    let ts: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case event
+        case project
+        case cwd
+        case ts
+    }
+}
+
 // MARK: - RKBlock model
 
 struct RKBlock: Identifiable {
@@ -329,6 +374,21 @@ struct RKBlock: Identifiable {
     var startSessionPayload: RKStartSessionPayload? {
         guard blockType == .startSession else { return nil }
         return try? JSONDecoder().decode(RKStartSessionPayload.self, from: payloadData)
+    }
+
+    var activityFeedPayload: RKActivityFeedPayload? {
+        guard blockType == .activityFeed else { return nil }
+        return try? JSONDecoder().decode(RKActivityFeedPayload.self, from: payloadData)
+    }
+
+    var compactSummaryPayload: RKCompactSummaryPayload? {
+        guard blockType == .compactSummary else { return nil }
+        return try? JSONDecoder().decode(RKCompactSummaryPayload.self, from: payloadData)
+    }
+
+    var sessionEventPayload: RKSessionEventPayload? {
+        guard blockType == .sessionEvent else { return nil }
+        return try? JSONDecoder().decode(RKSessionEventPayload.self, from: payloadData)
     }
 
     /// payloadJSON with UTF-16 surrogate pairs decoded to real Unicode scalars, as UTF-8 Data.
