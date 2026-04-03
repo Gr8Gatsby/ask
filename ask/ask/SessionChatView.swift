@@ -508,7 +508,7 @@ private struct MarkdownTextView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             ForEach(Array(segments.enumerated()), id: \.element.id) { index, seg in
                 if seg.isCode {
                     codeBlock(seg.content)
@@ -525,6 +525,7 @@ private struct MarkdownTextView: View {
         if !trimmed.isEmpty {
             Text(.init(trimmed))
                 .font(.subheadline)
+                .lineSpacing(1)
                 .lineLimit((!isExpanded && isFirst && !hasCodeBlocks) ? 6 : nil)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
