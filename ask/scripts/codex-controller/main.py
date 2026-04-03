@@ -1355,11 +1355,15 @@ end tell
         # ── Step 2: collect the last response block ────────────────────────────
         # Walk up from the bottom (max 120 lines). Stop at a previous user-input
         # prompt line (> ...) — that's where the prior exchange ended.
+        # Skip hook notification lines and decorative separators inline too.
+        separator_re = re.compile(r'^[-─━═╌╍\s]+$')
         result = []
         for line in reversed(lines[-120:]):
             s = line.strip()
             if input_prompt_re.match(s):
                 break  # hit the previous user input — stop here
+            if hook_re.search(s) or (s and separator_re.match(s)):
+                continue  # skip hook noise and decorative lines
             result.append(line.rstrip())
 
         if result:
