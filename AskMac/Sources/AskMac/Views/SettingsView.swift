@@ -689,7 +689,7 @@ private struct ScriptDetailView: View {
     private var scriptCardBack: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(script.scriptType == "feed" ? "Script Settings" : "Dependency Checks")
+                Text("Script Settings")
                     .font(.headline)
                     .foregroundStyle(brandForegroundPrimary)
                 Spacer()
@@ -1134,16 +1134,6 @@ private struct ScriptDetailView: View {
 
                     Spacer()
 
-                    if settings.brandColorOverride(for: script.id) != nil {
-                        Button("Reset") {
-                            settings.setBrandColorOverride(scriptID: script.id, hex: nil)
-                            initBrandColor()
-                        }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    }
-
                     Button { saveBrandColor() } label: {
                         Text(brandColorSaved ? "Saved ✓" : "Save")
                     }
@@ -1202,6 +1192,23 @@ private struct ScriptDetailView: View {
                                 .foregroundStyle(brandForegroundTertiary)
                         }
                     }
+                }
+            }
+
+            // Reset all brand overrides
+            let hasAnyOverride = settings.brandColorOverride(for: script.id) != nil
+                              || settings.svgOverride(for: script.id) != nil
+            if hasAnyOverride {
+                HStack {
+                    Spacer()
+                    Button("Reset Brand") {
+                        settings.setBrandColorOverride(scriptID: script.id, hex: nil)
+                        settings.setSVGOverride(scriptID: script.id, svg: nil)
+                        initBrandColor()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
             }
         }
@@ -1333,11 +1340,13 @@ private struct ScriptDetailView: View {
         }
     }
 
-    private var hasBrand: Bool {
-        switch script.id {
-        case "claudecode-controller", "github": true
-        default: false
-        }
+    private var hasBrand: Bool { true }
+
+    /// Stable hue (0–1) derived from the script ID via djb2 hash.
+    private var defaultBrandHue: Double {
+        var hash: UInt32 = 5381
+        for c in script.id.unicodeScalars { hash = hash &* 33 &+ c.value }
+        return Double(hash % 360) / 360.0
     }
 
     // MARK: Brand colors — effective (respects preview toggles)
@@ -1345,28 +1354,27 @@ private struct ScriptDetailView: View {
     /// Background actually applied to the card.
     private var brandBackground: Color {
         if !previewBranded {
-            return effectiveColorScheme == .dark
-                ? Color(white: 0.15)
-                : Color(white: 0.96)
+            return effectiveColorScheme == .dark ? Color(white: 0.15) : Color(white: 0.96)
         }
         // User override
         if let hex = settings.brandColorOverride(for: script.id), let c = Color(hex: hex) {
             return c
         }
+        // Built-in script brands
         switch script.id {
         case "claudecode-controller":
             return effectiveColorScheme == .dark
                 ? Color(red: 0.15, green: 0.13, blue: 0.11)
                 : Color(red: 250/255, green: 249/255, blue: 245/255)
         case "github":
-            // GitHub always uses its dark card; light preview switches to a neutral surface
             return effectiveColorScheme == .light
                 ? Color(red: 250/255, green: 250/255, blue: 250/255)
                 : Color(red: 0x24/255, green: 0x29/255, blue: 0x2F/255)
         default:
+            // Auto-generate a subtle tint from the script ID
             return effectiveColorScheme == .dark
-                ? Color(white: 0.15)
-                : Color(white: 0.96)
+                ? Color(hue: defaultBrandHue, saturation: 0.25, brightness: 0.18)
+                : Color(hue: defaultBrandHue, saturation: 0.08, brightness: 0.96)
         }
     }
 
@@ -1385,7 +1393,8 @@ private struct ScriptDetailView: View {
         switch script.id {
         case "claudecode-controller": return Color(red: 202/255, green: 124/255, blue: 94/255)
         case "github":               return Color(red: 0x09/255, green: 0x69/255, blue: 0xDA/255)
-        default: return nil
+        default:
+            return Color(hue: defaultBrandHue, saturation: 0.65, brightness: 0.60)
         }
     }
 
