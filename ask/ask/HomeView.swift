@@ -806,6 +806,9 @@ struct ScriptDetailView: View {
 
     @State private var restartBobOffset: CGFloat = 0
     @State private var hadSessions: Bool = false
+    /// Block IDs of confirmations the user has already responded to locally.
+    /// Prevents re-rendering if the block briefly reappears before the Mac removes it.
+    @State private var respondedConfirmationIDs: Set<String> = []
 
     private var group: ScriptGroup {
         ScriptGroup(scriptID: scriptID, blocks: allBlocks.filter { $0.scriptID == scriptID && $0.blockType != .tile })
@@ -879,6 +882,7 @@ struct ScriptDetailView: View {
                         ForEach(sessionBlocks) { block in
                             if let payload = block.agentSessionPayload {
                                 let confs = sessionConfirmations(for: payload.sessionId)
+                                    .filter { !respondedConfirmationIDs.contains($0.id) }
                                 let confCount = confs.count
                                 NavigationLink(value: AgentSessionNavValue(blockID: block.id, sessionID: payload.sessionId, project: payload.project)) {
                                     SessionRowView(
@@ -893,10 +897,11 @@ struct ScriptDetailView: View {
                                 )
                                 ForEach(confs) { confBlock in
                                     BlockView(block: confBlock, onRespond: { value in
+                                        respondedConfirmationIDs.insert(confBlock.id)
                                         await onRespond(confBlock, value)
                                     })
                                     .listRowBackground(Color.orange.opacity(0.05))
-                                    .listRowInsets(EdgeInsets(top: 0, leading: 32, bottom: 0, trailing: 16))
+                                    .listRowInsets(EdgeInsets(top: 0, leading: 32, bottom: 5, trailing: 16))
                                 }
                             }
                         }
