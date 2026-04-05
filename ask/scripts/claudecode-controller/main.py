@@ -214,11 +214,13 @@ class MCPClient:
                 fut.set_exception(Exception(str(msg['error'])))
             return
 
-        # Daemon notification — check for user_response
+        # Daemon notification — check for user_response or chat_message
         method = msg.get('method', '')
         if method == 'notifications/message':
             data = msg.get('params', {}).get('data', {})
-            if data.get('type') == 'user_response':
+            msg_type = data.get('type')
+
+            if msg_type == 'user_response':
                 block_id = data.get('blockId', '')
                 value = data.get('value', '')
 
@@ -232,6 +234,12 @@ class MCPClient:
                 q = self._pending_blocks.get(block_id)
                 if q:
                     await q.put(value)
+
+            elif msg_type == 'chat_message':
+                session_id = data.get('sessionId', '')
+                text = data.get('text', '')
+                if session_id and text:
+                    asyncio.create_task(self._on_session_reply(session_id, text))
 
     async def wait_for_block_response(self, block_id, timeout=300):
         q = asyncio.Queue()
@@ -1181,7 +1189,7 @@ end tell
                     return
 
         response_task = asyncio.create_task(
-            self.wait_for_block_response(block_id, timeout=300)
+            self.wait_for_block_response(block_id, timeout=None)
         )
         disconnect_task = asyncio.create_task(wait_writer_closed())
 
@@ -1232,6 +1240,15 @@ end tell
         payload = {'title': f'Allow {tool}?', 'body': preview, 'options': options}
         if session_id:
             payload['session_id'] = session_id
+        # Update live tool activity so the session subtitle shows the pending tool
+        if session_id and session_id in self._sessions:
+            entry = {'tool': tool, 'preview': preview, 'ts': time.time()}
+            self._current_tools[session_id] = entry
+            history = self._tool_histories.setdefault(session_id, [])
+            history.append(entry)
+            if len(history) > 20:
+                del history[:-20]
+            asyncio.create_task(self._emit_session_block(session_id))
         try:
             await self.emit_block(block_id, 'confirmation', payload, ttl=300)
             # Track so PostToolUse can wake this block if the user accepts in terminal
