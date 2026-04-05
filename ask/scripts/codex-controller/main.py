@@ -139,6 +139,8 @@ class MCPClient:
         self._pending_tmux_targets: dict = {}
         # tmux_target -> asyncio.Task — background pane monitors
         self._tmux_monitors: dict = {}
+        # session_id -> asyncio.Task — background TTY (Terminal.app) monitors
+        self._tty_monitors: dict = {}
         # session_id -> asyncio.Task — active response capture (deduplicated per session)
         self._capture_tasks: dict = {}
         # CWDs the user explicitly launched via Start Session — pid-* sessions only surface for these
@@ -207,24 +209,33 @@ class MCPClient:
         await self._backfill_tmux_targets()
         self._write_status()
         for session_id, info in list(self._sessions.items()):
+            tmux_target = info.get('tmux_target')
             stored_msg = info.get('last_message', '')
+            # Ensure prompt monitoring runs for every tmux-tracked session on startup.
+            # This lets us detect any TUI prompt the session was already waiting at
+            # before the service came online.
+            if tmux_target and tmux_target not in self._tmux_monitors:
+                task = asyncio.create_task(self._monitor_tmux_pane(tmux_target))
+                self._tmux_monitors[tmux_target] = task
             if stored_msg:
                 asyncio.create_task(
                     self._emit_session_block(session_id, last_message=stored_msg, touch_last_seen=False)
                 )
-            elif info.get('tmux_target'):
-                # No stored message — try to read the terminal now
-                asyncio.create_task(self._capture_tmux_once(info['tmux_target'], session_id))
+            elif tmux_target:
+                # No stored message — snapshot current terminal content for the session block
+                asyncio.create_task(self._capture_tmux_once(tmux_target, session_id))
             else:
                 asyncio.create_task(
                     self._emit_session_block(session_id, touch_last_seen=False)
                 )
         asyncio.create_task(self._emit_start_session_block())
 
-    async def emit_block(self, block_id, block_type, payload, ttl=None):
+    async def emit_block(self, block_id, block_type, payload, ttl=None, inbox=False):
         args = {'blockId': block_id, 'blockType': block_type, 'payload': payload}
         if ttl is not None:
             args['ttl'] = ttl
+        if inbox:
+            args['inbox'] = True
         return await self._rpc('tools/call', {'name': 'emit_block', 'arguments': args})
 
     async def clear_block(self, block_id):
@@ -330,8 +341,13 @@ class MCPClient:
                 session_id = data.get('sessionId', '')
                 text = data.get('text', '')
                 if session_id and text:
-                    print(f'[codex-controller] chat_message sessionId={session_id!r}', file=sys.stderr)
-                    asyncio.create_task(self._route_to_terminal(session_id, text))
+                    print(f'[codex-controller] chat_message sessionId={session_id!r} text={text!r}', file=sys.stderr)
+                    if text in self._RESERVED_COMMANDS:
+                        # Reserved commands arrive via chat_message for agent_session blocks.
+                        # Route them to the session reply handler, not the terminal.
+                        asyncio.create_task(self._on_session_reply(session_id, text))
+                    else:
+                        asyncio.create_task(self._route_to_terminal(session_id, text))
 
     async def wait_for_block_response(self, block_id):
         """Wait indefinitely for the user to respond via iOS."""
@@ -555,6 +571,160 @@ class MCPClient:
         return None
 
     @staticmethod
+    def _detect_codex_tui_menu(content: str):
+        """Detect any Codex boxed TUI menu: '[ Title ]' header + numbered options.
+
+        Covers /permissions, /model, and any other Codex interactive menus that
+        follow the same pattern.
+
+        Returns (title, body, options, current_idx) or None.
+        options      — clean labels, descriptions and '(current)' stripped
+        current_idx  — 0-based index of the option currently marked with '>'
+        """
+        import re
+        ansi_re = re.compile(r'\x1b\[[0-9;]*[mGKHFJABCDsuhl]|\x1b[()][AB012]|\x1b\][^\x07]*\x07|\r')
+        lines = [ansi_re.sub('', l) for l in content.splitlines()]
+        text = '\n'.join(lines)
+
+        # Required footer distinguishes this TUI from other numbered menus
+        if 'Press enter to confirm' not in text and 'esc to go back' not in text:
+            return None
+
+        # Extract option labels first so we can find the title relative to them.
+        # Capture each full option line, then split label from inline description
+        # at the first 2+ space gap.
+        # Handles "  1. Default   Codex can read..." and "> 2. Full Access (current)   desc"
+        # Track which option has the '>' cursor marker.
+        # Codex uses '›' (U+203A) as the cursor marker, not '>'.
+        # Both are included in the prefix pattern for forward-compatibility.
+        option_re = re.compile(r'^([›>\s]*)\d+\.\s+(.+)$', re.MULTILINE)
+        options = []
+        current_idx = 0
+        for m in option_re.finditer(text):
+            prefix = m.group(1)
+            rest   = m.group(2).strip()
+            label  = re.split(r'\s{2,}', rest, maxsplit=1)[0].strip()
+            label  = label.replace(' (current)', '').strip()
+            if not label:
+                continue
+            if '›' in prefix or '>' in prefix:
+                # If the option already exists (deduplicated from an earlier frame),
+                # use its existing index rather than len(options) — which would be
+                # out-of-bounds and cause wrong navigation direction.
+                current_idx = options.index(label) if label in options else len(options)
+            if label not in options:
+                options.append(label)
+
+        if len(options) < 2:
+            return None
+
+        # Extract title. Try boxed header "[ Title ]" first; fall back to the
+        # nearest non-empty, non-option line before the first option.
+        box_re = re.compile(r'\[\s+(.+?)\s*\]')
+        option_line_re = re.compile(r'^[>\s]*\d+\.\s+')
+        title = ''
+        for line in lines:
+            m = box_re.search(line)
+            if m:
+                title = m.group(1).strip()
+                break
+        if not title:
+            # Find the first option line's index in `lines`, then scan backward
+            for i, line in enumerate(lines):
+                if option_line_re.match(line):
+                    for j in range(i - 1, -1, -1):
+                        candidate = lines[j].strip()
+                        if candidate and not option_line_re.match(lines[j]):
+                            title = candidate
+                            break
+                    break
+        if not title:
+            return None
+
+        return title, '', options, current_idx
+
+    @staticmethod
+    def _detect_slash_command_menu(content: str):
+        """Detect Codex slash-command autocomplete (visible when user types '/').
+
+        The TUI shows an input line '› /' followed by /command   description rows.
+        No numbered options, no '›' on individual commands, no footer — just the list.
+
+        Returns list of (cmd, desc) tuples e.g. [('/model', 'choose...'), ...]
+        or None if not detected.
+        """
+        import re
+        ansi_re = re.compile(r'\x1b\[[0-9;]*[mGKHFJABCDsuhl]|\x1b[()][AB012]|\x1b\][^\x07]*\x07|\r')
+        lines = [ansi_re.sub('', l) for l in content.splitlines()]
+        text = '\n'.join(lines)
+
+        # Require the slash-command input prompt line
+        if not re.search(r'^[›>]\s+/', text, re.MULTILINE):
+            return None
+
+        # Match /commandname   description (2+ spaces as separator)
+        slash_re = re.compile(r'^\s+(/\w+)\s{2,}(.+)$', re.MULTILINE)
+        seen: set = set()
+        commands = []
+        for cmd, desc in slash_re.findall(text):
+            if cmd not in seen:
+                seen.add(cmd)
+                commands.append((cmd, desc.strip()))
+
+        return commands if len(commands) >= 2 else None
+
+    @staticmethod
+    def _detect_toggle_menu(content: str):
+        """Detect Codex checkbox/toggle TUI (e.g. /experimental).
+
+        Uses '[ ]' / '[x]' option format and footer
+        'Press space to select or enter to save'.
+
+        Returns (title, options, current_idx) or None.
+        options — list of (label, is_checked) tuples
+        current_idx — index of the option under the '›' cursor
+        """
+        import re
+        ansi_re = re.compile(r'\x1b\[[0-9;]*[mGKHFJABCDsuhl]|\x1b[()][AB012]|\x1b\][^\x07]*\x07|\r')
+        lines = [ansi_re.sub('', l) for l in content.splitlines()]
+        text = '\n'.join(lines)
+
+        if 'Press space to select' not in text and 'enter to save' not in text:
+            return None
+
+        option_re = re.compile(r'^([›>\s]*)\[([x ])\]\s+(.+?)(?:\s{2,}.*)?$', re.MULTILINE)
+        options = []
+        current_idx = 0
+        existing_labels: list = []
+        for m in option_re.finditer(text):
+            prefix = m.group(1)
+            checked = m.group(2).strip() == 'x'
+            label = m.group(3).strip()
+            if not label:
+                continue
+            if '›' in prefix or '>' in prefix:
+                current_idx = existing_labels.index(label) if label in existing_labels else len(existing_labels)
+            if label not in existing_labels:
+                existing_labels.append(label)
+                options.append((label, checked))
+
+        if not options:
+            return None
+
+        # Title: nearest non-option non-empty line above the first option
+        option_line_re = re.compile(r'^[›>\s]*\[[x ]]\s+')
+        title = ''
+        for i, line in enumerate(lines):
+            if option_line_re.match(line):
+                for j in range(i - 1, -1, -1):
+                    candidate = lines[j].strip()
+                    if candidate and not option_line_re.match(lines[j]):
+                        title = candidate
+                        break
+                break
+        return title or 'Options', options, current_idx
+
+    @staticmethod
     def _detect_codex_permission(content: str):
         """Detect Codex's native 'Would you like to run the following command?' UI.
 
@@ -621,18 +791,41 @@ class MCPClient:
             except Exception:
                 break  # pane is gone
 
-            codex_perm = self._detect_codex_permission(content)
-            generic    = None if codex_perm else self._parse_tmux_prompt(content)
+            tui_menu   = self._detect_codex_tui_menu(content)
+            codex_perm = None if tui_menu else self._detect_codex_permission(content)
+            generic    = None if (tui_menu or codex_perm) else self._parse_tmux_prompt(content)
             content_hash = _hl.md5(content.encode()).hexdigest()[:8]
 
-            if codex_perm or generic:
+            if tui_menu or codex_perm or generic:
                 idle_streak = 0
                 poll_interval = 1
                 if content_hash != last_hash:
                     last_hash = content_hash
                     session_id = self._session_id_for_tmux(tmux_target) or ''
+                    if tui_menu:
+                        title, body, options, current_idx = tui_menu
+                        # Sync mode file from the '>' cursor so the iOS pill stays accurate
+                        # even when the user changed permissions outside of the app.
+                        if title == 'Update Model Permissions' and options:
+                            selected = options[current_idx] if current_idx < len(options) else ''
+                            mode = 'full-auto' if 'Full Access' in selected else 'supervised'
+                            self._save_permission_mode(mode)
+                            if session_id:
+                                asyncio.create_task(self._emit_session_block(session_id))
+                        captured = (tmux_target, options, current_idx, block_id, session_id, title)
+                        self._response_callbacks[block_id] = (
+                            lambda v, c=captured: self._on_codex_tui_menu_reply(c[0], c[1], c[2], v, c[3], c[4], c[5])
+                        )
+                        payload = {'title': title, 'body': body, 'options': options}
+                        if session_id:
+                            payload['session_id'] = session_id
+                        try:
+                            await self.emit_block(block_id, 'confirmation', payload, ttl=300, inbox=True)
+                            print(f'[codex-controller] tui menu "{title}" surfaced for {tmux_target}', file=sys.stderr)
+                        except Exception as e:
+                            print(f'[codex-controller] tui menu emit failed: {e}', file=sys.stderr)
                     # In full-auto mode, silently approve Codex's native permission UI
-                    if codex_perm and self._load_permission_mode() == 'full-auto':
+                    elif codex_perm and self._load_permission_mode() == 'full-auto':
                         _, _, _, key_map = codex_perm
                         asyncio.create_task(
                             self._on_codex_permission_reply(tmux_target, [], key_map, 'Yes', block_id)
@@ -647,7 +840,7 @@ class MCPClient:
                         if session_id:
                             payload['session_id'] = session_id
                         try:
-                            await self.emit_block(block_id, 'confirmation', payload, ttl=300)
+                            await self.emit_block(block_id, 'confirmation', payload, ttl=300, inbox=True)
                             print(f'[codex-controller] codex permission surfaced for {tmux_target}', file=sys.stderr)
                         except Exception as e:
                             print(f'[codex-controller] tmux prompt emit failed: {e}', file=sys.stderr)
@@ -661,7 +854,7 @@ class MCPClient:
                         if session_id:
                             payload['session_id'] = session_id
                         try:
-                            await self.emit_block(block_id, 'confirmation', payload, ttl=300)
+                            await self.emit_block(block_id, 'confirmation', payload, ttl=300, inbox=True)
                             print(f'[codex-controller] generic prompt surfaced for {tmux_target}', file=sys.stderr)
                         except Exception as e:
                             print(f'[codex-controller] tmux prompt emit failed: {e}', file=sys.stderr)
@@ -684,6 +877,461 @@ class MCPClient:
             await self.clear_block(block_id)
         except Exception:
             pass
+
+    async def _capture_tty_content(self, full_tty: str) -> str:
+        """Read current terminal state for TUI detection.
+
+        Uses `history of t` — the same property the TTY monitor uses successfully —
+        but returns only the last 30 lines.  This eliminates stale '>' cursor markers
+        from earlier TUI renders that would cause current_idx detection to lie.
+        30 lines is well above the ~10 lines a Codex TUI menu occupies.
+        """
+        safe_tty = full_tty.replace('"', '\\"')
+        script = f'''tell application "Terminal"
+    repeat with w in windows
+        set tabCount to count of tabs of w
+        repeat with i from 1 to tabCount
+            set t to tab i of w
+            try
+                if tty of t is "{safe_tty}" then
+                    return history of t
+                end if
+            end try
+        end repeat
+    end repeat
+    return ""
+end tell'''
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'osascript', '-e', script,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            return MCPClient._strip_ansi(stdout.decode(errors='replace'))
+        except Exception:
+            return ''
+
+    async def _run_tty_monitor(self, session_id: str, full_tty: str):
+        """Persistent monitor for Terminal.app (non-tmux) sessions.
+
+        Polls the Terminal tab matching `full_tty` every 1.5s via osascript,
+        detects any Codex boxed TUI menu or native permission prompt, and
+        surfaces them to iOS as confirmation cards — identical to what
+        _run_tmux_monitor does for tmux sessions.
+        """
+        import hashlib as _hl
+        safe_tty = full_tty.replace('"', '\\"')
+        read_script = f'''tell application "Terminal"
+    repeat with w in windows
+        set tabCount to count of tabs of w
+        repeat with i from 1 to tabCount
+            set t to tab i of w
+            try
+                if tty of t is "{safe_tty}" then
+                    return history of t
+                end if
+            end try
+        end repeat
+    end repeat
+    return ""
+end tell'''
+        block_id = f'codex-tty-tui-{session_id[:8]}'
+        last_hash = ''
+        poll_interval = 1.5
+
+        while True:
+            await asyncio.sleep(poll_interval)
+            # Stop if session gone or switched to tmux
+            session = self._sessions.get(session_id)
+            if not session:
+                break
+            if session.get('tmux_target'):
+                break
+
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    'osascript', '-e', read_script,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=6)
+                content = MCPClient._strip_ansi(stdout.decode(errors='replace'))
+            except Exception:
+                continue
+
+            tui_menu   = self._detect_codex_tui_menu(content)
+            codex_perm = None if tui_menu else self._detect_codex_permission(content)
+            slash_menu = None if (tui_menu or codex_perm) else self._detect_slash_command_menu(content)
+            toggle_menu = None if (tui_menu or codex_perm or slash_menu) else self._detect_toggle_menu(content)
+            any_detected = tui_menu or codex_perm or slash_menu or toggle_menu
+            content_hash = _hl.md5(content.encode()).hexdigest()[:8]
+
+            if any_detected:
+                if content_hash != last_hash:
+                    last_hash = content_hash
+                    if tui_menu:
+                        title, body, options, current_idx = tui_menu
+                        captured = (full_tty, session_id, options, current_idx, block_id)
+                        self._response_callbacks[block_id] = (
+                            lambda v, c=captured: self._on_tty_tui_reply(c[0], c[1], c[2], c[3], v, c[4])
+                        )
+                        payload = {'title': title, 'body': body, 'options': options,
+                                   'session_id': session_id}
+                        try:
+                            await self.emit_block(block_id, 'confirmation', payload, ttl=300, inbox=True)
+                            _log(f'[codex] tty tui menu "{title}" surfaced for {session_id[:8]}')
+                        except Exception as e:
+                            _log(f'[codex] tty tui emit failed: {e}')
+                    elif codex_perm and self._load_permission_mode() == 'full-auto':
+                        _, _, _, key_map = codex_perm
+                        asyncio.create_task(
+                            self._on_codex_permission_reply(None, [], key_map, 'Yes', block_id,
+                                                            full_tty=full_tty)
+                        )
+                    elif codex_perm:
+                        title, body, options, key_map = codex_perm
+                        captured = (None, options, key_map, block_id, full_tty)
+                        self._response_callbacks[block_id] = (
+                            lambda v, c=captured: self._on_codex_permission_reply(
+                                c[0], c[1], c[2], v, c[3], full_tty=c[4])
+                        )
+                        payload = {'title': title, 'body': body, 'options': options,
+                                   'session_id': session_id}
+                        try:
+                            await self.emit_block(block_id, 'confirmation', payload, ttl=300, inbox=True)
+                            _log(f'[codex] tty permission prompt surfaced for {session_id[:8]}')
+                        except Exception as e:
+                            _log(f'[codex] tty permission emit failed: {e}')
+                    elif slash_menu:
+                        cmd_names = [cmd for cmd, _ in slash_menu]
+                        cmd_descs = {cmd: desc for cmd, desc in slash_menu}
+                        captured = (full_tty, session_id, block_id)
+                        self._response_callbacks[block_id] = (
+                            lambda v, c=captured: self._on_tty_slash_command_reply(c[0], c[1], v, c[2])
+                        )
+                        # Surface as confirmation card; options are the command names
+                        options_with_desc = [f'{cmd}  {cmd_descs[cmd]}' for cmd in cmd_names]
+                        payload = {'title': 'Slash Commands', 'body': '',
+                                   'options': cmd_names,
+                                   'session_id': session_id}
+                        try:
+                            await self.emit_block(block_id, 'confirmation', payload, ttl=120, inbox=True)
+                            _log(f'[codex] tty slash commands surfaced ({len(cmd_names)}) for {session_id[:8]}')
+                        except Exception as e:
+                            _log(f'[codex] tty slash emit failed: {e}')
+                    elif toggle_menu:
+                        title, tog_options, current_idx = toggle_menu
+                        # Surface labels with checked state visible
+                        option_labels = [f'{"[x]" if chk else "[ ]"} {lbl}' for lbl, chk in tog_options]
+                        plain_labels  = [lbl for lbl, _ in tog_options]
+                        captured = (full_tty, session_id, plain_labels, current_idx, block_id)
+                        self._response_callbacks[block_id] = (
+                            lambda v, c=captured: self._on_tty_toggle_reply(
+                                c[0], c[1], c[2], c[3],
+                                # strip checkbox prefix the user sees
+                                v.split('] ', 1)[-1] if '] ' in v else v,
+                                c[4])
+                        )
+                        payload = {'title': title, 'body': '',
+                                   'options': option_labels,
+                                   'session_id': session_id}
+                        try:
+                            await self.emit_block(block_id, 'confirmation', payload, ttl=300, inbox=True)
+                            _log(f'[codex] tty toggle menu "{title}" surfaced for {session_id[:8]}')
+                        except Exception as e:
+                            _log(f'[codex] tty toggle emit failed: {e}')
+            else:
+                if last_hash:
+                    last_hash = ''
+                    self._response_callbacks.pop(block_id, None)
+                    asyncio.create_task(self.clear_block(block_id))
+
+        self._tty_monitors.pop(session_id, None)
+        self._response_callbacks.pop(block_id, None)
+        try:
+            await self.clear_block(block_id)
+        except Exception:
+            pass
+
+    async def _tty_focus_and_key(self, full_tty: str, key_code: int) -> bool:
+        """Focus the Terminal tab and send one key code in a single osascript call.
+
+        Combining focus + keystroke in one script eliminates the Python async gap
+        that would otherwise let Terminal lose keyboard focus before the key arrives.
+        The keystroke is sent to the frontmost application (Terminal, just activated)
+        rather than via 'tell process "Terminal"' which can bypass PTY forwarding.
+        Returns True if the tab was found and the keystroke was sent.
+        """
+        safe_tty = full_tty.replace('"', '\\"')
+        script = f'''set targetTTY to "{safe_tty}"
+set foundTab to false
+if application "Terminal" is running then
+    tell application "Terminal"
+        repeat with w in windows
+            set tabCount to count of tabs of w
+            repeat with i from 1 to tabCount
+                set t to tab i of w
+                try
+                    if tty of t is targetTTY then
+                        set selected tab of w to t
+                        set index of w to 1
+                        activate
+                        set foundTab to true
+                        exit repeat
+                    end if
+                end try
+            end repeat
+            if foundTab then exit repeat
+        end repeat
+    end tell
+end if
+if not foundTab then return false
+delay 0.3
+tell application "System Events"
+    key code {key_code}
+end tell
+return true'''
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'osascript', '-e', script,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
+            return stdout.decode().strip() == 'true'
+        except Exception:
+            return False
+
+    async def _tty_focus_and_type(self, full_tty: str, text: str) -> bool:
+        """Focus the Terminal tab, clear the current input line (Ctrl+U), type text, Enter.
+
+        Used for slash command selection: clear whatever is in the prompt, type
+        the full command name (e.g. '/permissions'), and press Enter.
+        """
+        safe_tty = full_tty.replace('"', '\\"')
+        # Escape for AppleScript string literal: backslash and double-quote
+        safe_text = text.replace('\\', '\\\\').replace('"', '\\"')
+        script = f'''set targetTTY to "{safe_tty}"
+set foundTab to false
+if application "Terminal" is running then
+    tell application "Terminal"
+        repeat with w in windows
+            set tabCount to count of tabs of w
+            repeat with i from 1 to tabCount
+                set t to tab i of w
+                try
+                    if tty of t is targetTTY then
+                        set selected tab of w to t
+                        set index of w to 1
+                        activate
+                        set foundTab to true
+                        exit repeat
+                    end if
+                end try
+            end repeat
+            if foundTab then exit repeat
+        end repeat
+    end tell
+end if
+if not foundTab then return false
+delay 0.3
+tell application "System Events"
+    keystroke "u" using {{control down}}
+    delay 0.1
+    keystroke "{safe_text}"
+    delay 0.05
+    key code 36
+end tell
+return true'''
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'osascript', '-e', script,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
+            return stdout.decode().strip() == 'true'
+        except Exception:
+            return False
+
+    async def _on_tty_slash_command_reply(self, full_tty: str, session_id: str,
+                                           command: str, block_id: str):
+        """Handle iOS selection from a slash command card.
+        Clears the current terminal input and types the full command + Enter.
+        """
+        _log(f'[codex] tty slash command reply: {command!r} for {session_id[:8]}')
+        ok = await self._tty_focus_and_type(full_tty, command)
+        if ok:
+            _log(f'[codex] tty slash command submitted: {command!r}')
+        else:
+            _log(f'[codex] tty slash command submit failed for {session_id[:8]}')
+        self._response_callbacks.pop(block_id, None)
+        try:
+            await self.clear_block(block_id)
+        except Exception:
+            pass
+
+    async def _on_tty_toggle_reply(self, full_tty: str, session_id: str,
+                                    options: list, current_idx: int, value: str, block_id: str):
+        """Handle iOS selection from a checkbox/toggle TUI card.
+        Navigates to the chosen option, presses Space to toggle, then Enter to save.
+        options — list of label strings (checkbox state stripped)
+        """
+        try:
+            target_idx = options.index(value)
+        except ValueError:
+            return
+
+        async def cleanup():
+            self._response_callbacks.pop(block_id, None)
+            try:
+                await self.clear_block(block_id)
+            except Exception:
+                pass
+
+        content = await self._capture_tty_content(full_tty)
+        detected = self._detect_toggle_menu(content) if content else None
+        if not detected:
+            _log(f'[codex] tty toggle reply: menu not found, aborting')
+            await cleanup()
+            return
+        _, det_options, pos = detected
+        det_labels = [o[0] for o in det_options]
+
+        focused = await self._tty_focus_tab_internal(full_tty)
+        if not focused:
+            await cleanup()
+            return
+        await asyncio.sleep(0.5)
+
+        # Navigate one step at a time (same approach as numbered menus)
+        max_steps = len(options) + 2
+        for step in range(max_steps):
+            if pos == target_idx:
+                break
+            key_code = 125 if pos < target_idx else 126
+            ok = await self._tty_focus_and_key(full_tty, key_code)
+            if not ok:
+                await cleanup()
+                return
+            await asyncio.sleep(0.8)
+            content = await self._capture_tty_content(full_tty)
+            detected = self._detect_toggle_menu(content) if content else None
+            if not detected:
+                await cleanup()
+                return
+            _, det_options, pos = detected
+            _log(f'[codex] tty toggle nav step={step} pos={pos} target={target_idx}')
+        else:
+            await cleanup()
+            return
+
+        # Space to toggle, then Enter to save
+        await self._tty_focus_and_key(full_tty, 49)  # Space
+        await asyncio.sleep(0.3)
+        await self._tty_focus_and_key(full_tty, 36)  # Enter
+        _log(f'[codex] tty toggle submitted: {value!r} for {session_id[:8]}')
+        await cleanup()
+
+    async def _tty_focus_tab_internal(self, full_tty: str) -> bool:
+        """Focus the Terminal tab (reuses _tty_focus_and_key with a no-op key, then cancel).
+        Actually just duplicates the focus logic without sending a key."""
+        safe_tty = full_tty.replace('"', '\\"')
+        script = f'''set targetTTY to "{safe_tty}"
+if application "Terminal" is running then
+    tell application "Terminal"
+        repeat with w in windows
+            set tabCount to count of tabs of w
+            repeat with i from 1 to tabCount
+                set t to tab i of w
+                try
+                    if tty of t is targetTTY then
+                        set selected tab of w to t
+                        set index of w to 1
+                        activate
+                        return true
+                    end if
+                end try
+            end repeat
+        end repeat
+    end tell
+end if
+return false'''
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'osascript', '-e', script,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            return stdout.decode().strip() == 'true'
+        except Exception:
+            return False
+
+    async def _on_tty_tui_reply(self, full_tty: str, session_id: str,
+                                 options: list, current_idx: int, value: str, block_id: str):
+        """Navigate a Codex TUI menu in a Terminal.app (non-tmux) session.
+
+        Correct strategy:
+          1. Read terminal state FIRST (no focus needed for reading) to find
+             the actual cursor position from the last 30 lines of history.
+          2. If already at target — focus + submit immediately.
+          3. Otherwise navigate one step (focus + key in one osascript call),
+             wait for the TUI to re-render, read again, repeat.
+          4. Only press Enter after a read confirms the cursor is on the target.
+        """
+        try:
+            target_idx = options.index(value)
+        except ValueError:
+            return
+
+        async def cleanup():
+            self._response_callbacks.pop(block_id, None)
+            try:
+                await self.clear_block(block_id)
+            except Exception:
+                pass
+
+        # Step 1: read current position BEFORE touching focus or sending any keys
+        content = await self._capture_tty_content(full_tty)
+        detected = self._detect_codex_tui_menu(content) if content else None
+        if not detected:
+            _log(f'[codex] tty tui reply: TUI not found before navigation, aborting')
+            await cleanup()
+            return
+        _, _, _, pos = detected
+        _log(f'[codex] tty tui: initial pos={pos} target={target_idx}')
+
+        # Steps 2-3: navigate one step at a time, each step atomically focused
+        max_steps = len(options) + 2
+        for step in range(max_steps):
+            if pos == target_idx:
+                break
+            key_code = 125 if pos < target_idx else 126  # Down=125, Up=126
+            ok = await self._tty_focus_and_key(full_tty, key_code)
+            if not ok:
+                _log(f'[codex] tty tui: focus+key failed at step={step}, aborting')
+                await cleanup()
+                return
+            await asyncio.sleep(0.8)  # let TUI re-render before re-reading
+            content = await self._capture_tty_content(full_tty)
+            detected = self._detect_codex_tui_menu(content) if content else None
+            if not detected:
+                _log(f'[codex] tty tui: TUI gone at step={step}, aborting')
+                await cleanup()
+                return
+            _, _, _, pos = detected
+            _log(f'[codex] tty nav step={step} new pos={pos} target={target_idx}')
+        else:
+            _log(f'[codex] tty tui: max steps reached without reaching target, aborting')
+            await cleanup()
+            return
+
+        # Step 4: cursor confirmed at target — submit with focus + Enter atomically
+        ok = await self._tty_focus_and_key(full_tty, 36)  # Return=36
+        if ok:
+            _log(f'[codex] tty tui submitted: {value!r} for {session_id[:8]}')
+        else:
+            _log(f'[codex] tty tui: submit focus failed for {session_id[:8]}')
+        await cleanup()
 
     async def _on_tmux_prompt_reply(self, tmux_target: str, options: list, value: str, block_id: str):
         """Send the user's selection to the tmux pane."""
@@ -755,6 +1403,44 @@ class MCPClient:
             pass
         session_id = self._session_id_for_tmux(tmux_target)
         if session_id:
+            asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
+
+    async def _on_codex_tui_menu_reply(self, tmux_target: str, options: list,
+                                       current_idx: int, value: str, block_id: str,
+                                       session_id: str, menu_title: str):
+        """Navigate a Codex TUI menu with arrow keys and confirm with Enter."""
+        try:
+            target_idx = options.index(value)
+        except ValueError:
+            return
+        try:
+            steps = target_idx - current_idx
+            arrow = 'Down' if steps > 0 else 'Up'
+            for _ in range(abs(steps)):
+                p = await asyncio.create_subprocess_exec(
+                    'tmux', 'send-keys', '-t', tmux_target, arrow,
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                )
+                await p.communicate()
+                await asyncio.sleep(0.05)
+            p = await asyncio.create_subprocess_exec(
+                'tmux', 'send-keys', '-t', tmux_target, 'Enter',
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+            await p.communicate()
+        except Exception as e:
+            print(f'[codex-controller] tui menu reply failed: {e}', file=sys.stderr)
+        self._response_callbacks.pop(block_id, None)
+        try:
+            await self.clear_block(block_id)
+        except Exception:
+            pass
+        # For the permissions menu, sync the controller mode file so the iOS pill updates
+        if menu_title == 'Update Model Permissions':
+            mode = 'full-auto' if 'Full Access' in value else 'supervised'
+            self._save_permission_mode(mode)
+        if session_id:
+            asyncio.create_task(self._emit_session_block(session_id))
             asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
 
     async def _monitor_terminal_app_launch(self, cwd: str):
@@ -842,7 +1528,7 @@ end tell'''
                     )
                     payload = {'title': body, 'body': '', 'options': options}
                     try:
-                        await self.emit_block(prompt_block_id, 'confirmation', payload, ttl=300)
+                        await self.emit_block(prompt_block_id, 'confirmation', payload, ttl=300, inbox=True)
                         _log(f'[codex] terminal startup prompt surfaced for {full_tty}')
                     except Exception as e:
                         _log(f'[codex] terminal prompt emit failed: {e}')
@@ -1222,6 +1908,14 @@ end tell'''
         asyncio.create_task(self._emit_session_block(session_id))
         # Start (or restart) response capture; delay lets tmux backfill run first on new sessions
         self._start_capture(session_id, delay=6 if is_new else 2)
+        # Start persistent TTY monitor for non-tmux sessions so any TUI menu is surfaced to iOS
+        session_info = self._sessions.get(session_id, {})
+        tty_val = tty or session_info.get('tty', '')
+        if tty_val and not session_info.get('tmux_target') and session_id not in self._tty_monitors:
+            full_tty = self._tty_to_full_path(tty_val)
+            if full_tty:
+                task = asyncio.create_task(self._run_tty_monitor(session_id, full_tty))
+                self._tty_monitors[session_id] = task
 
     def _handle_session_stop(self, msg):
         session_id = msg.get('session_id', '')
@@ -1237,12 +1931,15 @@ end tell'''
             self._sessions[session_id]['last_seen'] = time.time()
         self._working_sessions.discard(session_id)
         self._current_tools.pop(session_id, None)
-        # Cancel any tmux pane monitor for this session
+        # Cancel any pane/TTY monitors for this session
         tmux_target = self._sessions.get(session_id, {}).get('tmux_target')
         if tmux_target:
             task = self._tmux_monitors.pop(tmux_target, None)
             if task:
                 task.cancel()
+        tty_task = self._tty_monitors.pop(session_id, None)
+        if tty_task:
+            tty_task.cancel()
         print(f'[codex-controller] session stopped: {session_id}', file=sys.stderr)
         if last_message:
             asyncio.create_task(self._emit_session_block(session_id, last_message=last_message))
@@ -1301,10 +1998,13 @@ end tell'''
             print(f'[codex-controller] agent_session emit failed: {e}', file=sys.stderr)
 
     async def _on_session_reply(self, session_id: str, value: str):
+        _log(f'[codex] _on_session_reply session={session_id[:8]} value={value!r}')
         block_id = self._session_block_id(session_id)
         self._response_callbacks[block_id] = lambda v: self._on_session_reply(session_id, v)
         if value == '__close_session__':
             await self._close_session(session_id)
+        elif value == '__permissions__':
+            await self._send_permissions_command(session_id)
         elif value in ('__full_auto__', '__supervised__'):
             mode = 'full-auto' if value == '__full_auto__' else 'supervised'
             self._save_permission_mode(mode)
@@ -1440,8 +2140,8 @@ end tell
         status_bar_re  = re.compile(r'^(gpt|o\d|claude|codex)[-\w.]*\s', re.IGNORECASE)
         input_prompt_re = re.compile(r'^>\s?')
         hook_re        = re.compile(
-            r'(Running\s+(Stop|Pre|Post)\w*\s+hook|hook\s+\(completed\)|'
-            r'PreToolUse|PostToolUse)',
+            r'(Running\s+\w+\s+hook|hook\s+\(completed\)|'
+            r'PreToolUse|PostToolUse|SessionStart|UserPromptSubmit)',
             re.IGNORECASE,
         )
         changed = True
@@ -1468,14 +2168,26 @@ end tell
         # prompt line (> ...) — that's where the prior exchange ended.
         # Skip hook notification lines and decorative separators inline too.
         separator_re = re.compile(r'^[-─━═╌╍\s]+$')
+        # Codex startup box marker — if we encounter this we've scrolled past any
+        # real response into the boot banner; stop collecting immediately.
+        startup_re = re.compile(r'>\s*_?\s*OpenAI Codex|╭──|^\s*\|\s*>_', re.IGNORECASE)
         result = []
+        found_prompt = False
         for line in reversed(lines[-120:]):
             s = line.strip()
             if input_prompt_re.match(s):
+                found_prompt = True
                 break  # hit the previous user input — stop here
+            if startup_re.search(s):
+                break  # hit startup banner — no real response above this point
             if hook_re.search(s) or (s and separator_re.match(s)):
                 continue  # skip hook noise and decorative lines
             result.append(line.rstrip())
+
+        # If we never found a user-prompt boundary, this is startup/initial terminal
+        # content with no real response yet — return empty to avoid capturing banners.
+        if not found_prompt:
+            return ''
 
         if result:
             result.reverse()
@@ -1579,9 +2291,168 @@ end tell
                 return
             prev_content = content
 
+    async def _send_permissions_command(self, session_id: str):
+        """Open the Codex permissions menu and surface it to iOS as a selection card.
+
+        Strategy:
+          1. Send /permissions to the terminal (tmux or TTY/osascript).
+          2. Immediately emit a confirmation card with the known options so iOS
+             shows the picker without waiting for terminal detection.
+          3. For tmux sessions also poll the pane to read actual current_idx from
+             the '>' cursor so the card reflects the real selection state.
+        """
+        session = self._sessions.get(session_id, {})
+        tmux_target = session.get('tmux_target')
+        _log(f'[codex] _send_permissions_command session={session_id[:8]} tmux={tmux_target!r}')
+
+        # Ensure the tmux monitor is running if we have a pane target.
+        if tmux_target and tmux_target not in self._tmux_monitors:
+            task = asyncio.create_task(self._monitor_tmux_pane(tmux_target))
+            self._tmux_monitors[tmux_target] = task
+
+        # Route /permissions to the terminal.
+        await self._route_to_terminal(session_id, '/permissions')
+
+        # Known Codex permissions options — always the same two choices.
+        options = ['Default', 'Full Access']
+        current_mode = self._load_permission_mode()
+        current_idx = 1 if current_mode == 'full-auto' else 0
+
+        block_id = (self._tmux_prompt_block_id(tmux_target) if tmux_target
+                    else f'codex-perms-{session_id[:8]}-{int(time.time())}')
+
+        # Register reply handler.  For tmux sessions the handler navigates with
+        # arrow keys; for TTY sessions it uses osascript key codes.
+        captured = (tmux_target, session_id, options, current_idx, block_id)
+        self._response_callbacks[block_id] = (
+            lambda v, c=captured: self._on_permissions_reply(c[0], c[1], c[2], c[3], v, c[4])
+        )
+
+        # For tmux sessions, briefly poll the pane to pick up the actual current_idx
+        # from the '>' cursor before emitting (best-effort; emit immediately if no TUI).
+        if tmux_target:
+            for delay in (0.35, 0.7, 1.5):
+                await asyncio.sleep(delay)
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        'tmux', 'capture-pane', '-p', '-t', tmux_target,
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3)
+                    content = stdout.decode()
+                except Exception:
+                    break
+                tui = self._detect_codex_tui_menu(content)
+                if not tui:
+                    continue
+                _, _, detected_options, detected_idx = tui
+                if detected_options:
+                    options = detected_options
+                    current_idx = detected_idx
+                    # Re-register with updated indices
+                    captured = (tmux_target, session_id, options, current_idx, block_id)
+                    self._response_callbacks[block_id] = (
+                        lambda v, c=captured: self._on_permissions_reply(c[0], c[1], c[2], c[3], v, c[4])
+                    )
+                break  # emit with whatever we have
+
+        payload = {
+            'title': 'Update Model Permissions',
+            'body': '',
+            'options': [f'{o} (current)' if i == current_idx else o
+                        for i, o in enumerate(options)],
+            'session_id': session_id,
+        }
+        try:
+            await self.emit_block(block_id, 'confirmation', payload, ttl=300, inbox=True)
+            _log(f'[codex] permissions card emitted for {session_id[:8]}')
+        except Exception as e:
+            _log(f'[codex] permissions card emit failed: {e}')
+
+    async def _on_permissions_reply(self, tmux_target, session_id: str,
+                                    options: list, current_idx: int,
+                                    value: str, block_id: str):
+        """Handle the iOS selection from the permissions card.
+
+        Navigates the live Codex TUI to the chosen option using arrow keys + Enter.
+        Works for both tmux (send-keys) and TTY (osascript key codes) sessions.
+        """
+        # Strip the ' (current)' suffix that was added to the card label
+        clean_value = value.replace(' (current)', '').strip()
+        clean_options = [o.replace(' (current)', '').strip() for o in options]
+        try:
+            target_idx = clean_options.index(clean_value)
+        except ValueError:
+            return
+
+        steps = target_idx - current_idx
+        _log(f'[codex] permissions reply: {clean_value!r} steps={steps} tmux={tmux_target!r}')
+
+        if tmux_target:
+            # tmux path: reset to top then navigate down to target_idx + Enter.
+            # Sending Up len(options) times guarantees we're at index 0 regardless
+            # of where the cursor actually is (shadow file may be stale).
+            try:
+                for _ in range(len(options)):
+                    p = await asyncio.create_subprocess_exec(
+                        'tmux', 'send-keys', '-t', tmux_target, 'Up',
+                        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await p.communicate()
+                    await asyncio.sleep(0.05)
+                for _ in range(target_idx):
+                    p = await asyncio.create_subprocess_exec(
+                        'tmux', 'send-keys', '-t', tmux_target, 'Down',
+                        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await p.communicate()
+                    await asyncio.sleep(0.05)
+                p = await asyncio.create_subprocess_exec(
+                    'tmux', 'send-keys', '-t', tmux_target, 'Enter',
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                )
+                await p.communicate()
+            except Exception as e:
+                _log(f'[codex] permissions tmux reply failed: {e}')
+        else:
+            # TTY path: delegate to _on_tty_tui_reply which focuses the tab,
+            # navigates, verifies cursor position, then submits.
+            session = self._sessions.get(session_id, {})
+            tty_short = session.get('tty', '')
+            full_tty = self._tty_to_full_path(tty_short) if tty_short else ''
+            if not full_tty:
+                _log(f'[codex] permissions TTY reply: no TTY for {session_id[:8]}')
+                return
+            await self._on_tty_tui_reply(full_tty, session_id, clean_options, current_idx,
+                                         clean_value, block_id)
+            # Sync mode shadow file and update the iOS pill
+            mode = 'full-auto' if 'Full Access' in clean_value else 'supervised'
+            self._save_permission_mode(mode)
+            asyncio.create_task(self._emit_session_block(session_id))
+            return
+
+        self._response_callbacks.pop(block_id, None)
+        try:
+            await self.clear_block(block_id)
+        except Exception:
+            pass
+        # Sync mode shadow file and update the iOS pill
+        mode = 'full-auto' if 'Full Access' in clean_value else 'supervised'
+        self._save_permission_mode(mode)
+        asyncio.create_task(self._emit_session_block(session_id))
+
+    _RESERVED_COMMANDS = frozenset({
+        '__close_session__', '__permissions__', '__full_auto__', '__supervised__',
+    })
+
     async def _route_to_terminal(self, session_id: str, text: str):
         """Route text to the terminal running this session.
         Uses tmux send-keys for tmux-launched sessions; clipboard+osascript otherwise."""
+        # Never forward internal control commands — they should only arrive via
+        # the block-response path and be handled by _on_session_reply.
+        if text in self._RESERVED_COMMANDS:
+            _log(f'[codex] reserved command {text!r} dropped from terminal route')
+            return
         # Deduplicate: iOS sends both a chat_message notification and a user_response
         # block reply for the same user input. Suppress the second arrival within 3s.
         now = time.time()
@@ -1967,7 +2838,7 @@ end tell
                 del history[:-20]
             asyncio.create_task(self._emit_session_block(session_id))
         try:
-            await self.emit_block(block_id, 'confirmation', payload)
+            await self.emit_block(block_id, 'confirmation', payload, inbox=True)
             if session_id:
                 key = (session_id, tool)
                 self._tool_block_map.setdefault(key, []).append(block_id)

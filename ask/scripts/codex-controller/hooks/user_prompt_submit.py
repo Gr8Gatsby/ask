@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-Codex Stop hook.
-Notifies codex-controller that the session ended, with the last agent message.
+Codex UserPromptSubmit hook.
+Fires before each user prompt is sent to the model. Notifies
+codex-controller so the session block shows is_working=True immediately,
+before the first tool use arrives.
 """
 import sys
 import json
@@ -11,24 +13,22 @@ import os
 SOCKET_PATH = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/sockets/codex-controller.sock'))
 
 data = json.load(sys.stdin)
-
 session_id = data.get('session_id', '')
 cwd = data.get('cwd', '')
+prompt = data.get('prompt', '')
 
 if not session_id:
     sys.exit(0)
-
-last_text = data.get('last_assistant_message', '').strip()
 
 try:
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(5)
     sock.connect(SOCKET_PATH)
     sock.sendall(json.dumps({
-        'type': 'session_stop',
+        'type': 'user_prompt_submit',
         'session_id': session_id,
         'cwd': cwd,
-        'last_message': last_text,
+        'prompt': prompt,
     }).encode())
     sock.close()
 except Exception:

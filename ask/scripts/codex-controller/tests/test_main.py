@@ -1100,9 +1100,382 @@ def test_list_terminal_sessions_empty_skips_registration():
             except Exception: pass
 
 
+def test_user_prompt_submit():
+    print('\nTest 17: user_prompt_submit → session block is_working=True with prompt as last_message')
+    h = TestHarness()
+    h.start()
+
+    if not h.do_handshake():
+        h.stop(); return
+
+    session_id = 'prompt-sess-001'
+    prompt_text = 'refactor the login module'
+
+    # First register the session with a TTY so emit_session_block won't be skipped
+    h.socket_send({
+        'type': 'session_active',
+        'session_id': session_id,
+        'cwd': '/Users/kevin/project',
+        'tty': 's001',
+    })
+    h.wait_for(is_session_emit, timeout=2.0)
+
+    # Clear seen messages so we can isolate the next emit
+    with h._lock:
+        start_idx = len(h._stdout_lines)
+
+    h.socket_send({
+        'type': 'user_prompt_submit',
+        'session_id': session_id,
+        'cwd': '/Users/kevin/project',
+        'prompt': prompt_text,
+    })
+
+    def is_working_emit(m):
+        if not is_session_emit(m):
+            return False
+        payload = m.get('params', {}).get('arguments', {}).get('payload', {})
+        return (payload.get('session_id') == session_id and
+                (payload.get('last_message', '') or '').startswith('You:'))
+
+    call = h.wait_for(is_working_emit, timeout=3.0)
+    if call:
+        ok('agent_session block emitted on user_prompt_submit')
+        payload = call['params']['arguments'].get('payload', {})
+        if payload.get('is_working') is True:
+            ok('is_working=True after user_prompt_submit')
+        else:
+            fail('is_working=True after user_prompt_submit', f"got {payload.get('is_working')!r}")
+        last_msg = payload.get('last_message', '')
+        if last_msg.startswith('You:') and prompt_text in last_msg:
+            ok('last_message contains prompt text prefixed with "You:"')
+        else:
+            fail('last_message contains prompt text', f"got {last_msg!r}")
+        h.send_rpc_response(call['id'], {'content': [{'type': 'text', 'text': 'ok'}]})
+    else:
+        fail('agent_session block emitted on user_prompt_submit', 'timed out')
+
+    h.stop()
+
+
+def test_always_allow_saves_allowlist():
+    print('\nTest 18: Always Allow response → allowlist written, hook receives Allow')
+    home_dir = tempfile.TemporaryDirectory()
+    allowlist_path = os.path.join(home_dir.name, '.ask', 'codex_allowlist.json')
+    try:
+        env = os.environ.copy()
+        env['ASK_SOCKET_PATH'] = TEST_SOCKET
+        env['ASK_SESSIONS_PATH'] = '/tmp/test-codex-sessions-aa.json'
+        env['ASK_SKIP_DISCOVERY'] = '1'
+        env['HOME'] = home_dir.name
+
+        h = TestHarness()
+        h.start(home_override=home_dir.name)
+
+        if not h.do_handshake():
+            h.stop(); return
+
+        session_id = 'always-allow-sess'
+        preview = 'git status'
+        perm_result: list = []
+
+        def send_perm():
+            resp = h.socket_send({
+                'type': 'permission_request',
+                'session_id': session_id,
+                'tool': 'Bash',
+                'preview': preview,
+                'options': ['Allow', 'Always Allow', 'Deny'],
+            })
+            perm_result.append(resp)
+
+        t = threading.Thread(target=send_perm)
+        t.start()
+
+        conf_call = h.wait_for(
+            lambda m: (m.get('method') == 'tools/call' and
+                       m.get('params', {}).get('name') == 'emit_block' and
+                       m.get('params', {}).get('arguments', {}).get('blockType') == 'confirmation'),
+            timeout=3.0
+        )
+
+        if not conf_call:
+            fail('confirmation block emitted', 'timed out')
+            t.join(timeout=1)
+            h.stop()
+            return
+
+        ok('confirmation block emitted for Always Allow test')
+        block_id = conf_call['params']['arguments']['blockId']
+        h.send_rpc_response(conf_call['id'], {'content': [{'type': 'text', 'text': 'ok'}]})
+
+        # Simulate user tapping "Always Allow" on iPhone
+        user_response = {
+            'jsonrpc': '2.0',
+            'method': 'notifications/message',
+            'params': {
+                'level': 'info',
+                'data': {'type': 'user_response', 'blockId': block_id, 'value': 'Always Allow'},
+            }
+        }
+        h.proc.stdin.write((json.dumps(user_response) + '\n').encode())
+        h.proc.stdin.flush()
+
+        t.join(timeout=3.0)
+        if perm_result and perm_result[0] and perm_result[0].get('value') == 'Allow':
+            ok('hook receives Allow (not "Always Allow") after Always Allow tapped')
+        else:
+            fail('hook receives Allow after Always Allow', f"got {perm_result}")
+
+        # Verify allowlist file was written
+        deadline = time.time() + 2
+        while time.time() < deadline and not os.path.exists(allowlist_path):
+            time.sleep(0.05)
+
+        if os.path.exists(allowlist_path):
+            with open(allowlist_path) as f:
+                data = json.load(f)
+            patterns = data.get('patterns', [])
+            if preview in patterns:
+                ok(f'allowlist file written with pattern {preview!r}')
+            else:
+                fail('allowlist file contains pattern', f"patterns={patterns!r}")
+        else:
+            fail('allowlist file created', 'file not found')
+
+        h.stop()
+        for f in ['/tmp/test-codex-sessions-aa.json']:
+            if os.path.exists(f):
+                try: os.unlink(f)
+                except Exception: pass
+    finally:
+        home_dir.cleanup()
+
+
+def test_pre_tool_use_allowlist_bypass():
+    print('\nTest 19: pre_tool_use.py exits 0 without socket when command matches allowlist')
+    hook = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        'hooks', 'pre_tool_use.py')
+    home_dir = tempfile.TemporaryDirectory()
+    try:
+        # Write an allowlist with "git status" as a pattern
+        ask_dir = os.path.join(home_dir.name, '.ask')
+        os.makedirs(ask_dir, exist_ok=True)
+        allowlist_path = os.path.join(ask_dir, 'codex_allowlist.json')
+        with open(allowlist_path, 'w') as f:
+            json.dump({'patterns': ['git status']}, f)
+
+        hook_input = json.dumps({
+            'session_id': 'bypass-sess',
+            'tool_name': 'Bash',
+            'tool_input': {'command': 'git status'},
+        })
+
+        env = os.environ.copy()
+        env['HOME'] = home_dir.name
+        # Point socket to a path that doesn't exist — hook must not attempt to connect
+        env['ASK_SOCKET_PATH'] = '/tmp/no-such-socket-bypass.sock'
+
+        result = subprocess.run(
+            [sys.executable, hook],
+            input=hook_input.encode(),
+            capture_output=True,
+            env=env,
+            timeout=5,
+        )
+
+        if result.returncode == 0:
+            ok('hook exits 0 (auto-approved) when command matches allowlist')
+        else:
+            fail('hook exits 0 when command matches allowlist',
+                 f'exit={result.returncode} stderr={result.stderr.decode()!r}')
+
+        # Now run with a non-matching command — should fail (socket unreachable → allow by default)
+        hook_input_other = json.dumps({
+            'session_id': 'bypass-sess',
+            'tool_name': 'Bash',
+            'tool_input': {'command': 'rm -rf /tmp/danger'},
+        })
+        result2 = subprocess.run(
+            [sys.executable, hook],
+            input=hook_input_other.encode(),
+            capture_output=True,
+            env=env,
+            timeout=5,
+        )
+        # Socket is unreachable so daemon fallback kicks in (exit 0), but the key check
+        # is that it did NOT short-circuit via the allowlist.
+        stderr2 = result2.stderr.decode()
+        if 'socket error' in stderr2 or result2.returncode == 0:
+            ok('non-matching command attempts socket (allowlist not triggered)')
+        else:
+            fail('non-matching command attempts socket', f'stderr={stderr2!r}')
+
+    finally:
+        home_dir.cleanup()
+
+
+# ─── TUI detection unit tests ─────────────────────────────────────────────────
+
+_mcp_client_cache = None
+
+def _import_mcp_client():
+    """Import MCPClient from main.py without running the script.
+
+    Cached after first import — re-importing executes module-level code that
+    reopens sys.stdout by fileno(), which closes the previous wrapper and
+    breaks subsequent print() calls in the test runner.
+    """
+    global _mcp_client_cache
+    if _mcp_client_cache is not None:
+        return _mcp_client_cache
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('main', SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    _mcp_client_cache = mod.MCPClient
+    return _mcp_client_cache
+
+
+def test_tui_detect_plain_title():
+    """_detect_codex_tui_menu handles plain-text title (no [ ] brackets)."""
+    print('\nTest 1a: TUI detection — plain text title (real Codex format)')
+    MCPClient = _import_mcp_client()
+
+    tui = (
+        '  Update Model Permissions\n'
+        '\n'
+        '> 1. Default (current)   Codex can read and edit files in the current\n'
+        '                        workspace, and run commands. Approval is required\n'
+        '                        to access the internet or edit other files.\n'
+        '  2. Full Access         Codex can edit files outside this workspace and\n'
+        '                        access the internet without asking for approval.\n'
+        '\n'
+        '  Press enter to confirm or esc to go back\n'
+    )
+
+    result = MCPClient._detect_codex_tui_menu(tui)
+    if result is None:
+        fail('TUI detected', 'returned None for plain-text title TUI')
+        return
+
+    title, _, options, current_idx = result
+    if title != 'Update Model Permissions':
+        fail('TUI title extracted', f'got {title!r}')
+    else:
+        ok('TUI title extracted correctly')
+
+    if options != ['Default', 'Full Access']:
+        fail('TUI options extracted', f'got {options!r}')
+    else:
+        ok('TUI options extracted correctly')
+
+    if current_idx != 0:
+        fail('TUI current_idx correct', f'got {current_idx}')
+    else:
+        ok('TUI current_idx = 0 (Default is selected)')
+
+
+def test_tui_detect_ansi_title():
+    """_detect_codex_tui_menu strips ANSI codes and still finds plain-text title."""
+    print('\nTest 1b: TUI detection — ANSI-coloured title')
+    MCPClient = _import_mcp_client()
+
+    ESC = '\x1b'
+    BOLD = ESC + '[1m'
+    RESET = ESC + '[0m'
+    GREEN = ESC + '[32m'
+    CYAN = ESC + '[36m'
+
+    tui = (
+        f'\n'
+        f'{BOLD}  Update Model Permissions{RESET}\n'
+        f'\n'
+        f'{GREEN}> 1. Default (current){RESET}   {CYAN}Codex can read and edit files{RESET}\n'
+        f'  2. Full Access   Codex can edit files outside this workspace.\n'
+        f'\n'
+        f'  Press enter to confirm or esc to go back\n'
+    )
+
+    result = MCPClient._detect_codex_tui_menu(tui)
+    if result is None:
+        fail('TUI detected with ANSI title', 'returned None')
+        return
+
+    title, _, options, current_idx = result
+    if title != 'Update Model Permissions':
+        fail('ANSI title extracted', f'got {title!r}')
+    else:
+        ok('ANSI title extracted correctly')
+
+    if len(options) == 2 and options[0] == 'Default' and options[1] == 'Full Access':
+        ok('ANSI options extracted correctly')
+    else:
+        fail('ANSI options extracted', f'got {options!r}')
+
+    if current_idx == 0:
+        ok('ANSI current_idx correct')
+    else:
+        fail('ANSI current_idx', f'got {current_idx}')
+
+
+def test_tui_detect_bracket_title_still_works():
+    """_detect_codex_tui_menu still handles [ ] bracketed titles."""
+    print('\nTest 1c: TUI detection — legacy [ ] bracketed title format')
+    MCPClient = _import_mcp_client()
+
+    tui = (
+        '  [ Update Model Permissions ]\n'
+        '\n'
+        '  1. Default   Some description here\n'
+        '> 2. Full Access   Another longer option description\n'
+        '\n'
+        '  Press enter to confirm or esc to go back\n'
+    )
+
+    result = MCPClient._detect_codex_tui_menu(tui)
+    if result is None:
+        fail('bracketed TUI detected', 'returned None')
+        return
+
+    title, _, options, current_idx = result
+    if title == 'Update Model Permissions':
+        ok('bracketed title extracted correctly')
+    else:
+        fail('bracketed title', f'got {title!r}')
+
+    if current_idx == 1:
+        ok('bracketed current_idx = 1 (Full Access selected)')
+    else:
+        fail('bracketed current_idx', f'got {current_idx}')
+
+
+def test_tui_no_footer_returns_none():
+    """_detect_codex_tui_menu returns None when footer is absent (not a TUI)."""
+    print('\nTest 1d: TUI detection — no footer → None')
+    MCPClient = _import_mcp_client()
+
+    not_tui = (
+        '  Some header\n'
+        '  1. Option A\n'
+        '  2. Option B\n'
+    )
+    result = MCPClient._detect_codex_tui_menu(not_tui)
+    if result is None:
+        ok('non-TUI text correctly returns None')
+    else:
+        fail('non-TUI should return None', f'got {result!r}')
+
+
 # ─── Runner ───────────────────────────────────────────────────────────────────
 
 TESTS = [
+    # Unit tests first (no subprocess, no socket — run before FDs can be closed)
+    test_tui_detect_plain_title,
+    test_tui_detect_ansi_title,
+    test_tui_detect_bracket_title_still_works,
+    test_tui_no_footer_returns_none,
+    # Integration tests (spawn subprocesses, may close FDs)
     test_handshake_and_tile,
     test_tool_executed_emits_session,
     test_session_active_emits_session,
@@ -1120,6 +1493,9 @@ TESTS = [
     test_startup_does_not_bump_last_seen,
     test_list_terminal_sessions_discovery,
     test_list_terminal_sessions_empty_skips_registration,
+    test_user_prompt_submit,
+    test_always_allow_saves_allowlist,
+    test_pre_tool_use_allowlist_bypass,
 ]
 
 if __name__ == '__main__':

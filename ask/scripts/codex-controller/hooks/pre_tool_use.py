@@ -9,9 +9,41 @@ import json
 import socket
 import os
 
-SOCKET_PATH = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/sockets/codex-controller.sock'))
+SOCKET_PATH           = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/sockets/codex-controller.sock'))
+ALLOWLIST_PATH        = os.path.expanduser('~/.ask/codex_allowlist.json')
+PERMISSION_MODE_PATH  = os.path.expanduser('~/.ask/codex_permission_mode.json')
+
+
+def _check_allowlist(preview: str) -> bool:
+    try:
+        with open(ALLOWLIST_PATH) as f:
+            data = json.load(f)
+        for pattern in data.get('patterns', []):
+            if preview == pattern or preview.startswith(pattern + ' ') or preview.startswith(pattern + '\n'):
+                return True
+    except Exception:
+        pass
+    return False
+
 
 data = json.load(sys.stdin)
+
+# Check our local permission mode override first.
+try:
+    with open(PERMISSION_MODE_PATH) as _f:
+        _pm = json.load(_f).get('mode', 'supervised')
+    if _pm == 'full-auto':
+        sys.exit(0)
+except Exception:
+    pass
+
+# Respect Codex's own approval mode — if the user launched Codex with
+# --approval-policy auto-approve-everything (or similar), don't add our
+# own gate on top.
+permission_mode = data.get('permission_mode', '')
+if permission_mode in ('auto-approve-everything', 'full-auto'):
+    sys.exit(0)
+
 raw_tool = (data.get('tool') or data.get('tool_name') or '').strip()
 session = data.get('session_id', '')
 ti = data.get('tool_input', {})
@@ -36,6 +68,10 @@ else:
     preview = json.dumps(ti)
 preview = preview[:200]
 
+# Auto-approve if the command matches a saved allowlist entry
+if _check_allowlist(preview):
+    sys.exit(0)
+
 try:
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(None)  # wait indefinitely
@@ -45,7 +81,7 @@ try:
         'type': 'permission_request',
         'tool': tool,
         'preview': preview,
-        'options': ['Allow', 'Deny'],
+        'options': ['Allow', 'Always Allow', 'Deny'],
         'session_id': session,
     }).encode()
     sock.sendall(request)
@@ -67,7 +103,7 @@ except Exception as e:
     # Daemon not running — allow by default so Codex isn't blocked
     sys.exit(0)
 
-if value in ('Allow', 'Yes'):
+if value in ('Allow', 'Always Allow', 'Yes'):
     sys.exit(0)
 else:
     print(f'Permission denied by user on iPhone.', file=sys.stderr)
