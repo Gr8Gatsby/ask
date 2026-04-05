@@ -1,6 +1,5 @@
 import Foundation
 import CloudKit
-import UserNotifications
 import UIKit
 
 /// Registers for push notifications and maintains a CloudKit subscription
@@ -14,16 +13,11 @@ final class PushService: NSObject {
     }
 
     func setup() async {
-        await requestPermission()
         UIApplication.shared.registerForRemoteNotifications()
         await saveSubscriptionsIfNeeded()
     }
 
     // MARK: - Private
-
-    private func requestPermission() async {
-        _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
-    }
 
     private func saveSubscriptionsIfNeeded() async {
         let subID = "ask-rkblock-changes-v2"
