@@ -141,6 +141,7 @@ func toolIcon(_ tool: String) -> String {
 func toolActivityText(_ tool: String, _ preview: String?) -> String {
     let p = preview.map { $0.isEmpty ? nil : $0 } ?? nil
     switch tool {
+    case "Compact": return p.map { "Summarizing \($0)" } ?? "Summarizing context"
     case "Edit":  return p.map { "Editing \($0)" }  ?? "Editing file"
     case "Write": return p.map { "Writing \($0)" }  ?? "Writing file"
     case "Read":  return p.map { "Reading \($0)" }  ?? "Reading file"
