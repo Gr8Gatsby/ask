@@ -11,8 +11,8 @@ final class ActionInboxStore {
     func replace(machineID: String?, blocks: [RKBlock]) {
         self.machineID = machineID
 
-        let actionable = blocks.filter(\.requiresResponse)
-        let grouped = Dictionary(grouping: actionable, by: \.scriptID)
+        let notifications = notificationGroups(from: blocks)
+        let grouped = Dictionary(grouping: notifications, by: \.scriptID)
 
         groups = grouped.values.compactMap { blocks in
             guard let newest = blocks.max(by: { $0.createdAt < $1.createdAt }) else { return nil }
@@ -35,6 +35,23 @@ final class ActionInboxStore {
     func clear() {
         replace(machineID: nil, blocks: [])
     }
+
+    private func notificationGroups(from blocks: [RKBlock]) -> [RKBlock] {
+        let grouped = Dictionary(grouping: blocks, by: \.scriptID)
+
+        return grouped.values.compactMap { scriptBlocks in
+            let explicit = scriptBlocks
+                .filter(\.isInboxNotification)
+                .max(by: { $0.createdAt < $1.createdAt })
+            if let explicit {
+                return explicit
+            }
+
+            return scriptBlocks
+                .filter { $0.blockType == .tile && $0.tilePayload?.actionRequired == true }
+                .max(by: { $0.createdAt < $1.createdAt })
+        }
+    }
 }
 
 struct ActionInboxGroup: Identifiable, Equatable {
@@ -50,6 +67,15 @@ struct ActionInboxGroup: Identifiable, Equatable {
 }
 
 private extension RKBlock {
+    var isInboxNotification: Bool {
+        switch blockType {
+        case .confirmation, .prompt, .chatPrompt, .picker, .list, .detail:
+            return true
+        default:
+            return false
+        }
+    }
+
     var inboxTitle: String {
         switch blockType {
         case .confirmation:
@@ -64,13 +90,8 @@ private extension RKBlock {
             return listPayload?.title ?? (scriptName ?? scriptID)
         case .detail:
             return detailPayload?.title ?? (scriptName ?? scriptID)
-        case .agentSession:
-            if let project = agentSessionPayload?.project, !project.isEmpty {
-                return "\(project) needs attention"
-            }
-            return scriptName ?? scriptID
-        case .startSession:
-            return "Start Session"
+        case .tile:
+            return tilePayload?.label ?? (scriptName ?? scriptID)
         default:
             return scriptName ?? scriptID
         }
