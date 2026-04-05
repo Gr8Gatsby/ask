@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Installs the claudecode-controller script into the user's AskMac Scripts Vault.
+# Installs the claudecode-controller script into the user's AskMac Scripts Vault
+# and registers its hooks in ~/.claude/settings.json.
 set -euo pipefail
 
 SCRIPT_ID="claudecode-controller"
@@ -9,6 +10,8 @@ BUNDLED_SCRIPT="$APP_BUNDLE/Contents/Resources/Scripts/$SCRIPT_ID"
 LOGGED_IN_USER=$(stat -f "%Su" /dev/console)
 USER_HOME=$(eval echo ~"$LOGGED_IN_USER")
 VAULT="$USER_HOME/.ask/scripts"
+CLAUDE_SETTINGS="$USER_HOME/.claude/settings.json"
+HOOKS_DIR="$VAULT/$SCRIPT_ID/hooks"
 
 if [[ ! -d "$APP_BUNDLE" ]]; then
     echo "ERROR: AskMac.app not found at $APP_BUNDLE" >&2
@@ -20,8 +23,76 @@ if [[ ! -d "$BUNDLED_SCRIPT" ]]; then
     exit 1
 fi
 
+# --- Copy script files ---
 mkdir -p "$VAULT/$SCRIPT_ID"
 cp -r "$BUNDLED_SCRIPT/." "$VAULT/$SCRIPT_ID/"
 chown -R "$LOGGED_IN_USER" "$VAULT/$SCRIPT_ID"
-
 echo "Installed $SCRIPT_ID to $VAULT/$SCRIPT_ID"
+
+# --- Register Claude Code hooks in ~/.claude/settings.json ---
+mkdir -p "$USER_HOME/.claude"
+
+sudo -u "$LOGGED_IN_USER" python3 - "$CLAUDE_SETTINGS" "$HOOKS_DIR" <<'PYEOF'
+import sys, json, os
+
+settings_path = sys.argv[1]
+hooks_dir     = sys.argv[2]
+
+# Load existing settings or start fresh
+if os.path.exists(settings_path):
+    with open(settings_path) as f:
+        settings = json.load(f)
+else:
+    settings = {}
+
+settings.setdefault('hooks', {})
+
+# Map Claude Code hook event names → hook script filenames
+hook_map = {
+    'PreToolUse':       'pre_tool_use.py',
+    'PostToolUse':      'post_tool_use.py',
+    'PermissionRequest':'permission_request.py',
+    'Notification':     'notification.py',
+    'Stop':             'session_stop.py',
+    'UserPromptSubmit': 'user_prompt_submit.py',
+    'SessionStart':     'session_start.py',
+    'PreCompact':       'pre_compact.py',
+    'PostCompact':      'post_compact.py',
+}
+
+HOOK_ID = 'claudecode-controller'
+
+for event, filename in hook_map.items():
+    script_path = os.path.join(hooks_dir, filename)
+    if not os.path.exists(script_path):
+        continue  # skip hooks that don't exist in this version
+
+    hook_entry = {'type': 'command', 'command': script_path}
+
+    existing = settings['hooks'].setdefault(event, [])
+
+    # Find an existing matcher='' block to add into, or create one
+    target = next((b for b in existing if b.get('matcher') == ''), None)
+    if target is None:
+        target = {'matcher': '', 'hooks': []}
+        existing.append(target)
+
+    target.setdefault('hooks', [])
+
+    # Remove any stale claudecode-controller entries (identified by hooks_dir prefix)
+    target['hooks'] = [
+        h for h in target['hooks']
+        if HOOK_ID not in h.get('command', '')
+    ]
+
+    # Add the current entry
+    target['hooks'].append(hook_entry)
+
+with open(settings_path, 'w') as f:
+    json.dump(settings, f, indent=4)
+
+print(f"Registered {len(hook_map)} Claude Code hooks in {settings_path}")
+PYEOF
+
+chown "$LOGGED_IN_USER" "$CLAUDE_SETTINGS"
+echo "Claude Code hooks registered successfully"

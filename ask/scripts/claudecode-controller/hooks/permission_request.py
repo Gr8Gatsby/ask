@@ -93,7 +93,7 @@ def output_decision(decision):
 # Send to daemon via socket
 try:
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(310)  # 5 min + buffer
+    sock.settimeout(None)  # wait indefinitely — user responds on iPhone when ready
     sock.connect(SOCKET_PATH)
 
     request = json.dumps({
@@ -121,9 +121,10 @@ try:
     value = response.get('value', 'Deny')
 
 except Exception as e:
-    print(f'[permission_request] socket error: {e}', file=sys.stderr)
-    output_decision({'behavior': 'deny', 'message': 'Permission check failed — Ask daemon not running.'})
-    sys.exit(2)
+    # Daemon not running — exit without a decision so Claude Code falls back
+    # to its default console permission prompt.
+    print(f'[permission_request] daemon not running, falling back to console: {e}', file=sys.stderr)
+    sys.exit(0)
 
 # Map value to Claude Code decision
 if value in ('Allow', 'Yes'):
