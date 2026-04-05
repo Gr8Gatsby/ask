@@ -69,7 +69,7 @@ struct ActionInboxGroup: Identifiable, Equatable {
 private extension RKBlock {
     var isInboxNotification: Bool {
         switch blockType {
-        case .confirmation, .prompt, .chatPrompt, .picker, .list, .detail:
+        case .confirmation, .prompt, .chatPrompt:
             return true
         default:
             return false
