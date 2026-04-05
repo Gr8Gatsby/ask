@@ -152,6 +152,9 @@ struct SessionChatView: View {
             chatThread
             Divider()
             composeBar
+            if isActive, scriptID == "codex-controller", let block = liveBlock {
+                modeToggle(block: block)
+            }
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -164,22 +167,11 @@ struct SessionChatView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 if isActive, let block = liveBlock {
-                    HStack(spacing: 12) {
-                        let isFullAuto = livePayload?.permissionMode == "full-auto"
-                        Button {
-                            let next = isFullAuto ? "__supervised__" : "__full_auto__"
-                            Task { await onRespond(block, next) }
-                        } label: {
-                            Image(systemName: isFullAuto ? "lock.open" : "lock")
-                                .fontWeight(.semibold)
-                        }
-                        .tint(isFullAuto ? .orange : .secondary)
-                        Button {
-                            showStopConfirm = true
-                        } label: {
-                            Image(systemName: "xmark")
-                                .fontWeight(.semibold)
-                        }
+                    Button {
+                        showStopConfirm = true
+                    } label: {
+                        Image(systemName: "xmark")
+                            .fontWeight(.semibold)
                     }
                     .confirmationDialog("Stop Session?", isPresented: $showStopConfirm) {
                         Button("Stop Session", role: .destructive) {
@@ -281,8 +273,8 @@ struct SessionChatView: View {
                 entry: entry,
                 liveBlock: allBlocks.first { $0.id == entry.blockID },
                 onRespond: { block, value in
-                    markBlockResolved(entry: entry, value: value)
                     await onRespond(block, value)
+                    markBlockResolved(entry: entry, value: value)
                 }
             )
         case "blockResponse":
@@ -348,6 +340,24 @@ struct SessionChatView: View {
         .padding(.vertical, 10)
         .padding(.bottom, 8)
         .opacity(isActive ? 1.0 : 0.5)
+    }
+
+    @ViewBuilder
+    private func modeToggle(block: RKBlock) -> some View {
+        let isFullAuto = livePayload?.permissionMode == "full-auto"
+        Button {
+            Task { await onRespond(block, "__permissions__") }
+        } label: {
+            Text(isFullAuto ? "Full Access" : "Default")
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .foregroundStyle(Color.primary.opacity(0.7))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Capsule().strokeBorder(Color.primary.opacity(0.2), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .padding(.bottom, 10)
     }
 
     @ViewBuilder
@@ -522,7 +532,6 @@ struct SessionChatView: View {
 
 private struct MarkdownTextView: View {
     let text: String
-    let isExpanded: Bool
 
     private struct Segment: Identifiable {
         let id = UUID()
@@ -537,20 +546,19 @@ private struct MarkdownTextView: View {
                 if seg.isCode {
                     codeBlock(seg.content)
                 } else {
-                    textBlock(seg.content, isFirst: index == 0)
+                    textBlock(seg.content)
                 }
             }
         }
     }
 
     @ViewBuilder
-    private func textBlock(_ content: String, isFirst: Bool) -> some View {
+    private func textBlock(_ content: String) -> some View {
         let trimmed = content.trimmingCharacters(in: .newlines)
         if !trimmed.isEmpty {
             Text(.init(trimmed))
-                .font(.subheadline)
+                .font(.caption)
                 .lineSpacing(1)
-                .lineLimit((!isExpanded && isFirst && !hasCodeBlocks) ? 6 : nil)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -565,10 +573,6 @@ private struct MarkdownTextView: View {
         }
         .background(Color(.systemGray6))
         .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private var hasCodeBlocks: Bool {
-        segments.contains(where: { $0.isCode })
     }
 
     private var segments: [Segment] {
@@ -607,25 +611,12 @@ private struct MarkdownTextView: View {
 private struct ChatBubbleView: View {
     let entry: ChatEntry
     var sendStatus: MessageSendStatus?
-    @State private var isExpanded = false
-
-    private var hasCodeBlocks: Bool { entry.text.contains("```") }
-    private var needsExpansion: Bool {
-        entry.role == "assistant" && !hasCodeBlocks && entry.text.count > 300
-    }
 
     var body: some View {
         Group {
             if entry.role == "assistant" {
                 VStack(alignment: .leading, spacing: 4) {
-                    MarkdownTextView(text: entry.text, isExpanded: isExpanded)
-                    if needsExpansion {
-                        Button(isExpanded ? "Show less" : "Show more") {
-                            withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
-                        }
-                        .font(.caption2)
-                        .foregroundStyle(Color.accentColor)
-                    }
+                    MarkdownTextView(text: entry.text)
                 }
             } else {
                 // Right-aligned user bubble
@@ -684,9 +675,10 @@ private struct InlineBlockCard: View {
     let onRespond: (RKBlock, String) async -> Void
 
     @State private var isExpanded = false
+    @State private var isPending = false
 
     private var isResolved: Bool { entry.resolvedValue != nil }
-    private var isLive: Bool { liveBlock != nil && !isResolved }
+    private var isLive: Bool { liveBlock != nil && !isResolved && !isPending }
 
     /// Body text from the block JSON captured at resolution time.
     private var storedBody: String? {
@@ -703,9 +695,22 @@ private struct InlineBlockCard: View {
         VStack(alignment: .leading, spacing: 0) {
             if isLive, let block = liveBlock {
                 BlockView(block: block, onRespond: { value in
+                    isPending = true
                     await onRespond(block, value)
                 })
                 .padding(12)
+            } else if isPending && !isResolved {
+                HStack(spacing: 8) {
+                    ProgressView().scaleEffect(0.75).tint(.secondary)
+                    Text(entry.text)
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
             } else {
                 Button {
                     guard storedBody != nil else { return }
@@ -756,7 +761,7 @@ private struct InlineBlockCard: View {
         .overlay(
             RoundedRectangle(cornerRadius: 12)
                 .stroke(
-                    isLive ? Color.orange.opacity(0.4) : Color(.separator).opacity(0.3),
+                    (isLive || isPending) ? Color.orange.opacity(0.4) : Color(.separator).opacity(0.3),
                     lineWidth: 1
                 )
         )

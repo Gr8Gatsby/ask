@@ -1,7 +1,6 @@
 import SwiftUI
 import UIKit
 import CloudKit
-import UserNotifications
 import SwiftData
 
 // MARK: - Navigation value for session chat
@@ -525,18 +524,6 @@ struct HomeView: View {
             guard !newBlocks.isEmpty else { continue }
 
             for block in newBlocks { notifiedBlockIDs.insert(block.id) }
-
-            let notifContent = UNMutableNotificationContent()
-            notifContent.title = group.name
-            // Use the tile body (the actual question) when available, else the label
-            notifContent.body = group.tileBody ?? group.actionTitle ?? "Action required"
-            notifContent.sound = .default
-            let request = UNNotificationRequest(
-                identifier: "ask-action-\(group.scriptID)-\(newBlocks[0].id)",
-                content: notifContent,
-                trigger: nil
-            )
-            UNUserNotificationCenter.current().add(request)
         }
 
         // Purge block IDs that are no longer in CloudKit
@@ -859,7 +846,8 @@ struct ScriptDetailView: View {
             $0.blockType != .tile &&
             $0.blockType != .startSession &&
             $0.blockType != .feedItem &&
-            $0.blockType != .detail
+            $0.blockType != .detail &&
+            $0.blockType != .confirmation
         }
     }
 
@@ -890,7 +878,8 @@ struct ScriptDetailView: View {
                     Section("Sessions") {
                         ForEach(sessionBlocks) { block in
                             if let payload = block.agentSessionPayload {
-                                let confCount = sessionConfirmations(for: payload.sessionId).count
+                                let confs = sessionConfirmations(for: payload.sessionId)
+                                let confCount = confs.count
                                 NavigationLink(value: AgentSessionNavValue(blockID: block.id, sessionID: payload.sessionId, project: payload.project)) {
                                     SessionRowView(
                                         payload: payload,
@@ -902,6 +891,13 @@ struct ScriptDetailView: View {
                                         ? Color.orange.opacity(0.07)
                                         : nil
                                 )
+                                ForEach(confs) { confBlock in
+                                    BlockView(block: confBlock, onRespond: { value in
+                                        await onRespond(confBlock, value)
+                                    })
+                                    .listRowBackground(Color.orange.opacity(0.05))
+                                    .listRowInsets(EdgeInsets(top: 0, leading: 32, bottom: 0, trailing: 16))
+                                }
                             }
                         }
                     }
@@ -1046,17 +1042,30 @@ struct ScriptDetailView: View {
                 sfSymbol: scriptIconSF
             )
             .frame(width: 56, height: 56)
-            .offset(y: restartBobOffset)
+            .offset(y: startSessionBlock != nil ? 0 : restartBobOffset)
             .onAppear {
-                withAnimation(.easeInOut(duration: 0.75).repeatForever(autoreverses: true)) {
-                    restartBobOffset = -10
+                if startSessionBlock == nil {
+                    withAnimation(.easeInOut(duration: 0.75).repeatForever(autoreverses: true)) {
+                        restartBobOffset = -10
+                    }
                 }
             }
             .onDisappear { restartBobOffset = 0 }
 
-            Text("Script restarting…")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            if startSessionBlock != nil {
+                VStack(spacing: 6) {
+                    Text("No active sessions")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Text("Tap + to start a new session")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            } else {
+                Text("Script restarting…")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(useBrandColors ? (brandGroup.brandBackground ?? Color(.systemGroupedBackground)) : Color(.systemGroupedBackground))
