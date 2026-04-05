@@ -430,6 +430,7 @@ class GitReposScript:
         async def on_detail_response(value: str):
             if value == 'dismissed':
                 self._open_detail_id = None
+                await self.mcp.clear_block(block_id)
                 return
             await self._handle_action(repo, block_id, value)
 
