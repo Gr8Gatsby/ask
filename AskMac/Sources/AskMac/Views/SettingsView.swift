@@ -75,7 +75,7 @@ private enum MacTab: String, CaseIterable {
     var icon: String {
         switch self {
         case .scripts:  "terminal"
-        case .feed:     "clock.arrow.circlepath"
+        case .feed:     "scroll"
         case .blocks:   "rectangle.stack"
         case .messages: "bubble.left.and.bubble.right"
         case .machine:  "desktopcomputer"
@@ -147,6 +147,13 @@ struct MacScriptsView: View {
                 }
             }
         }
+        .onAppear {
+            // When opened from the MenuBarExtra the window is not automatically
+            // made key, so List selection highlights and Picker segments render
+            // without accent color until the user clicks. Force activation so
+            // the window becomes key immediately on first open.
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        }
     }
 }
 
@@ -166,7 +173,11 @@ private struct ScriptsTabView: View {
                         .font(.caption)
                         .padding(.vertical, 4)
                 } else {
-                    ForEach(scriptManager.scripts) { script in
+                    let sorted = scriptManager.scripts.sorted { a, b in
+                        if a.isSystem != b.isSystem { return !a.isSystem }
+                        return a.name < b.name
+                    }
+                    ForEach(sorted) { script in
                         ScriptSidebarRow(script: script, scriptManager: scriptManager)
                             .tag(script.id)
                     }
@@ -176,13 +187,15 @@ private struct ScriptsTabView: View {
             .navigationSplitViewColumnWidth(min: 220, ideal: 240)
             .onAppear {
                 if selectedScriptID == nil {
-                    selectedScriptID = scriptManager.scripts.first?.id
+                    selectedScriptID = scriptManager.scripts.first(where: { !$0.isSystem })?.id
+                        ?? scriptManager.scripts.first?.id
                 }
             }
             .onChange(of: scriptManager.scripts.count) { _, count in
-                // Auto-select first script once scripts finish loading
+                // Auto-select first non-system script once scripts finish loading
                 if selectedScriptID == nil && count > 0 {
-                    selectedScriptID = scriptManager.scripts.first?.id
+                    selectedScriptID = scriptManager.scripts.first(where: { !$0.isSystem })?.id
+                        ?? scriptManager.scripts.first?.id
                 }
             }
             .onChange(of: selectedScriptID) { _, id in
@@ -232,6 +245,22 @@ private struct ScriptsVaultView: View {
 
     var body: some View {
         Form {
+            Section {
+                GroupBox {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "info.circle.fill")
+                            .foregroundStyle(.secondary)
+                            .font(.body)
+                            .padding(.top, 1)
+                        Text("We have provided sample scripts so you can see how this system works. Scripts are yours to make and control — we recommend vibe coding them, testing, and iterating until they do exactly what you need to be most productive.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(2)
+                }
+            }
+
             Section {
                 Toggle("Include App Bundle Scripts", isOn: Binding(
                     get: { settings.usesBundledScripts },
@@ -290,6 +319,7 @@ private struct ScriptSidebarRow: View {
     let scriptManager: ScriptManager
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(AppSettings.self) private var settings
 
     var body: some View {
         HStack(spacing: 10) {
@@ -297,9 +327,16 @@ private struct ScriptSidebarRow: View {
                 .frame(width: 24, height: 24)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(script.name)
-                    .font(.body)
-                    .foregroundStyle(script.isEnabled ? .primary : .secondary)
+                HStack(spacing: 4) {
+                    Text(script.name)
+                        .font(.body)
+                        .foregroundStyle(script.isEnabled ? .primary : .secondary)
+                    if !script.isSystem && settings.isPinned(script.id) {
+                        Image(systemName: "pin.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
 
                 HStack(spacing: 4) {
                     Circle()
@@ -324,6 +361,29 @@ private struct ScriptSidebarRow: View {
             .controlSize(.small)
         }
         .padding(.vertical, 2)
+        .contextMenu {
+            if !script.isSystem {
+                if settings.isPinned(script.id) {
+                    Button {
+                        settings.unpinScript(script.id)
+                    } label: {
+                        Label("Remove from Menu Bar", systemImage: "pin.slash")
+                    }
+                } else {
+                    Button {
+                        settings.pinScript(script.id)
+                    } label: {
+                        Label("Pin to Menu Bar", systemImage: "pin")
+                    }
+                    .disabled(settings.pinnedScripts.count >= AppSettings.maxPins)
+                }
+
+                if settings.pinnedScripts.count >= AppSettings.maxPins && !settings.isPinned(script.id) {
+                    Text("Menu bar is full (\(AppSettings.maxPins) max)")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 
     private var statusLabel: String {
@@ -335,6 +395,7 @@ private struct ScriptSidebarRow: View {
         case .running:              .green
         case .crashed:              .red
         case .missingDependencies:  .orange
+        case .needsSetup:           .orange
         case .starting:             .yellow
         case .stopped:              Color(.tertiaryLabelColor)
         }
@@ -400,6 +461,13 @@ private struct ScriptDetailView: View {
     @State private var scheduleMinute: Int = 0         // 0, 15, 30, 45
     @State private var scheduleDays: Set<Int> = []     // 0=Sun…6=Sat; empty = every day
     @State private var scheduleSaved = false
+    // Setup state
+    @State private var configValues: [String: String] = [:]    // key → value being edited
+    @State private var configSaved: Set<String> = []           // keys that were just saved
+    @State private var showSetupSheet = false
+    @State private var setupOutputLines: [String] = []
+    @State private var setupRunning = false
+    @State private var setupNeedsTerminal = false
 
     private var liveBlocks: [LiveBlock] {
         Array((scriptManager.activeBlocks[script.id] ?? [:]).values)
@@ -411,8 +479,13 @@ private struct ScriptDetailView: View {
             VStack(alignment: .leading, spacing: 16) {
                 scriptCard
 
-                // Toggle bar — only shown when the script declares tools
-                if !script.tools.isEmpty {
+                // Setup section — shown when script declares setup or config
+                if script.hasSetup {
+                    setupSection
+                }
+
+                // Toggle bar — only for non-system scripts that declare tools
+                if !script.tools.isEmpty && !script.isSystem {
                     Picker("", selection: $showTools) {
                         Text("Live Preview").tag(false)
                         Text("Methods").tag(true)
@@ -421,7 +494,9 @@ private struct ScriptDetailView: View {
                     .labelsHidden()
                 }
 
-                if showTools {
+                if script.isSystem || showTools {
+                    // System scripts always show their tools (no Live Preview).
+                    // Non-system scripts show tools when the Methods tab is selected.
                     scriptToolsPanel
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
@@ -1383,8 +1458,10 @@ private struct ScriptDetailView: View {
 
     @ViewBuilder
     private var typeBadge: some View {
-        let isFeed = script.scriptType == "feed"
-        Text(isFeed ? "Feed" : "Tile")
+        let label = script.scriptType == "feed" ? "Feed"
+                  : script.scriptType == "system" ? "System"
+                  : "Tile"
+        Text(label)
             .font(.caption2)
             .fontWeight(.medium)
             .foregroundStyle(brandAccent ?? brandForegroundSecondary)
@@ -1414,8 +1491,174 @@ private struct ScriptDetailView: View {
         case .running:              .green
         case .crashed:              .red
         case .missingDependencies:  .orange
+        case .needsSetup:           .orange
         case .starting:             .yellow
         case .stopped:              .secondary
+        }
+    }
+
+    // MARK: - Setup
+
+    @ViewBuilder
+    private var setupSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Header row
+            HStack {
+                Label("Setup", systemImage: "wrench.and.screwdriver")
+                    .font(.caption).fontWeight(.semibold)
+                    .foregroundStyle(brandForegroundTertiary)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+                Spacer()
+                if script.setupCheckRunning {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button {
+                        scriptManager.runSetupCheck(id: script.id)
+                    } label: {
+                        Label("Re-check", systemImage: "arrow.clockwise")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                }
+            }
+
+            // Config form — required secret/string fields
+            if !script.configItems.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(script.configItems) { item in
+                        configRow(item)
+                    }
+                }
+            }
+
+            // Check results
+            if !script.setupChecks.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(script.setupChecks) { check in
+                        HStack(spacing: 8) {
+                            Image(systemName: check.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(check.ok ? Color.green : Color.red)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(check.label)
+                                    .font(.caption).fontWeight(.medium)
+                                    .foregroundStyle(brandForegroundPrimary)
+                                if let msg = check.message {
+                                    Text(msg)
+                                        .font(.caption2)
+                                        .foregroundStyle(brandForegroundTertiary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Run Setup button
+            if script.setupScript != nil {
+                let failedChecks = script.setupChecks.filter { !$0.ok }
+                let needsTerminal = failedChecks.contains { $0.needsTerminal == true }
+
+                Button {
+                    if needsTerminal {
+                        scriptManager.setupInstallInTerminal(id: script.id)
+                    } else {
+                        setupOutputLines = []
+                        showSetupSheet = true
+                        Task {
+                            setupRunning = true
+                            for await line in scriptManager.setupInstallStream(id: script.id) {
+                                setupOutputLines.append(line)
+                            }
+                            setupRunning = false
+                            scriptManager.runSetupCheck(id: script.id)
+                        }
+                    }
+                } label: {
+                    Label(needsTerminal ? "Open Terminal to Setup" : "Run Setup",
+                          systemImage: needsTerminal ? "terminal" : "wrench.and.screwdriver")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .tint(script.needsSetup ? .orange : .accentColor)
+                .sheet(isPresented: $showSetupSheet) {
+                    SetupOutputSheet(
+                        scriptName: script.name,
+                        lines: $setupOutputLines,
+                        running: $setupRunning
+                    )
+                }
+            }
+        }
+        .padding()
+        .background(Color(.windowBackgroundColor).opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(script.needsSetup ? Color.orange.opacity(0.4) : Color.primary.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func configRow(_ item: ScriptConfigItem) -> some View {
+        let binding = Binding<String>(
+            get: { configValues[item.key] ?? KeychainService.shared.get(scriptID: script.id, key: item.key) ?? "" },
+            set: { configValues[item.key] = $0 }
+        )
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text(item.label)
+                        .font(.caption).fontWeight(.medium)
+                        .foregroundStyle(brandForegroundPrimary)
+                    if item.required == true {
+                        Text("required")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                if let desc = item.description {
+                    Text(desc).font(.caption2).foregroundStyle(brandForegroundTertiary)
+                }
+            }
+            Spacer()
+            if item.type == "secret" {
+                SecureField("••••••••", text: binding)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 160)
+            } else {
+                TextField("", text: binding)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 160)
+            }
+            if let helpURL = item.helpURL, let url = URL(string: helpURL) {
+                Link(destination: url) {
+                    Image(systemName: "questionmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            Button {
+                let val = configValues[item.key] ?? ""
+                guard !val.isEmpty else { return }
+                try? KeychainService.shared.set(scriptID: script.id, key: item.key, value: val)
+                configSaved.insert(item.key)
+                Task {
+                    try? await Task.sleep(for: .seconds(1.5))
+                    configSaved.remove(item.key)
+                }
+                scriptManager.runSetupCheck(id: script.id)
+            } label: {
+                Image(systemName: configSaved.contains(item.key) ? "checkmark" : "square.and.arrow.down")
+                    .font(.caption)
+                    .foregroundStyle(configSaved.contains(item.key) ? .green : .accentColor)
+            }
+            .buttonStyle(.plain)
+            .disabled((configValues[item.key] ?? "").isEmpty)
         }
     }
 
@@ -1613,24 +1856,22 @@ private struct MacFeedView: View {
     @Environment(ActionHistoryService.self) private var history
     @State private var feedFilter: FeedFilter? = .all
     @State private var selectedEvent: HistoryEvent?
+    @State private var showVerbose = false
 
     private var filteredEvents: [HistoryEvent] {
         switch feedFilter {
-        case .all, nil:         return history.events
-        case .kind(let k):      return history.events.filter { $0.kind == k }
-        case .source(let s):    return history.events.filter { $0.source == s }
+        case .all, nil:     return history.events
+        case .kind(let k):  return history.events.filter { $0.kind == k }
+        case .source(let s):return history.events.filter { $0.source == s }
         }
     }
 
-    // Per-kind counts shown in the type section
     private func count(for kind: HistoryEventKind) -> Int {
         history.events.filter { $0.kind == kind }.count
     }
 
     private struct SourceStat: Identifiable {
-        let name: String
-        let count: Int
-        let latest: Date?
+        let name: String; let count: Int; let latest: Date?
         var id: String { name }
     }
 
@@ -1657,50 +1898,44 @@ private struct MacFeedView: View {
         }
     }
 
-    // MARK: Sidebar — analytics + filters
+    // MARK: Sidebar
 
     private var feedSidebar: some View {
         List(selection: $feedFilter) {
-            // All
             Section {
                 HStack {
-                    Label("All Activity", systemImage: "clock.arrow.circlepath")
+                    Label("All Activity", systemImage: "scroll")
                     Spacer()
                     Text("\(history.events.count)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+                        .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 }
                 .tag(FeedFilter.all)
             }
 
-            // By type
             Section("By Type") {
-                kindRow(kind: .scriptCrashed,  label: "Crashes",   icon: "exclamationmark.triangle.fill")
-                kindRow(kind: .blockResponse,  label: "Responses",  icon: "hand.point.up.left")
-                kindRow(kind: .scriptEnabled,  label: "Enabled",    icon: "play.circle.fill")
-                kindRow(kind: .scriptDisabled, label: "Disabled",   icon: "stop.circle.fill")
+                kindRow(kind: .scriptCrashed,      label: "Crashes",      icon: "exclamationmark.triangle.fill")
+                kindRow(kind: .blockResponse,      label: "Responses",    icon: "hand.point.up.left")
+                kindRow(kind: .scriptStarted,      label: "Starts",       icon: "arrow.clockwise.circle.fill")
+                kindRow(kind: .scriptEnabled,      label: "Enabled",      icon: "play.circle.fill")
+                kindRow(kind: .scriptDisabled,     label: "Disabled",     icon: "stop.circle.fill")
+                kindRow(kind: .dependencyMissing,  label: "Dep Missing",  icon: "wrench.and.screwdriver.fill")
+                kindRow(kind: .blockEmitted,       label: "Emitted",      icon: "icloud.and.arrow.up")
             }
 
-            // By script
             if !sourceStats.isEmpty {
                 Section("By Script") {
                     ForEach(sourceStats) { stat in
                         HStack(spacing: 10) {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(stat.name)
-                                    .font(.subheadline)
+                                Text(stat.name).font(.subheadline)
                                 if let date = stat.latest {
                                     Text(date, style: .relative)
-                                        .font(.caption2)
-                                        .foregroundStyle(.tertiary)
+                                        .font(.caption2).foregroundStyle(.tertiary)
                                 }
                             }
                             Spacer()
                             Text("\(stat.count)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
+                                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                         }
                         .tag(FeedFilter.source(stat.name))
                     }
@@ -1716,40 +1951,178 @@ private struct MacFeedView: View {
         let n = count(for: kind)
         if n > 0 {
             HStack {
-                Label(label, systemImage: icon)
-                    .foregroundStyle(kind.color)
+                Label(label, systemImage: icon).foregroundStyle(kind.color)
                 Spacer()
-                Text("\(n)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
+                Text("\(n)").font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }
             .tag(FeedFilter.kind(kind))
         }
     }
 
-    // MARK: Detail — event list
+    // MARK: Event list
+
+    @State private var sortOrder = [KeyPathComparator(\HistoryEvent.timestamp, order: .reverse)]
+    @State private var tableSelection: Set<HistoryEvent.ID> = []
 
     private var feedDetail: some View {
         Group {
             if filteredEvents.isEmpty {
                 ContentUnavailableView(
-                    "No Feed Activity",
-                    systemImage: "clock.arrow.circlepath",
+                    "No Activity",
+                    systemImage: "scroll",
                     description: Text("Script interactions and lifecycle events will appear here.")
                 )
+            } else if showVerbose {
+                logTable
             } else {
-                List {
-                    ForEach(filteredEvents) { event in
-                        FeedEventRow(event: event)
-                            .contentShape(Rectangle())
-                            .onTapGesture { selectedEvent = event }
-                            .listRowBackground(Color.clear)
-                    }
-                }
-                .listStyle(.inset(alternatesRowBackgrounds: true))
+                compactList
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            HStack {
+                Spacer()
+                Button { showVerbose.toggle() } label: {
+                    Label(
+                        showVerbose ? "Compact" : "Table",
+                        systemImage: showVerbose ? "list.bullet" : "tablecells"
+                    )
+                    .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(showVerbose ? Color.accentColor : Color.secondary)
+                .help(showVerbose ? "Switch to compact view" : "Switch to table view")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.bar)
+            Divider()
+        }
+    }
+
+    // Compact list (friendly rows)
+    private var compactList: some View {
+        List {
+            ForEach(filteredEvents) { event in
+                FeedEventRow(event: event)
+                    .contentShape(Rectangle())
+                    .onTapGesture { selectedEvent = event }
+                    .listRowBackground(
+                        event.kind == .scriptCrashed ? Color.red.opacity(0.04) : Color.clear
+                    )
+            }
+        }
+        .listStyle(.inset(alternatesRowBackgrounds: true))
+    }
+
+    // Verbose table
+    private var logTable: some View {
+        Table(filteredEvents, selection: $tableSelection, sortOrder: $sortOrder) {
+            // Timestamp
+            TableColumn("Time", value: \.timestamp) { event in
+                Text(event.timestamp.formatted(.dateTime.month(.twoDigits).day().hour().minute().second()))
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            .width(min: 110, ideal: 130)
+
+            // Kind badge
+            TableColumn("Type") { event in
+                Text(event.kind.shortLabel)
+                    .font(.system(.caption2, design: .monospaced))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(event.kind.color)
+                    .padding(.horizontal, 5).padding(.vertical, 2)
+                    .background(event.kind.color.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            }
+            .width(min: 80, ideal: 90)
+
+            // Script name + version
+            TableColumn("Script", value: \.source) { event in
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(event.source).font(.caption).fontWeight(.medium)
+                    if let v = event.scriptVersion {
+                        Text("v\(v)").font(.caption2).foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            .width(min: 90, ideal: 110)
+
+            // Summary
+            TableColumn("Summary", value: \.summary) { event in
+                Text(event.summary).font(.caption).lineLimit(1)
+            }
+            .width(min: 120, ideal: 160)
+
+            // Exit / signal
+            TableColumn("Exit") { event in
+                ExitCodeCell(exitCode: event.exitCode, exitedBySignal: event.exitedBySignal)
+            }
+            .width(min: 44, ideal: 52)
+
+            // Detail: stderr first line, block type, or dep names
+            TableColumn("Detail") { event in
+                FeedDetailCell(event: event)
+            }
+            .width(min: 160)
+        }
+        .onChange(of: tableSelection) { _, ids in
+            if let id = ids.first,
+               let event = filteredEvents.first(where: { $0.id == id }) {
+                selectedEvent = event
+                tableSelection = []
+            }
+        }
+        .contextMenu(forSelectionType: HistoryEvent.ID.self) { ids in
+            if let id = ids.first,
+               let event = filteredEvents.first(where: { $0.id == id }) {
+                Button("View Full Detail") { selectedEvent = event }
+            }
+        }
+    }
+}
+
+private struct ExitCodeCell: View {
+    let exitCode: Int32?
+    let exitedBySignal: Bool?
+    var body: some View {
+        if let code = exitCode {
+            let bySignal = exitedBySignal == true
+            let label = bySignal ? "SIG \(code)" : "\(code)"
+            let color: Color = code == 0 ? .secondary : .red
+            Text(label)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(color)
+        } else {
+            Text("—").font(.caption2).foregroundStyle(.tertiary)
+        }
+    }
+}
+
+private struct FeedDetailCell: View {
+    let event: HistoryEvent
+    var body: some View {
+        let text: String = {
+            if let tail = event.stderrTail,
+               let line = tail.components(separatedBy: "\n").first(where: { !$0.isEmpty }) {
+                return line
+            }
+            if let bt = event.blockType { return bt }
+            if let d = event.detail,
+               let line = d.components(separatedBy: "\n").first(where: { !$0.isEmpty }) {
+                return line
+            }
+            return "—"
+        }()
+        let isMono = event.stderrTail != nil
+        Group {
+            if isMono {
+                Text(text).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
+            } else {
+                Text(text).font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .lineLimit(1)
     }
 }
 
@@ -1757,33 +2130,33 @@ private struct FeedEventRow: View {
     let event: HistoryEvent
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .top, spacing: 10) {
             Image(systemName: event.kind.systemImage)
                 .foregroundStyle(event.kind.color)
                 .frame(width: 18)
+                .padding(.top, 2)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(event.source)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                Text(event.summary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                if let detail = event.detail {
-                    Text(detail)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(event.source).font(.subheadline).fontWeight(.medium)
+                Text(event.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                if let title = event.blockTitle, !title.isEmpty {
+                    Text(title)
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
-                        .lineLimit(2)
-                        .fontDesign(.monospaced)
+                        .lineLimit(1)
+                } else if let tail = event.stderrTail,
+                   let line = tail.components(separatedBy: "\n").first(where: { !$0.isEmpty }) {
+                    Text(line)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                 }
             }
 
             Spacer()
 
             Text(event.timestamp, style: .relative)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .font(.caption2).foregroundStyle(.tertiary)
         }
         .padding(.vertical, 2)
         .onHover { inside in
@@ -1798,20 +2171,18 @@ private struct FeedEventDetailSheet: View {
     let event: HistoryEvent
     @Environment(\.dismiss) private var dismiss
 
+    private var hasStderr: Bool { !(event.stderrTail ?? "").isEmpty }
+    private var hasPayload: Bool { !(event.blockPayload ?? "").isEmpty }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header
             HStack(spacing: 10) {
                 Image(systemName: event.kind.systemImage)
-                    .font(.title2)
-                    .foregroundStyle(event.kind.color)
+                    .font(.title2).foregroundStyle(event.kind.color)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(event.source)
-                        .font(.title3)
-                        .fontWeight(.semibold)
-                    Text(event.kind.displayName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text(event.source).font(.title3).fontWeight(.semibold)
+                    Text(event.kind.displayName).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Done") { dismiss() }
@@ -1820,32 +2191,185 @@ private struct FeedEventDetailSheet: View {
 
             Divider()
 
-            Form {
-                LabeledContent("Summary") {
-                    Text(event.summary)
-                        .multilineTextAlignment(.trailing)
-                }
-                LabeledContent("Time") {
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Text(event.timestamp.formatted(date: .abbreviated, time: .standard))
-                        Text(event.timestamp, style: .relative)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Core metadata
+                    Group {
+                        infoRow("Time",    event.timestamp.formatted(date: .abbreviated, time: .complete))
+                        infoRow("Summary", event.summary)
+                        if let version = event.scriptVersion { infoRow("Version", version) }
+                        if let bt = event.blockType          { infoRow("Block Type", bt) }
+                        if let bid = event.blockID           { infoRow("Block ID", bid) }
+                        if let title = event.blockTitle, !title.isEmpty { infoRow("Prompt", title) }
+                        if let opts = event.blockOptions, !opts.isEmpty { infoRow("Options", opts) }
+                    }
+                    .padding(.horizontal, 16)
+
+                    // Crash diagnostics
+                    if let code = event.exitCode {
+                        Divider().padding(.vertical, 8)
+
+                        let label = (event.exitedBySignal == true)
+                            ? "Killed by signal \(code)"
+                            : (code == 0 ? "Unexpected clean exit (0)" : "Exit code \(code)")
+
+                        HStack(spacing: 8) {
+                            Circle().fill(Color.red).frame(width: 8, height: 8)
+                            Text(label)
+                                .font(.system(.callout, design: .monospaced))
+                                .foregroundStyle(.red)
+                        }
+                        .padding(.horizontal, 16)
+                    }
+
+                    // Stderr block
+                    if let tail = event.stderrTail, !tail.isEmpty {
+                        let lineCount = tail.components(separatedBy: "\n").count
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("STDERR — \(lineCount) line\(lineCount == 1 ? "" : "s")")
+                                .font(.caption2).fontWeight(.semibold)
+                                .foregroundStyle(.tertiary).tracking(0.5)
+
+                            ScrollView {
+                                Text(tail)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.primary)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .frame(maxHeight: 260)
+                            .padding(10)
+                            .background(Color(.textBackgroundColor))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.red.opacity(0.3), lineWidth: 1))
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                    } else if let detail = event.detail, !detail.isEmpty {
+                        // Non-crash detail (dependency list, etc.)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("DETAIL")
+                                .font(.caption2).fontWeight(.semibold)
+                                .foregroundStyle(.tertiary).tracking(0.5)
+                            Text(detail)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                    }
+
+                    // Block payload (emitted blocks)
+                    if let payload = event.blockPayload, !payload.isEmpty {
+                        Divider().padding(.vertical, 8)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("BLOCK PAYLOAD")
+                                .font(.caption2).fontWeight(.semibold)
+                                .foregroundStyle(.tertiary).tracking(0.5)
+                            ScrollView {
+                                Text(payload)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.primary)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .frame(maxHeight: 300)
+                            .padding(10)
+                            .background(Color(.textBackgroundColor))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.accentColor.opacity(0.25), lineWidth: 1))
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 12)
                     }
                 }
-                if let detail = event.detail, !detail.isEmpty {
-                    LabeledContent("Detail") {
-                        Text(detail)
-                            .font(.caption)
-                            .fontDesign(.monospaced)
-                            .textSelection(.enabled)
-                            .multilineTextAlignment(.trailing)
-                    }
+                .padding(.vertical, 12)
+            }
+        }
+        .frame(width: 500, height: hasStderr || hasPayload ? 540 : 280)
+    }
+
+    @ViewBuilder
+    private func infoRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(label)
+                .font(.caption).foregroundStyle(.secondary)
+                .frame(width: 72, alignment: .trailing)
+            Text(value)
+                .font(.caption).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 4)
+        Divider()
+    }
+}
+
+// MARK: - Setup output sheet
+
+private struct SetupOutputSheet: View {
+    let scriptName: String
+    @Binding var lines: [String]
+    @Binding var running: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "wrench.and.screwdriver")
+                    .font(.title2).foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Setting up \(scriptName)").font(.title3).fontWeight(.semibold)
+                    Text(running ? "Running…" : "Complete")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if !running {
+                    Button("Done") { dismiss() }
                 }
             }
-            .formStyle(.grouped)
+            .padding()
+
+            Divider()
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                            Text(line)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(lineColor(line))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        Color.clear.frame(height: 1).id("bottom")
+                    }
+                    .padding(12)
+                }
+                .onChange(of: lines.count) { _, _ in
+                    proxy.scrollTo("bottom")
+                }
+            }
+            .background(Color(.textBackgroundColor))
+
+            if running {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Running setup…").font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(12)
+            }
         }
-        .frame(width: 400, height: 280)
+        .frame(width: 520, height: 360)
+    }
+
+    private func lineColor(_ line: String) -> Color {
+        if line.hasPrefix("✗") || line.lowercased().contains("error") { return .red }
+        if line.hasPrefix("✓") { return .green }
+        if line.hasPrefix("→") { return .primary }
+        return .secondary
     }
 }
 
@@ -1874,7 +2398,7 @@ private enum MachineSection: String, CaseIterable, Identifiable {
 private struct MachineDetailView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(HeartbeatService.self) private var heartbeat
-
+    @Environment(ScriptManager.self) private var scriptManager
     @Environment(AppUpdater.self) private var updater
     @State private var selectedSection: MachineSection? = .cloud
     @State private var agentSessions: [AgentSession] = []
@@ -2060,19 +2584,30 @@ private struct MachineDetailView: View {
             }
 
             Section("MCP Tools") {
-                ForEach([
+                let builtIns: [(String, String, String)] = [
                     ("emit_block",            "Display a UI block on the iOS device",         "blockId, blockType, payload, ttl?"),
                     ("clear_block",           "Remove a UI block from the iOS device",         "blockId"),
                     ("get_schema",            "Get payload schemas for all block types",        "—"),
                     ("list_terminal_sessions","List interactive terminal sessions on this Mac", "filter?"),
-                ], id: \.0) { name, desc, params in
+                ]
+                let systemScriptTools: [(String, String, String)] = scriptManager.scripts
+                    .filter { $0.scriptType == "system" }
+                    .flatMap { script -> [(String, String, String)] in
+                        script.tools.map { tool in
+                            let params = tool.params?.map(\.name).joined(separator: ", ") ?? "—"
+                            return (tool.name, tool.description ?? "", params)
+                        }
+                    }
+                ForEach(builtIns + systemScriptTools, id: \.0) { name, desc, params in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(name)
                             .font(.system(.body, design: .monospaced))
-                        Text(desc)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(params)
+                        if !desc.isEmpty {
+                            Text(desc)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(params.isEmpty ? "—" : params)
                             .font(.system(.caption2, design: .monospaced))
                             .foregroundStyle(.tertiary)
                     }

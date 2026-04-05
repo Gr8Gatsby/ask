@@ -62,6 +62,12 @@ private struct DashboardTab: View {
                 systemImage: "exclamationmark.triangle.fill",
                 color: .red
             )
+            StatCard(
+                title: "Dep Issues",
+                value: "\(history.events.filter { $0.kind == .dependencyMissing }.count)",
+                systemImage: "wrench.and.screwdriver.fill",
+                color: .orange
+            )
         }
     }
 
@@ -227,11 +233,13 @@ private struct LogTab: View {
     @State private var search = ""
     @State private var kindFilter = "all"
     @State private var selectedEvent: HistoryEvent?
+    @State private var showDetails = false
 
     private let filterOptions: [(label: String, tag: String)] = [
-        ("All", "all"),
+        ("All",       "all"),
         ("Responses", "response"),
-        ("System", "system"),
+        ("Crashes",   "crash"),
+        ("Lifecycle", "lifecycle"),
     ]
 
     var body: some View {
@@ -248,8 +256,13 @@ private struct LogTab: View {
                 )
             } else {
                 List(filteredEvents, selection: $selectedEvent) { event in
-                    HistoryEventRow(event: event)
-                        .tag(event)
+                    if showDetails {
+                        HistoryEventDetailRow(event: event)
+                            .tag(event)
+                    } else {
+                        HistoryEventRow(event: event)
+                            .tag(event)
+                    }
                 }
                 .listStyle(.inset(alternatesRowBackgrounds: true))
             }
@@ -264,7 +277,7 @@ private struct LogTab: View {
             HStack {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("Search sources or details…", text: $search)
+                TextField("Search sources, summaries or stderr…", text: $search)
                     .textFieldStyle(.plain)
                 if !search.isEmpty {
                     Button { search = "" } label: {
@@ -286,6 +299,18 @@ private struct LogTab: View {
             }
             .pickerStyle(.segmented)
             .fixedSize()
+
+            Divider()
+                .frame(height: 18)
+
+            Button {
+                showDetails.toggle()
+            } label: {
+                Image(systemName: showDetails ? "list.bullet.indent" : "list.bullet")
+                    .help(showDetails ? "Switch to friendly view" : "Switch to detail view")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(showDetails ? Color.accentColor : Color.secondary)
         }
         .padding(12)
     }
@@ -294,20 +319,22 @@ private struct LogTab: View {
         history.events.filter { event in
             let matchesKind: Bool
             switch kindFilter {
-            case "response": matchesKind = event.kind == .blockResponse
-            case "system":   matchesKind = [.scriptEnabled, .scriptDisabled, .scriptCrashed].contains(event.kind)
-            default:         matchesKind = true
+            case "response":  matchesKind = event.kind == .blockResponse
+            case "crash":     matchesKind = event.kind == .scriptCrashed
+            case "lifecycle": matchesKind = [.scriptStarted, .scriptEnabled, .scriptDisabled, .dependencyMissing].contains(event.kind)
+            default:          matchesKind = true
             }
             let matchesSearch = search.isEmpty
                 || event.source.localizedCaseInsensitiveContains(search)
                 || event.summary.localizedCaseInsensitiveContains(search)
                 || (event.detail ?? "").localizedCaseInsensitiveContains(search)
+                || (event.stderrTail ?? "").localizedCaseInsensitiveContains(search)
             return matchesKind && matchesSearch
         }
     }
 }
 
-// MARK: - Event row
+// MARK: - Event row (friendly)
 
 private struct HistoryEventRow: View {
     let event: HistoryEvent
@@ -335,6 +362,67 @@ private struct HistoryEventRow: View {
     }
 }
 
+// MARK: - Event row (detail)
+
+private struct HistoryEventDetailRow: View {
+    let event: HistoryEvent
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                // Kind badge
+                Text(event.kind.shortLabel)
+                    .font(.system(.caption2, design: .monospaced))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(event.kind.color)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(event.kind.color.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+
+                Text(event.source)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+
+                Spacer()
+
+                // Absolute timestamp
+                Text(event.timestamp.formatted(.dateTime.hour().minute().second()))
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+            }
+
+            Text(event.summary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            // Exit code badge for crashes
+            if let code = event.exitCode {
+                let label = (event.exitedBySignal == true)
+                    ? "signal \(code)"
+                    : "exit \(code)"
+                Text(label)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.red.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            }
+
+            // First line of stderr / detail
+            if let tail = event.stderrTail ?? event.detail,
+               let firstLine = tail.components(separatedBy: "\n").first(where: { !$0.isEmpty }) {
+                Text(firstLine)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.vertical, 3)
+    }
+}
+
 // MARK: - Detail sheet
 
 private struct HistoryDetailView: View {
@@ -343,11 +431,18 @@ private struct HistoryDetailView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Header
             HStack {
-                Label(event.source, systemImage: event.kind.systemImage)
-                    .font(.title3)
-                    .fontWeight(.semibold)
+                Image(systemName: event.kind.systemImage)
                     .foregroundStyle(event.kind.color)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(event.source)
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                    Text(event.kind.displayName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button("Done") { dismiss() }
             }
@@ -355,23 +450,131 @@ private struct HistoryDetailView: View {
 
             Divider()
 
-            Form {
-                LabeledContent("Event") { Text(event.kind.displayName) }
-                LabeledContent("Summary") { Text(event.summary) }
-                LabeledContent("Time") {
-                    Text(event.timestamp.formatted(date: .abbreviated, time: .standard))
-                }
-                if let detail = event.detail {
-                    LabeledContent("Detail") {
-                        Text(detail)
-                            .textSelection(.enabled)
-                            .multilineTextAlignment(.trailing)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Core fields
+                    metaSection
+
+                    // Crash diagnostics
+                    if event.kind == .scriptCrashed {
+                        crashSection
+                    }
+
+                    // Block metadata
+                    if let blockID = event.blockID {
+                        blockSection(blockID: blockID)
                     }
                 }
             }
-            .formStyle(.grouped)
         }
-        .frame(width: 420, height: 280)
+        .frame(width: 560, height: event.stderrTail != nil ? 520 : 300)
+    }
+
+    // MARK: Sections
+
+    private var metaSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            detailRow("Time",    event.timestamp.formatted(date: .abbreviated, time: .complete))
+            detailRow("Summary", event.summary)
+            if let version = event.scriptVersion {
+                detailRow("Version", version)
+            }
+            if let detail = event.detail, event.stderrTail == nil {
+                // Non-crash detail (dependency list, etc.)
+                detailRow("Detail", detail)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+    }
+
+    @ViewBuilder
+    private var crashSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("CRASH DIAGNOSTICS")
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .foregroundStyle(.tertiary)
+                .tracking(0.5)
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+
+            if let code = event.exitCode {
+                let label = (event.exitedBySignal == true)
+                    ? "Killed by signal \(code)"
+                    : (code == 0 ? "Unexpected clean exit (0)" : "Exit code \(code)")
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 8, height: 8)
+                    Text(label)
+                        .font(.system(.callout, design: .monospaced))
+                        .foregroundStyle(.red)
+                }
+                .padding(.horizontal, 16)
+            }
+
+            if let tail = event.stderrTail, !tail.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("STDERR (\(tail.components(separatedBy: "\n").count) lines)")
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.tertiary)
+                        .tracking(0.5)
+
+                    ScrollView {
+                        Text(tail)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.primary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 280)
+                    .padding(10)
+                    .background(Color(.textBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.red.opacity(0.3), lineWidth: 1)
+                    )
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+            } else {
+                Text("No stderr captured")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 16)
+            }
+        }
+    }
+
+    private func blockSection(blockID: String) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Divider().padding(.top, 8)
+            detailRow("Block ID",   blockID)
+            if let bt = event.blockType { detailRow("Block Type", bt) }
+        }
+        .padding(.horizontal, 16)
+    }
+
+    // MARK: Helpers
+
+    @ViewBuilder
+    private func detailRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 80, alignment: .trailing)
+            Text(value)
+                .font(.caption)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 5)
+        Divider()
     }
 }
 
@@ -380,28 +583,50 @@ private struct HistoryDetailView: View {
 extension HistoryEventKind {
     var systemImage: String {
         switch self {
-        case .blockResponse:  "hand.point.up.left"
-        case .scriptEnabled:  "play.circle.fill"
-        case .scriptDisabled: "stop.circle.fill"
-        case .scriptCrashed:  "exclamationmark.triangle.fill"
+        case .blockResponse:     "hand.point.up.left"
+        case .scriptEnabled:     "play.circle.fill"
+        case .scriptDisabled:    "stop.circle.fill"
+        case .scriptCrashed:     "exclamationmark.triangle.fill"
+        case .scriptStarted:     "arrow.clockwise.circle.fill"
+        case .dependencyMissing: "wrench.and.screwdriver.fill"
+        case .blockEmitted:      "icloud.and.arrow.up"
         }
     }
 
     var color: Color {
         switch self {
-        case .blockResponse:  .purple
-        case .scriptEnabled:  .green
-        case .scriptDisabled: .secondary
-        case .scriptCrashed:  .red
+        case .blockResponse:     .purple
+        case .scriptEnabled:     .green
+        case .scriptDisabled:    .secondary
+        case .scriptCrashed:     .red
+        case .scriptStarted:     .blue
+        case .dependencyMissing: .orange
+        case .blockEmitted:      .teal
         }
     }
 
     var displayName: String {
         switch self {
-        case .blockResponse:  "Block Response"
-        case .scriptEnabled:  "Script Enabled"
-        case .scriptDisabled: "Script Disabled"
-        case .scriptCrashed:  "Script Crashed"
+        case .blockResponse:     "Block Response"
+        case .scriptEnabled:     "Script Enabled"
+        case .scriptDisabled:    "Script Disabled"
+        case .scriptCrashed:     "Script Crashed"
+        case .scriptStarted:     "Script Started"
+        case .dependencyMissing: "Dependency Missing"
+        case .blockEmitted:      "Block Emitted"
+        }
+    }
+
+    /// Compact label used in the detail-row kind badge.
+    var shortLabel: String {
+        switch self {
+        case .blockResponse:     "RESPONSE"
+        case .scriptEnabled:     "ENABLED"
+        case .scriptDisabled:    "DISABLED"
+        case .scriptCrashed:     "CRASH"
+        case .scriptStarted:     "STARTED"
+        case .dependencyMissing: "DEP MISSING"
+        case .blockEmitted:      "EMITTED"
         }
     }
 }

@@ -34,6 +34,40 @@ struct ScriptTool: Codable {
     let params: [ScriptToolParam]?
 }
 
+// MARK: - Setup & config
+
+/// A single check result emitted by `setup.py --check`.
+struct SetupCheck: Codable, Identifiable, Sendable {
+    let id: String
+    let label: String
+    let ok: Bool
+    let message: String?
+    let fixable: Bool?
+    let needsTerminal: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id, label, ok, message, fixable
+        case needsTerminal = "needs_terminal"
+    }
+}
+
+/// A piece of configuration a script needs, declared in its manifest.
+struct ScriptConfigItem: Codable, Identifiable, Sendable {
+    let key: String
+    let label: String
+    let type: String        // "secret" | "string" | "boolean"
+    let required: Bool?
+    let description: String?
+    let helpURL: String?
+
+    var id: String { key }
+
+    enum CodingKeys: String, CodingKey {
+        case key, label, type, required, description
+        case helpURL = "help_url"
+    }
+}
+
 struct ScriptManifest: Codable {
     let id: String
     let name: String
@@ -42,15 +76,18 @@ struct ScriptManifest: Codable {
     let entry: String       // relative path to the executable entry point
     let icon: String?
     let iconFile: String?   // relative path to an image file (SVG/PNG)
-    let type: String?       // "tile" (default) or "feed"
+    let type: String?       // "tile" (default), "feed", or "system"
     let schedule: String?   // cron expression, e.g. "0 9 * * *" (feed scripts only)
     let requires: [ScriptDependency]?
     let tools: [ScriptTool]?
+    let setup: String?              // relative path to setup script (e.g. "setup.py")
+    let config: [ScriptConfigItem]? // configuration values the script needs
 
-    var isFeed: Bool { type == "feed" }
+    var isFeed: Bool   { type == "feed" }
+    var isSystem: Bool { type == "system" }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, version, description, entry, icon, type, schedule, requires, tools
+        case id, name, version, description, entry, icon, type, schedule, requires, tools, setup, config
         case iconFile = "icon_file"
     }
 }
@@ -70,15 +107,33 @@ struct ManagedScript: Identifiable {
     var lastError: String?  // last stderr output before most recent crash
     var lastEmitTime: Date? // last time this script emitted a block to CloudKit
     var missingDeps: [ScriptDependency] = []
-    var scriptType: String?              // "tile" (default) or "feed"
+    var scriptType: String?              // "tile" (default), "feed", or "system"
     var schedule: String?               // cron expression for feed scripts
+
+    var isSystem: Bool { scriptType == "system" }
     var requires: [ScriptDependency] = [] // all declared dependencies
     var tools: [ScriptTool] = []         // public tools declared in manifest
     var entry: String?                  // manifest entry point (relative path)
     var manifestPath: URL?              // path to the manifest.json file
 
+    // Setup & config
+    var setupScript: String?            // relative path to setup.py
+    var configItems: [ScriptConfigItem] = []  // declared config from manifest
+    var setupChecks: [SetupCheck] = []        // last --check results
+    var setupCheckRunning: Bool = false        // true while --check is in flight
+
+    var hasSetup: Bool { setupScript != nil || !configItems.isEmpty }
+    var needsSetup: Bool {
+        guard hasSetup else { return false }
+        let hasFailedCheck = setupChecks.contains { !$0.ok }
+        let hasMissingRequired = configItems.contains {
+            $0.required == true && KeychainService.shared.get(scriptID: id, key: $0.key) == nil
+        }
+        return hasFailedCheck || hasMissingRequired
+    }
+
     enum ScriptStatus {
-        case starting, running, crashed, stopped, missingDependencies
+        case starting, running, crashed, stopped, missingDependencies, needsSetup
 
         var label: String {
             switch self {
@@ -87,6 +142,7 @@ struct ManagedScript: Identifiable {
             case .crashed:              "Crashed"
             case .stopped:              "Stopped"
             case .missingDependencies:  "Missing dependencies"
+            case .needsSetup:           "Needs setup"
             }
         }
     }
@@ -108,6 +164,7 @@ final class ScriptManager {
 
     // Internal — not exposed to UI
     private var connections: [String: MCPConnection] = [:]
+    private var systemConnections: [String: SystemScriptConnection] = [:]
     private var restartDelays: [String: TimeInterval] = [:]
     // Cached manifests so we can re-launch after enable
     private var manifests: [String: (manifest: ScriptManifest, dir: URL, icon: NSImage?, svgString: String?)] = [:]
@@ -164,6 +221,8 @@ final class ScriptManager {
     func stop() {
         for (_, conn) in connections { conn.stop() }
         connections = [:]
+        for (_, conn) in systemConnections { conn.stop() }
+        systemConnections = [:]
         feedScheduler.cancelAll()
     }
 
@@ -211,6 +270,14 @@ final class ScriptManager {
 
             let isNew = manifests[manifest.id] == nil
             manifests[manifest.id] = (manifest, dir, iconImage, svgString)
+
+            // System scripts: re-launch as persistent background service, not shown in UI.
+            if manifest.isSystem {
+                systemConnections[manifest.id]?.stop()
+                systemConnections.removeValue(forKey: manifest.id)
+                launchSystemWithDepCheck(manifest: manifest, scriptDir: dir)
+                continue
+            }
 
             let isEnabled = !settings.disabledScripts.contains(manifest.id)
             guard isEnabled else {
@@ -347,6 +414,13 @@ final class ScriptManager {
                 ? try? String(contentsOf: iconURL, encoding: .utf8)
                 : nil
             manifests[manifest.id] = (manifest, dir, iconImage, svgString)
+
+            // System scripts: launch as persistent background service, not shown in UI.
+            if manifest.isSystem {
+                launchSystemWithDepCheck(manifest: manifest, scriptDir: dir)
+                continue
+            }
+
             let isEnabled = !settings.disabledScripts.contains(manifest.id)
             if isEnabled {
                 if manifest.isFeed {
@@ -393,6 +467,43 @@ final class ScriptManager {
         let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData, scriptIconSVG: svgString, scriptType: "tile")
         let conn = MCPConnection(scriptID: manifest.id, entryURL: entryURL, blockService: blockService, terminalMonitor: terminalMonitor)
 
+        // Expose system script tools in tools/list so scripts can discover them.
+        conn.systemTools = manifests.values
+            .filter { $0.manifest.isSystem }
+            .flatMap { cached -> [[String: Any]] in
+                guard let tools = cached.manifest.tools else { return [] }
+                return tools.map { tool in
+                    var entry: [String: Any] = ["name": tool.name]
+                    if let desc = tool.description { entry["description"] = desc }
+                    if let params = tool.params, !params.isEmpty {
+                        let props = params.reduce(into: [String: Any]()) { dict, p in
+                            dict[p.name] = ["type": p.type ?? "string"]
+                        }
+                        let required = params.filter { $0.required == true }.map(\.name)
+                        var schema: [String: Any] = ["type": "object", "properties": props]
+                        if !required.isEmpty { schema["required"] = required }
+                        entry["inputSchema"] = schema
+                    }
+                    return entry
+                }
+            }
+
+        // Route unknown tool calls to system scripts via their declared tool list.
+        conn.systemProxy = { [weak self] toolName, args in
+            guard let self else { return nil }
+            let sysConn = await MainActor.run { [weak self] in
+                guard let self,
+                      let sysID = self.manifests.first(where: { _, cached in
+                          cached.manifest.isSystem &&
+                          (cached.manifest.tools?.contains { $0.name == toolName } ?? false)
+                      })?.key
+                else { return nil as SystemScriptConnection? }
+                return self.systemConnections[sysID]
+            }
+            guard let sysConn else { return nil }
+            return try? await sysConn.callTool(toolName, args: args)
+        }
+
         conn.onTerminate = { [weak self] in
             DispatchQueue.main.async {
                 self?.handleCrash(manifest: manifest, scriptDir: scriptDir)
@@ -403,10 +514,21 @@ final class ScriptManager {
         activeBlocks.removeValue(forKey: manifest.id)
         conn.onBlockEmitted = { [weak self] block in
             Task { @MainActor [weak self] in
-                self?.activeBlocks[manifest.id, default: [:]][block.id] = block
-                if let idx = self?.scripts.firstIndex(where: { $0.id == manifest.id }) {
-                    self?.scripts[idx].lastEmitTime = Date()
+                guard let self else { return }
+                self.activeBlocks[manifest.id, default: [:]][block.id] = block
+                if let idx = self.scripts.firstIndex(where: { $0.id == manifest.id }) {
+                    self.scripts[idx].lastEmitTime = Date()
                 }
+                // Record emission with title/options extracted from payload
+                let (title, options) = Self.extractBlockContext(payloadJSON: block.payloadJSON, blockType: block.blockType)
+                self.actionHistory.recordBlockEmitted(
+                    scriptName: manifest.name,
+                    blockID: block.id,
+                    blockType: block.blockType,
+                    title: title,
+                    options: options,
+                    payloadJSON: block.payloadJSON
+                )
             }
         }
         conn.onBlockCleared = { [weak self] blockID in
@@ -420,6 +542,19 @@ final class ScriptManager {
 
         conn.start()
         upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .running, isEnabled: true)
+
+        let wasRestart = (restartDelays[manifest.id] ?? 0) > 0
+        actionHistory.recordScriptStarted(
+            scriptName: manifest.name,
+            scriptVersion: manifest.version,
+            afterCrash: wasRestart
+        )
+        print("[ScriptManager] \(manifest.id) started (v\(manifest.version ?? "?"), afterCrash=\(wasRestart))")
+
+        // Run setup check in the background if this script has a setup script
+        if manifest.setup != nil || !(manifest.config ?? []).isEmpty {
+            runSetupCheck(id: manifest.id)
+        }
     }
 
     // MARK: - Feed script lifecycle
@@ -458,10 +593,20 @@ final class ScriptManager {
         activeBlocks.removeValue(forKey: manifest.id)
         conn.onBlockEmitted = { [weak self] block in
             Task { @MainActor [weak self] in
-                self?.activeBlocks[manifest.id, default: [:]][block.id] = block
-                if let idx = self?.scripts.firstIndex(where: { $0.id == manifest.id }) {
-                    self?.scripts[idx].lastEmitTime = Date()
+                guard let self else { return }
+                self.activeBlocks[manifest.id, default: [:]][block.id] = block
+                if let idx = self.scripts.firstIndex(where: { $0.id == manifest.id }) {
+                    self.scripts[idx].lastEmitTime = Date()
                 }
+                let (title, options) = Self.extractBlockContext(payloadJSON: block.payloadJSON, blockType: block.blockType)
+                self.actionHistory.recordBlockEmitted(
+                    scriptName: manifest.name,
+                    blockID: block.id,
+                    blockType: block.blockType,
+                    title: title,
+                    options: options,
+                    payloadJSON: block.payloadJSON
+                )
             }
         }
         conn.onBlockCleared = { [weak self] blockID in
@@ -513,25 +658,36 @@ final class ScriptManager {
         // Don't restart if the script was disabled
         guard !settings.disabledScripts.contains(manifest.id) else { return }
 
-        // Capture last stderr before removing the connection
-        let errorSummary = connections[manifest.id]?.lastStderrSummary
+        // Capture all stderr lines and exit info before removing the connection
+        let conn = connections[manifest.id]
+        let allStderrLines = conn?.allStderrLines ?? []
+        let exitCode       = conn?.exitCode ?? 0
+        let exitedBySignal = conn?.exitedBySignal ?? false
+        let errorSummary   = conn?.lastStderrSummary
 
         let iconImage = manifests[manifest.id]?.icon
         upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .crashed, isEnabled: true)
         connections.removeValue(forKey: manifest.id)
         activeBlocks.removeValue(forKey: manifest.id)
 
-        // Surface the error in the Mac UI
+        // Surface the last error line in the Mac UI
         if let error = errorSummary, let idx = scripts.firstIndex(where: { $0.id == manifest.id }) {
             scripts[idx].lastError = error
         }
 
-        actionHistory.recordScriptCrash(scriptName: manifest.name, lastStderr: errorSummary)
+        actionHistory.recordScriptCrash(
+            scriptName: manifest.name,
+            exitCode: exitCode,
+            exitedBySignal: exitedBySignal,
+            stderrLines: allStderrLines,
+            scriptVersion: manifest.version
+        )
 
         let delay = restartDelays[manifest.id] ?? 1.0
         restartDelays[manifest.id] = min(delay * 2, 30.0)
 
-        print("[ScriptManager] \(manifest.id) crashed — restarting in \(Int(delay))s")
+        let reason = exitedBySignal ? "signal \(exitCode)" : "exit \(exitCode)"
+        print("[ScriptManager] \(manifest.id) crashed (\(reason)) — restarting in \(Int(delay))s")
 
         // Emit alert to iOS so user sees it on iPhone
         let alertBody = errorSummary ?? "Script exited unexpectedly"
@@ -584,6 +740,63 @@ final class ScriptManager {
                 self.launchFeedRun(manifest: manifest, scriptDir: scriptDir)
             }
         }
+    }
+
+    // MARK: - System script lifecycle
+
+    private func launchSystemWithDepCheck(manifest: ScriptManifest, scriptDir: URL) {
+        Task { @MainActor in
+            let failed = await checkDependencies(manifest)
+            if !failed.isEmpty {
+                print("[ScriptManager] \(manifest.id): system script missing deps — \(failed.map(\.name).joined(separator: ", "))")
+            } else {
+                self.launchSystem(manifest: manifest, scriptDir: scriptDir)
+            }
+        }
+    }
+
+    private func launchSystem(manifest: ScriptManifest, scriptDir: URL) {
+        let entryURL = scriptDir.appendingPathComponent(manifest.entry)
+        let fm = FileManager.default
+
+        let resolvedEntry = entryURL.resolvingSymlinksInPath()
+        let resolvedDir   = scriptDir.resolvingSymlinksInPath()
+        guard resolvedEntry.path.hasPrefix(resolvedDir.path + "/") || resolvedEntry.path == resolvedDir.path else {
+            print("[ScriptManager] \(manifest.id): path traversal rejected")
+            return
+        }
+
+        let canRun = fm.isExecutableFile(atPath: entryURL.path)
+            || entryURL.pathExtension == "py"
+            || entryURL.pathExtension == "sh"
+        guard canRun else {
+            print("[ScriptManager] \(manifest.id): entry not runnable at \(entryURL.path)")
+            return
+        }
+
+        systemConnections[manifest.id]?.stop()
+        let conn = SystemScriptConnection(scriptID: manifest.id, entryURL: entryURL)
+
+        conn.onTerminate = { [weak self, weak conn] in
+            guard let self else { return }
+            guard self.systemConnections[manifest.id] === conn else { return }
+            self.systemConnections.removeValue(forKey: manifest.id)
+            self.upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon,
+                              iconImage: self.manifests[manifest.id]?.icon, status: .crashed, isEnabled: true)
+            let delay = self.restartDelays[manifest.id] ?? 1.0
+            self.restartDelays[manifest.id] = min(delay * 2, 30.0)
+            print("[ScriptManager] System script \(manifest.id) terminated — restarting in \(Int(delay))s")
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(delay))
+                self?.launchSystem(manifest: manifest, scriptDir: scriptDir)
+            }
+        }
+
+        systemConnections[manifest.id] = conn
+        conn.start()
+        upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon,
+                     iconImage: manifests[manifest.id]?.icon, status: .running, isEnabled: true)
+        print("[ScriptManager] System script running: \(manifest.id)")
     }
 
     private func checkDependencies(_ manifest: ScriptManifest) async -> [ScriptDependency] {
@@ -654,8 +867,9 @@ final class ScriptManager {
         if let idx = scripts.firstIndex(where: { $0.id == manifest.id }) {
             scripts[idx].missingDeps = failed
         }
-        let depNames = failed.map(\.name).joined(separator: ", ")
-        print("[ScriptManager] \(manifest.id): missing dependencies — \(depNames)")
+        let depNames = failed.map(\.name)
+        print("[ScriptManager] \(manifest.id): missing dependencies — \(depNames.joined(separator: ", "))")
+        actionHistory.recordDependencyMissing(scriptName: manifest.name, missingDeps: depNames)
         let iconData  = iconImage.flatMap { ScriptManager.iconPNGBase64($0) }
         let svgString = manifests[manifest.id]?.svgString
         Task {
@@ -682,6 +896,59 @@ final class ScriptManager {
            scripts[idx].status == .missingDependencies {
             scripts[idx].missingDeps = []
         }
+    }
+
+    // MARK: - Shell PATH helpers
+
+    /// Returns an augmented PATH string that includes common user binary locations
+    /// (e.g. ~/.local/bin, ~/bin, homebrew) that GUI apps miss because they don't
+    /// source ~/.zshrc. Used when launching setup scripts.
+    private static func augmentedShellPath() -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let extras = [
+            "\(home)/.local/bin",
+            "\(home)/bin",
+            "\(home)/.opencode/bin",
+            "\(home)/.npm-global/bin",
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+        ]
+        let existing = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        return extras.joined(separator: ":") + (existing.isEmpty ? "" : ":\(existing)")
+    }
+
+    // MARK: - Block payload helpers
+
+    /// Extracts a human-readable title and option list from a block's JSON payload.
+    /// Returns `(title, options)` — either may be nil if the payload doesn't contain them.
+    static func extractBlockContext(payloadJSON: String, blockType: String) -> (title: String?, options: [String]?) {
+        guard let data = payloadJSON.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return (nil, nil) }
+
+        // Title: try common keys in order
+        let title = (dict["title"] as? String)
+            ?? (dict["message"] as? String)
+            ?? (dict["body"] as? String)
+
+        // Options: picker/confirmation/list blocks use different keys
+        var options: [String]? = nil
+        if let arr = dict["options"] as? [[String: Any]] {
+            // picker-style: [{label: "...", value: "..."}, ...]
+            options = arr.compactMap { $0["label"] as? String }
+        } else if let arr = dict["options"] as? [String] {
+            options = arr
+        } else if let arr = dict["choices"] as? [String] {
+            options = arr
+        } else if blockType == "confirmation" {
+            // Implicit binary options
+            options = ["Confirm", "Deny"]
+        }
+
+        return (title, options?.isEmpty == true ? nil : options)
     }
 
     // MARK: - Icon helpers
@@ -711,7 +978,174 @@ final class ScriptManager {
         } else {
             let svgString = manifests[id]?.svgString
             let dir = manifests[id]?.dir
-            scripts.append(ManagedScript(id: id, name: name, version: manifest?.version, description: manifest?.description, icon: icon, iconImage: iconImage, svgString: svgString, status: status, isEnabled: isEnabled, scriptType: manifest?.type, schedule: manifest?.schedule, requires: manifest?.requires ?? [], tools: manifest?.tools ?? [], entry: manifest?.entry, manifestPath: dir.map { $0.appendingPathComponent("manifest.json") }))
+            scripts.append(ManagedScript(
+                id: id, name: name, version: manifest?.version,
+                description: manifest?.description, icon: icon, iconImage: iconImage,
+                svgString: svgString, status: status, isEnabled: isEnabled,
+                scriptType: manifest?.type, schedule: manifest?.schedule,
+                requires: manifest?.requires ?? [], tools: manifest?.tools ?? [],
+                entry: manifest?.entry,
+                manifestPath: dir.map { $0.appendingPathComponent("manifest.json") },
+                setupScript: manifest?.setup,
+                configItems: manifest?.config ?? []
+            ))
         }
+    }
+
+    // MARK: - Setup checks
+
+    /// Runs `setup.py --check` and updates the script's setupChecks array.
+    func runSetupCheck(id: String) {
+        guard let entry = manifests[id],
+              let setupFile = entry.manifest.setup
+        else { return }
+
+        let setupURL = entry.dir.appendingPathComponent(setupFile)
+        guard FileManager.default.fileExists(atPath: setupURL.path) else { return }
+
+        if let idx = scripts.firstIndex(where: { $0.id == id }) {
+            scripts[idx].setupCheckRunning = true
+        }
+
+        let configItems = entry.manifest.config ?? []
+        let vaultRoot = entry.dir.deletingLastPathComponent().path
+
+        Task.detached(priority: .utility) { [weak self] in
+            let checks = await Self.executeSetupCheck(
+                setupURL: setupURL,
+                scriptID: id,
+                configItems: configItems,
+                vaultRoot: vaultRoot
+            )
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                if let idx = self.scripts.firstIndex(where: { $0.id == id }) {
+                    self.scripts[idx].setupChecks = checks
+                    self.scripts[idx].setupCheckRunning = false
+                    // Reflect needsSetup in the status badge without disrupting running state
+                    if self.scripts[idx].needsSetup
+                        && self.scripts[idx].status == .running
+                        || self.scripts[idx].status == .stopped {
+                        self.scripts[idx].status = .needsSetup
+                    }
+                }
+            }
+        }
+    }
+
+    private static func executeSetupCheck(
+        setupURL: URL, scriptID: String,
+        configItems: [ScriptConfigItem], vaultRoot: String
+    ) async -> [SetupCheck] {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+                process.arguments = [setupURL.path, "--check"]
+
+                // Build env: inherit + augmented PATH + config secrets + vault on PYTHONPATH
+                var env = ProcessInfo.processInfo.environment
+                env["PATH"] = Self.augmentedShellPath()
+                env["PYTHONPATH"] = vaultRoot + (env["PYTHONPATH"].map { ":\($0)" } ?? "")
+                for item in configItems {
+                    if let val = KeychainService.shared.get(scriptID: scriptID, key: item.key) {
+                        env["ASK_CONFIG_\(item.key.uppercased())"] = val
+                    }
+                }
+                process.environment = env
+                process.currentDirectoryURL = setupURL.deletingLastPathComponent()
+
+                let outPipe = Pipe()
+                process.standardOutput = outPipe
+                process.standardError = Pipe()
+
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                    let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+                    if let json = try? JSONDecoder().decode(SetupCheckOutput.self, from: data) {
+                        continuation.resume(returning: json.checks)
+                    } else {
+                        continuation.resume(returning: [])
+                    }
+                } catch {
+                    continuation.resume(returning: [])
+                }
+            }
+        }
+    }
+
+    /// Opens the setup script in an in-app streaming sheet (non-terminal path).
+    /// The caller is responsible for showing the UI; this returns an AsyncStream of output lines.
+    func setupInstallStream(id: String) -> AsyncStream<String> {
+        guard let entry = manifests[id], let setupFile = entry.manifest.setup else {
+            return AsyncStream { $0.finish() }
+        }
+        let setupURL = entry.dir.appendingPathComponent(setupFile)
+        let configItems = entry.manifest.config ?? []
+        let vaultRoot = entry.dir.deletingLastPathComponent().path
+        let scriptID = id
+
+        return AsyncStream { continuation in
+            Task.detached(priority: .userInitiated) {
+                var env = ProcessInfo.processInfo.environment
+                env["PYTHONPATH"] = vaultRoot + (env["PYTHONPATH"].map { ":\($0)" } ?? "")
+                for item in configItems {
+                    if let val = KeychainService.shared.get(scriptID: scriptID, key: item.key) {
+                        env["ASK_CONFIG_\(item.key.uppercased())"] = val
+                    }
+                }
+
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+                process.arguments = [setupURL.path, "--install"]
+                process.environment = env
+                process.currentDirectoryURL = setupURL.deletingLastPathComponent()
+
+                let outPipe = Pipe()
+                process.standardOutput = outPipe
+                process.standardError = outPipe  // merge stderr into output stream
+
+                outPipe.fileHandleForReading.readabilityHandler = { handle in
+                    let data = handle.availableData
+                    guard !data.isEmpty, let line = String(data: data, encoding: .utf8) else { return }
+                    for l in line.components(separatedBy: "\n") where !l.isEmpty {
+                        continuation.yield(l)
+                    }
+                }
+
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                } catch {
+                    continuation.yield("Error: \(error.localizedDescription)")
+                }
+                outPipe.fileHandleForReading.readabilityHandler = nil
+                continuation.finish()
+            }
+        }
+    }
+
+    /// Opens the setup script in Terminal.app for interactive installs.
+    func setupInstallInTerminal(id: String) {
+        guard let entry = manifests[id], let setupFile = entry.manifest.setup else { return }
+        let setupURL = entry.dir.appendingPathComponent(setupFile)
+        let dir = setupURL.deletingLastPathComponent().path
+        let cmd = "cd \(dir.shellEscaped) && python3 \(setupFile.shellEscaped) --install; echo; read -p 'Press Enter to close…'"
+        let appleScript = "tell application \"Terminal\" to do script \"\(cmd)\""
+        NSAppleScript(source: appleScript)?.executeAndReturnError(nil)
+    }
+}
+
+// MARK: - Helpers
+
+private struct SetupCheckOutput: Decodable {
+    let checks: [SetupCheck]
+}
+
+private extension String {
+    /// Single-quote escapes for use in shell commands.
+    var shellEscaped: String {
+        "'" + replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }

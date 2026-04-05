@@ -41,7 +41,7 @@ final class ResponsePoller {
             let scriptName = scriptManager.scripts.first(where: { $0.id == response.scriptID })?.name
                 ?? response.scriptID
 
-            actionHistory.recordBlockResponse(scriptName: scriptName, value: response.value)
+            actionHistory.recordBlockResponse(scriptName: scriptName, value: response.value, blockID: response.blockID)
 
             guard let conn = scriptManager.connection(for: response.scriptID) else {
                 print("[ResponsePoller] No connection for scriptID=\(response.scriptID)")

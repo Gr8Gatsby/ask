@@ -27,6 +27,10 @@ final class MCPConnection: @unchecked Sendable {
     var onBlockEmitted: (@Sendable (LiveBlock) -> Void)?
     /// Called when the script clears a block.
     var onBlockCleared: (@Sendable (String) -> Void)?
+    /// Routes unknown tool calls to system scripts. Returns nil if not handled.
+    var systemProxy: ((String, [String: Any]) async -> [String: Any]?)?
+    /// Additional tools from system scripts, appended to tools/list responses.
+    var systemTools: [[String: Any]] = []
 
     private let entryURL: URL
     private let blockService: BlockService
@@ -48,6 +52,11 @@ final class MCPConnection: @unchecked Sendable {
     var lastStderrSummary: String {
         stderrLines.last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
             ?? "Script exited unexpectedly"
+    }
+
+    /// All captured stderr lines (up to 50), filtered of blank lines.
+    var allStderrLines: [String] {
+        stderrLines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
     }
 
     /// Exit code and reason captured at termination time.
@@ -283,7 +292,13 @@ final class MCPConnection: @unchecked Sendable {
             }
 
         default:
-            replyError(id: id, code: -32601, message: "Unknown tool: \(name)")
+            // Try to route through a system script that declares this tool.
+            if let proxy = systemProxy,
+               let result = await proxy(name, args) {
+                reply(id: id, result: result)
+            } else {
+                replyError(id: id, code: -32601, message: "Unknown tool: \(name)")
+            }
         }
     }
 
@@ -380,6 +395,10 @@ final class MCPConnection: @unchecked Sendable {
     // MARK: - Static data
 
     private var toolsList: [[String: Any]] {
+        builtInToolsList + systemTools
+    }
+
+    private var builtInToolsList: [[String: Any]] {
         [
             [
                 "name": "emit_block",

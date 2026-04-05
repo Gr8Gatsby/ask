@@ -93,10 +93,24 @@ struct MenuBarView: View {
 
     // MARK: - Scripts
 
+    /// Scripts shown in the panel: pinned subset if any pins exist, else all non-system scripts.
+    private var displayedScripts: [ManagedScript] {
+        let all = scriptManager.scripts.filter { !$0.isSystem }
+        let pins = settings.pinnedScripts
+        if pins.isEmpty { return all }
+        // Return pinned scripts in pin order, skipping any that no longer exist
+        return pins.compactMap { id in all.first { $0.id == id } }
+    }
+
+    private var unpinnedCount: Int {
+        let all = scriptManager.scripts.filter { !$0.isSystem }
+        return all.count - displayedScripts.count
+    }
+
     private var scriptsSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Scripts")
+                Text(settings.pinnedScripts.isEmpty ? "Scripts" : "Pinned Scripts")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .textCase(.uppercase)
@@ -113,18 +127,62 @@ struct MenuBarView: View {
                 .help("Rescan vault and restart all scripts")
             }
 
-            if scriptManager.scripts.isEmpty {
+            if displayedScripts.isEmpty {
                 Text("No scripts configured")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .padding(.vertical, 4)
             } else {
                 VStack(spacing: 0) {
-                    ForEach(scriptManager.scripts) { script in
+                    ForEach(displayedScripts) { script in
                         ScriptRow(script: script, scriptManager: scriptManager)
+                            .contextMenu {
+                                pinMenuItem(for: script)
+                            }
                     }
                 }
+
+                // Footer: hint when pins are active and some scripts are hidden
+                if !settings.pinnedScripts.isEmpty && unpinnedCount > 0 {
+                    Button {
+                        openWindow(id: "scripts")
+                        dismiss()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "pin.fill")
+                                .font(.caption2)
+                            Text("\(unpinnedCount) more script\(unpinnedCount == 1 ? "" : "s") hidden  ·  Manage pins")
+                                .font(.caption2)
+                        }
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 4)
+                }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func pinMenuItem(for script: ManagedScript) -> some View {
+        if settings.isPinned(script.id) {
+            Button {
+                settings.unpinScript(script.id)
+            } label: {
+                Label("Remove from Menu Bar", systemImage: "pin.slash")
+            }
+        } else if settings.pinnedScripts.count < AppSettings.maxPins {
+            Button {
+                settings.pinScript(script.id)
+            } label: {
+                Label("Pin to Menu Bar", systemImage: "pin")
+            }
+        } else {
+            Button { } label: {
+                Label("Menu Bar Full (\(AppSettings.maxPins) max)", systemImage: "pin.slash")
+            }
+            .disabled(true)
         }
     }
 }

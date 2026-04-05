@@ -48,7 +48,10 @@ final class MessageWatcherService {
     private func poll() async {
         let since = lastChecked
         lastChecked = Date()
-        guard let messages = try? await cloudKit.fetchNewMessages(machineID: machineID, since: since),
+        // Use a 30s lookback buffer to catch messages delayed by CloudKit propagation.
+        // Re-fetching already-delivered records is safe: fetchNewMessages filters by readAt.
+        let queryFrom = since.addingTimeInterval(-30)
+        guard let messages = try? await cloudKit.fetchNewMessages(machineID: machineID, since: queryFrom),
               !messages.isEmpty
         else { return }
 

@@ -14,7 +14,10 @@ final class AppSettings {
         static let skippedDepChecks = "skippedDepChecks"
         static let brandColorOverrides = "brandColorOverrides"
         static let svgOverrides = "svgOverrides"
+        static let pinnedScripts = "pinnedScripts"
     }
+
+    static let maxPins = 5
 
     private let defaults: UserDefaults
 
@@ -55,6 +58,11 @@ final class AppSettings {
     /// Per-script SVG icon overrides, keyed by scriptID → raw SVG markup.
     var svgOverrides: [String: String] {
         didSet { defaults.set(svgOverrides, forKey: Key.svgOverrides) }
+    }
+
+    /// Ordered list of pinned script IDs shown in the menu bar panel (max 5).
+    var pinnedScripts: [String] {
+        didSet { defaults.set(pinnedScripts, forKey: Key.pinnedScripts) }
     }
 
     var isConfigured: Bool {
@@ -116,6 +124,7 @@ final class AppSettings {
 
         self.brandColorOverrides = (defaults.dictionary(forKey: Key.brandColorOverrides) as? [String: String]) ?? [:]
         self.svgOverrides = (defaults.dictionary(forKey: Key.svgOverrides) as? [String: String]) ?? [:]
+        self.pinnedScripts = defaults.stringArray(forKey: Key.pinnedScripts) ?? []
     }
 
     func isDepCheckSkipped(scriptID: String, depID: String) -> Bool {
@@ -142,6 +151,18 @@ final class AppSettings {
     func svgOverride(for scriptID: String) -> String? { svgOverrides[scriptID] }
     func setSVGOverride(scriptID: String, svg: String?) {
         if let svg { svgOverrides[scriptID] = svg } else { svgOverrides.removeValue(forKey: scriptID) }
+    }
+
+    func isPinned(_ id: String) -> Bool { pinnedScripts.contains(id) }
+
+    func pinScript(_ id: String) {
+        guard !pinnedScripts.contains(id) else { return }
+        guard pinnedScripts.count < AppSettings.maxPins else { return }
+        pinnedScripts.append(id)
+    }
+
+    func unpinScript(_ id: String) {
+        pinnedScripts.removeAll { $0 == id }
     }
 
     func feedScheduleOverride(for scriptID: String) -> String? {
