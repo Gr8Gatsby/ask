@@ -40,7 +40,6 @@ BLOCK_TILE           = 'ollama-tile'
 BLOCK_STATUS         = 'ollama-status'
 BLOCK_UPDATE         = 'ollama-update'
 BLOCK_MODEL_SELECT   = 'ollama-model-select'
-BLOCK_MODEL_REFRESH  = 'ollama-model-refresh'
 BLOCK_CHAT           = 'ollama-chat'
 BLOCK_RESPONSE       = 'ollama-response'
 BLOCK_CONTROLS       = 'ollama-controls'
@@ -305,11 +304,7 @@ async def show_model_selector(mcp: MCPClient, state: AppState, models: list[str]
         state.selected_model = value
         state.history        = []
         await mcp.clear_block(BLOCK_MODEL_SELECT)
-        await mcp.clear_block(BLOCK_MODEL_REFRESH)
         await show_chat(mcp, state)
-
-    async def on_refresh(_value: str):
-        await show_model_selector(mcp, state)
 
     await update_tile(mcp, 'Select a model', 'orange',
                       body=f'{len(models)} model(s) available')
@@ -318,12 +313,6 @@ async def show_model_selector(mcp: MCPClient, state: AppState, models: list[str]
         'title':    'Select Model',
         'options':  models,
         'selected': models[0] if models else None,
-    })
-    mcp.set_callback(BLOCK_MODEL_REFRESH, on_refresh)
-    await mcp.emit_block(BLOCK_MODEL_REFRESH, 'confirmation', {
-        'title':   'Refresh',
-        'body':    '',
-        'options': ['Refresh'],
     })
 
 
@@ -371,7 +360,6 @@ async def show_controls(mcp: MCPClient, state: AppState):
             await mcp.clear_block(BLOCK_RESPONSE)
             await mcp.clear_block(BLOCK_CONTROLS)
             await mcp.clear_block(BLOCK_MODEL_SELECT)
-            await mcp.clear_block(BLOCK_MODEL_REFRESH)
             await show_model_selector(mcp, state)
         elif value == 'Clear History':
             state.history = []
