@@ -1145,6 +1145,7 @@ private struct DetailFullView: View {
     let onClose: () -> Void
     var onAction: ((String) async -> Void)? = nil
 
+    @Environment(\.dismiss) private var dismiss
     @State private var responding = false
     @State private var selectedAction: String?
 
@@ -1169,7 +1170,10 @@ private struct DetailFullView: View {
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Close", action: onClose)
+                Button("Close") {
+                    dismiss()
+                    onClose()
+                }
                     .disabled(responding)
             }
         }
