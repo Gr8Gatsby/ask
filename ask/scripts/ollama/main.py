@@ -79,10 +79,12 @@ class MCPClient:
         self._send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         print(f'[{client_name}] MCP initialized', file=sys.stderr)
 
-    async def emit_block(self, block_id: str, block_type: str, payload: dict, ttl: int = None):
+    async def emit_block(self, block_id: str, block_type: str, payload: dict, ttl: int = None, inbox: bool = False):
         args = {'blockId': block_id, 'blockType': block_type, 'payload': payload}
         if ttl is not None:
             args['ttl'] = ttl
+        if inbox:
+            args['inbox'] = True
         await self._rpc('tools/call', {'name': 'emit_block', 'arguments': args})
 
     async def clear_block(self, block_id: str):
@@ -467,7 +469,7 @@ async def check_updates(mcp: MCPClient):
         'title':   'Ollama Update Available',
         'body':    f'Current: {current}\nLatest:  {latest}',
         'options': ['Update Now', 'Skip'],
-    }, ttl=UPDATE_CHECK_INTERVAL)
+    }, ttl=UPDATE_CHECK_INTERVAL, inbox=True)
 
 
 async def do_brew_update(mcp: MCPClient, current: str, latest: str):

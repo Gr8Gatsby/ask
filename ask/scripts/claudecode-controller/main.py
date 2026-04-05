@@ -124,10 +124,12 @@ class MCPClient:
             )
         asyncio.create_task(self._emit_start_session_block())
 
-    async def emit_block(self, block_id, block_type, payload, ttl=None):
+    async def emit_block(self, block_id, block_type, payload, ttl=None, inbox=False):
         args = {'blockId': block_id, 'blockType': block_type, 'payload': payload}
         if ttl is not None:
             args['ttl'] = ttl
+        if inbox:
+            args['inbox'] = True
         return await self._rpc('tools/call', {'name': 'emit_block', 'arguments': args})
 
     async def clear_block(self, block_id):
@@ -444,7 +446,7 @@ class MCPClient:
                     )
                     payload = {'title': body, 'body': '', 'options': options}
                     try:
-                        await self.emit_block(block_id, 'confirmation', payload, ttl=300)
+                        await self.emit_block(block_id, 'confirmation', payload, ttl=300, inbox=True)
                         print(f'[claudecode-controller] tmux prompt surfaced for {tmux_target}', file=sys.stderr)
                     except Exception as e:
                         print(f'[claudecode-controller] tmux prompt emit failed: {e}', file=sys.stderr)
@@ -1250,7 +1252,7 @@ end tell
                 del history[:-20]
             asyncio.create_task(self._emit_session_block(session_id))
         try:
-            await self.emit_block(block_id, 'confirmation', payload, ttl=300)
+            await self.emit_block(block_id, 'confirmation', payload, ttl=300, inbox=True)
             # Track so PostToolUse can wake this block if the user accepts in terminal
             if session_id:
                 key = (session_id, tool)
@@ -1301,7 +1303,7 @@ end tell
         options = msg.get('options', [])
         payload = {'title': title, 'body': body, 'options': options}
         try:
-            await self.emit_block(block_id, 'confirmation', payload, ttl=300)
+            await self.emit_block(block_id, 'confirmation', payload, ttl=300, inbox=True)
             self._active_confirmations += 1
             self._tile_body = f'{title}\n{body[:100]}' if body else title
             asyncio.create_task(self._update_tile())

@@ -285,6 +285,7 @@ struct RKBlock: Identifiable {
     let createdAt: Date
     let expiresAt: Date?
     let scriptType: String      // "tile" (default) or "feed"
+    let showsInInbox: Bool
 
     var isFeedBlock: Bool { scriptType == "feed" }
 
@@ -422,6 +423,7 @@ struct RKBlock: Identifiable {
         self.createdAt = createdAt
         self.expiresAt = record[CKSchema.RKBlock.expiresAt] as? Date
         self.scriptType = record[CKSchema.RKBlock.scriptType] as? String ?? "tile"
+        self.showsInInbox = (record[CKSchema.RKBlock.showsInInbox] as? Int64 ?? 0) != 0
     }
 }
 

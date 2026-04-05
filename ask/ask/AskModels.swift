@@ -43,6 +43,7 @@ enum CKSchema {
         static let createdAt = "createdAt"
         static let expiresAt = "expiresAt"
         static let scriptType = "scriptType"
+        static let showsInInbox = "showsInInbox"
     }
 
     enum FeedSchedule {

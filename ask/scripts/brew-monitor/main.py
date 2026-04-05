@@ -89,10 +89,12 @@ class MCPClient:
         self._send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         print('[brew-monitor] MCP initialized', file=sys.stderr)
 
-    async def emit_block(self, block_id, block_type, payload, ttl=None):
+    async def emit_block(self, block_id, block_type, payload, ttl=None, inbox=False):
         args = {'blockId': block_id, 'blockType': block_type, 'payload': payload}
         if ttl is not None:
             args['ttl'] = ttl
+        if inbox:
+            args['inbox'] = True
         await self._rpc('tools/call', {'name': 'emit_block', 'arguments': args})
 
     async def clear_block(self, block_id):
@@ -252,7 +254,7 @@ class BrewMonitor:
                 'title': title,
                 'body':  body,
                 'options': ['Upgrade All', 'Later'],
-            }, ttl=86400)
+            }, ttl=86400, inbox=True)
 
         # Emit countdown to next check
         next_sync = datetime.now(timezone.utc) + timedelta(seconds=CHECK_INTERVAL)

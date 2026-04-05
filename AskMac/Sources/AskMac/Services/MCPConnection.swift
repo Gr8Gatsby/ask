@@ -220,6 +220,7 @@ final class MCPConnection: @unchecked Sendable {
             }
             let ttl = args["ttl"] as? TimeInterval
             let expiresAt = ttl.map { Date().addingTimeInterval($0) }
+            let showsInInbox = args["inbox"] as? Bool ?? false
             // Determine if this block needs user input for CloudKit alert push delivery.
             // Only explicit interaction blocks (confirmation, prompts, pickers) trigger push.
             // agent_session blocks do NOT push — they update too frequently and the
@@ -246,7 +247,8 @@ final class MCPConnection: @unchecked Sendable {
                         blockType: blockType,
                         payload: payloadJSON,
                         expiresAt: expiresAt,
-                        requiresResponse: requiresResponse
+                        requiresResponse: requiresResponse,
+                        showsInInbox: showsInInbox
                     )
                 } catch {
                     print("[MCPConnection:\(scriptID)] emit_block CloudKit error: \(error)")
@@ -443,6 +445,8 @@ final class MCPConnection: @unchecked Sendable {
         detail: shown as a full-screen pushed view with Markdown rendering. Close button
           sends "dismissed". Use actions[] only for non-dismiss interactions.
         tile: drives the home-screen tile only; not shown in script detail view.
+        emit_block also accepts top-level argument:
+          inbox        bool?  when true, this block appears in the iOS bell menu.
 
         User responses are delivered as notifications/message with:
           data.type == "user_response", data.blockId, data.value

@@ -11,7 +11,7 @@ final class ActionInboxStore {
     func replace(machineID: String?, blocks: [RKBlock]) {
         self.machineID = machineID
 
-        let notifications = notificationGroups(from: blocks)
+        let notifications = blocks.filter(\.showsInInbox)
         let grouped = Dictionary(grouping: notifications, by: \.scriptID)
 
         groups = grouped.values.compactMap { blocks in
@@ -35,23 +35,6 @@ final class ActionInboxStore {
     func clear() {
         replace(machineID: nil, blocks: [])
     }
-
-    private func notificationGroups(from blocks: [RKBlock]) -> [RKBlock] {
-        let grouped = Dictionary(grouping: blocks, by: \.scriptID)
-
-        return grouped.values.compactMap { scriptBlocks in
-            let explicit = scriptBlocks
-                .filter(\.isInboxNotification)
-                .max(by: { $0.createdAt < $1.createdAt })
-            if let explicit {
-                return explicit
-            }
-
-            return scriptBlocks
-                .filter { $0.blockType == .tile && $0.tilePayload?.actionRequired == true }
-                .max(by: { $0.createdAt < $1.createdAt })
-        }
-    }
 }
 
 struct ActionInboxGroup: Identifiable, Equatable {
@@ -67,15 +50,6 @@ struct ActionInboxGroup: Identifiable, Equatable {
 }
 
 private extension RKBlock {
-    var isInboxNotification: Bool {
-        switch blockType {
-        case .confirmation, .prompt, .chatPrompt:
-            return true
-        default:
-            return false
-        }
-    }
-
     var inboxTitle: String {
         switch blockType {
         case .confirmation:

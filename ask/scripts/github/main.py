@@ -51,10 +51,12 @@ class MCPClient:
         self._send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         print(f'[{client_name}] MCP initialized', file=sys.stderr)
 
-    async def emit_block(self, block_id, block_type, payload, ttl=None):
+    async def emit_block(self, block_id, block_type, payload, ttl=None, inbox=False):
         args = {'blockId': block_id, 'blockType': block_type, 'payload': payload}
         if ttl is not None:
             args['ttl'] = ttl
+        if inbox:
+            args['inbox'] = True
         await self._rpc('tools/call', {'name': 'emit_block', 'arguments': args})
 
     async def clear_block(self, block_id):
@@ -551,7 +553,7 @@ class GitReposScript:
         await self.mcp.emit_block(BLOCK_COMMIT_EDIT, 'prompt', {
             'title':       f'Commit message — {repo["name"]}',
             'placeholder': placeholder,
-        }, ttl=3600)
+        }, ttl=3600, inbox=True)
 
     async def _do_commit(self, repo: dict, message: str):
         path = repo['path']
@@ -583,7 +585,7 @@ class GitReposScript:
                 f'This cannot be undone.'
             ),
             'options': ['Discard', 'Cancel'],
-        }, ttl=120)
+        }, ttl=120, inbox=True)
 
 
 # ---------------------------------------------------------------------------
