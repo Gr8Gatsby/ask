@@ -119,6 +119,7 @@ struct ScriptGroup: Identifiable {
 
 struct HomeView: View {
     @Environment(iOSCloudKitService.self) private var cloudKit
+    @Environment(ActionInboxStore.self) private var actionInbox
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var machines: [AskMachine] = []
@@ -359,6 +360,7 @@ struct HomeView: View {
             Text("Ask")
                 .font(.custom("PlaywriteNGModern-Regular", size: 22))
         }
+        NotificationBellToolbar()
     }
 
     // MARK: - Custom bottom bar (avoids UIKitToolbar subview warning on iOS 26)
@@ -488,7 +490,12 @@ struct HomeView: View {
                         .filter { $0.blockType != .activityFeed }
                         .filter { $0.blockType != .sessionEvent }
                 }
+                actionInbox.replace(machineID: machine.id, blocks: blocks)
+            } else {
+                actionInbox.clear()
             }
+        } else {
+            actionInbox.clear()
         }
         if !machines.isEmpty && Date().timeIntervalSince(lastHeartbeatAt) > 1800 {
             await cloudKit.saveDeviceHeartbeat(machineIDs: machines.map { $0.id })
@@ -574,7 +581,12 @@ struct HomeView: View {
                             consecutiveEmpty = 0
                             withAnimation(.easeOut(duration: 0.25)) { blocks = filtered }
                         }
+                        actionInbox.replace(machineID: machine.id, blocks: filtered)
+                    } else if !isEnabled {
+                        actionInbox.clear()
                     }
+                } else {
+                    actionInbox.clear()
                 }
             }
         }
@@ -936,6 +948,7 @@ struct ScriptDetailView: View {
                             .font(.headline)
                     }
                 }
+                NotificationBellToolbar()
             }
             .safeAreaInset(edge: .bottom, spacing: 0) { detailBottomBar }
             .sheet(isPresented: $showRepoPicker) {
@@ -1359,6 +1372,7 @@ struct SettingsSheetView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                NotificationBellToolbar()
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
@@ -1470,6 +1484,7 @@ struct QueueReviewSheet: View {
             .navigationTitle("Queued Actions")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                NotificationBellToolbar()
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Discard All", role: .destructive) {
                         queue.removeAll()

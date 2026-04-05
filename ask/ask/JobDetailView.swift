@@ -132,6 +132,7 @@ struct JobDetailView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        NotificationBellToolbar()
         if !autoScroll && !chunks.isEmpty {
             ToolbarItem(placement: .bottomBar) {
                 Spacer()

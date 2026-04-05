@@ -104,6 +104,7 @@ struct askApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var cloudKit = iOSCloudKitService()
     @State private var push: PushService
+    @State private var actionInbox = ActionInboxStore()
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -115,6 +116,7 @@ struct askApp: App {
         WindowGroup {
             ContentView()
                 .environment(cloudKit)
+                .environment(actionInbox)
                 .task { await push.setup() }
         }
         .modelContainer(feedHistoryContainer)

@@ -245,6 +245,7 @@ struct FeedScriptDetailView: View {
             .navigationTitle(entries.first?.scriptName ?? scriptID)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                NotificationBellToolbar()
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }

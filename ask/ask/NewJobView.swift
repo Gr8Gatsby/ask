@@ -70,6 +70,7 @@ struct NewJobView: View {
         .navigationTitle(agent.name)
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
+            NotificationBellToolbar()
             ToolbarItem(placement: .confirmationAction) {
                 if isSubmitting {
                     ProgressView().controlSize(.small)
