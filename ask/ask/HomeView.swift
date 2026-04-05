@@ -360,7 +360,6 @@ struct HomeView: View {
             Text("Ask")
                 .font(.custom("PlaywriteNGModern-Regular", size: 22))
         }
-        NotificationBellToolbar()
     }
 
     // MARK: - Custom bottom bar (avoids UIKitToolbar subview warning on iOS 26)
@@ -369,6 +368,7 @@ struct HomeView: View {
         HStack(spacing: 14) {
             machineMenuButton
             tabSwitcher
+            NotificationBellButton()
             Button { showSettings = true } label: {
                 Image(systemName: "gearshape")
             }
@@ -948,7 +948,6 @@ struct ScriptDetailView: View {
                             .font(.headline)
                     }
                 }
-                NotificationBellToolbar()
             }
             .safeAreaInset(edge: .bottom, spacing: 0) { detailBottomBar }
             .sheet(isPresented: $showRepoPicker) {
@@ -1114,6 +1113,8 @@ struct ScriptDetailView: View {
                     .background(Color.primary.opacity(0.1), in: Capsule())
                 }
                 .buttonStyle(.plain)
+
+                NotificationBellButton()
 
                 if startSessionBlock != nil {
                     Button { showRepoPicker = true } label: {
@@ -1372,7 +1373,6 @@ struct SettingsSheetView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                NotificationBellToolbar()
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
@@ -1484,7 +1484,6 @@ struct QueueReviewSheet: View {
             .navigationTitle("Queued Actions")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                NotificationBellToolbar()
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Discard All", role: .destructive) {
                         queue.removeAll()
