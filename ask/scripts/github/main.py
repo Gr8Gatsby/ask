@@ -12,6 +12,7 @@ import subprocess
 import hashlib
 import urllib.request
 import urllib.error
+import re
 
 # CRITICAL: unbuffered stdout so JSON-RPC messages reach the daemon immediately.
 sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)
@@ -157,15 +158,17 @@ def _ollama_models() -> list:
 
 
 def _ollama_generate_commit_msg(diff: str, status: str, model: str) -> str:
-    """Ask Ollama to produce a commit message for the given diff."""
+    """Ask Ollama to produce a commit subject plus a short summary."""
     truncated_diff = diff[:DIFF_MAX_CHARS] + ('\n[diff truncated]' if len(diff) > DIFF_MAX_CHARS else '')
     prompt = (
-        'Generate a concise git commit message for the following changes.\n'
+        'Generate a git commit proposal for the following changes.\n'
         'Rules:\n'
-        '- Use imperative mood ("Add feature", not "Added feature")\n'
-        '- Keep the subject line under 72 characters\n'
-        '- Be specific about what changed\n'
-        '- Return ONLY the commit message text — no quotes, no explanation\n\n'
+        '- First line: a specific imperative commit subject under 72 characters\n'
+        '- Then a blank line\n'
+        '- Then 2 to 4 short bullet points summarizing the most important changes\n'
+        '- Mention behavior changes and noteworthy implementation details, not generic filler\n'
+        '- Do not use markdown headings, code fences, or surrounding quotes\n'
+        '- Return only the proposal text\n\n'
         f'Changed files:\n{status}\n\n'
         f'Diff:\n{truncated_diff}'
     )
@@ -182,6 +185,30 @@ def _ollama_generate_commit_msg(diff: str, status: str, model: str) -> str:
     with urllib.request.urlopen(req, timeout=60) as resp:
         data = json.loads(resp.read())
     return data.get('message', {}).get('content', '').strip()
+
+
+def _split_commit_proposal(proposal: str) -> tuple[str, str]:
+    """Return (subject, details) from an Ollama proposal."""
+    lines = [line.rstrip() for line in proposal.splitlines()]
+    subject = ''
+    details_lines: list[str] = []
+    for line in lines:
+        if line.strip():
+            subject = line.strip()
+            break
+    if not subject:
+        return '', ''
+    subject = re.sub(r'^[\-\*\d\.\)\s]+', '', subject).strip()
+    seen_subject = False
+    for line in lines:
+        stripped = line.strip()
+        if not seen_subject:
+            if stripped == subject:
+                seen_subject = True
+            continue
+        details_lines.append(line)
+    details = '\n'.join(details_lines).strip()
+    return subject, details
 
 
 # ---------------------------------------------------------------------------
@@ -520,22 +547,29 @@ class GitReposScript:
         else:
             await self._show_commit_edit(repo, detail_block_id)
 
-    async def _show_commit_proposal(self, repo: dict, detail_block_id: str, message: str):
+    async def _show_commit_proposal(self, repo: dict, detail_block_id: str, proposal: str):
         await self.mcp.clear_block(detail_block_id)
+        subject, details = _split_commit_proposal(proposal)
+        if not subject:
+            await self._show_commit_edit(repo, detail_block_id)
+            return
         async def on_proposal(value: str):
             await self.mcp.clear_block(BLOCK_COMMIT_MSG)
             if value == 'Commit':
-                await self._do_commit(repo, message)
+                await self._do_commit(repo, subject, details)
             elif value == 'Edit':
-                await self._show_commit_edit(repo, detail_block_id, prefill_hint=message)
+                await self._show_commit_edit(repo, detail_block_id, prefill_hint=proposal)
             elif value == 'dismissed':
                 loop = asyncio.get_running_loop()
                 updated = await loop.run_in_executor(None, lambda: _repo_status(repo['path']))
                 await self._show_detail(updated or repo)
         self.mcp.set_callback(BLOCK_COMMIT_MSG, on_proposal)
+        body = f'**Proposed subject:**\n\n{subject}'
+        if details:
+            body += f'\n\n**Summary:**\n\n{details}'
         await self.mcp.emit_block(BLOCK_COMMIT_MSG, 'detail', {
             'title':   f'Commit {repo["name"]}',
-            'body':    f'**Proposed message:**\n\n{message}',
+            'body':    body,
             'actions': ['Commit', 'Edit'],
         }, ttl=3600)
 
@@ -549,19 +583,27 @@ class GitReposScript:
                 await self._show_commit_edit(repo, detail_block_id, prefill_hint)
                 return
             await self.mcp.clear_block(BLOCK_COMMIT_EDIT)
-            await self._do_commit(repo, value)
+            subject, details = _split_commit_proposal(value)
+            if not subject:
+                await self._show_commit_edit(repo, detail_block_id, prefill_hint)
+                return
+            await self._do_commit(repo, subject, details)
         self.mcp.set_callback(BLOCK_COMMIT_EDIT, on_message)
         await self.mcp.emit_block(BLOCK_COMMIT_EDIT, 'prompt', {
             'title':       f'Commit message — {repo["name"]}',
             'placeholder': placeholder,
+            'multiline':   True,
         }, ttl=3600, inbox=True)
 
-    async def _do_commit(self, repo: dict, message: str):
+    async def _do_commit(self, repo: dict, subject: str, details: str = ''):
         path = repo['path']
+        commit_cmd = ['git', '-C', path, 'commit', '-m', subject]
+        if details:
+            commit_cmd += ['-m', details]
         await self._run_git_op(
             repo, None, 'Committing…',
             ['git', '-C', path, 'add', '-A'],
-            then=['git', '-C', path, 'commit', '-m', message]
+            then=commit_cmd
         )
 
     async def _confirm_discard(self, repo: dict, detail_block_id: str):
