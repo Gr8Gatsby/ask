@@ -9,15 +9,17 @@ struct SessionRowView: View {
     let confirmationCount: Int
 
     var body: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(payload.isWorking == true ? Color.blue : Color(.systemGray4))
-                .frame(width: 8, height: 8)
+        HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(payload.project)
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                    .lineLimit(1)
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(payload.isWorking == true ? Color.blue : Color(.systemGray4))
+                        .frame(width: 8, height: 8)
+                    Text(payload.project)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .lineLimit(1)
+                }
                 Group {
                     if let msg = payload.lastMessage, !msg.isEmpty {
                         Text(msg.components(separatedBy: "\n").first(where: { !$0.isEmpty }) ?? msg)
