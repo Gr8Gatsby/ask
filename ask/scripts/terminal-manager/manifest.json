@@ -1,0 +1,72 @@
+{
+  "id": "terminal-manager",
+  "name": "Terminal Manager",
+  "type": "system",
+  "version": "1.4.1",
+  "description": "Local terminal session registry and TUI detector. Tools are available to all scripts via AskMac MCP — not exposed to iPhone.",
+  "entry": "main.py",
+  "tools": [
+    {
+      "name": "register_session",
+      "description": "Register a terminal session for monitoring. Called by app scripts when a session starts.",
+      "params": [
+        { "name": "session_id",   "type": "string",  "required": true },
+        { "name": "app_id",       "type": "string",  "required": true },
+        { "name": "tty",          "type": "string",  "required": false },
+        { "name": "tmux_target",  "type": "string",  "required": false },
+        { "name": "hook",         "type": "object",  "required": false }
+      ]
+    },
+    {
+      "name": "unregister_session",
+      "description": "Remove a session from the registry.",
+      "params": [
+        { "name": "session_id", "type": "string", "required": true }
+      ]
+    },
+    {
+      "name": "detect_tui",
+      "description": "Run hook patterns against recent session output. Returns first match or null.",
+      "params": [
+        { "name": "session_id", "type": "string", "required": true }
+      ]
+    },
+    {
+      "name": "read_output",
+      "description": "Return recent output lines from a session.",
+      "params": [
+        { "name": "session_id", "type": "string",  "required": true },
+        { "name": "lines",      "type": "integer", "required": false }
+      ]
+    },
+    {
+      "name": "send_key",
+      "description": "Send a named key to a session.",
+      "params": [
+        { "name": "session_id", "type": "string", "required": true },
+        { "name": "key",        "type": "string", "required": true }
+      ]
+    },
+    {
+      "name": "send_text",
+      "description": "Clear the current input line, type text, press Enter.",
+      "params": [
+        { "name": "session_id", "type": "string", "required": true },
+        { "name": "text",       "type": "string", "required": true }
+      ]
+    },
+    {
+      "name": "send_raw",
+      "description": "Write a raw string to the session without modification.",
+      "params": [
+        { "name": "session_id", "type": "string", "required": true },
+        { "name": "text",       "type": "string", "required": true }
+      ]
+    },
+    {
+      "name": "list_sessions",
+      "description": "Return all registered sessions.",
+      "params": []
+    }
+  ]
+}
