@@ -33,17 +33,20 @@ git push -u origin HEAD
 gh pr list --head $(git branch --show-current) --json number,url,title
 ```
 
-If no PR exists, create one:
+If no PR exists, create one. Use the branch name to derive a title (strip the `feat/` prefix and replace `-` with spaces):
 ```bash
-gh pr create --title "$(git log origin/main..HEAD --oneline | head -5 | tail -1 | sed 's/^[a-f0-9]* //')" \
-  --body "Feature work for v{version} release." \
+BRANCH=$(git branch --show-current)
+TITLE=$(echo "$BRANCH" | sed 's|feat/||;s|-| |g')
+gh pr create --title "$TITLE" \
+  --body "Feature work included in v{version} release." \
   --base main
 ```
 
 **1d. Merge the PR**
 
+Use `--merge` (not squash) to preserve individual commit history:
 ```bash
-gh pr merge --squash --delete-branch
+gh pr merge --merge --delete-branch
 ```
 
 Wait for it to complete, then:
