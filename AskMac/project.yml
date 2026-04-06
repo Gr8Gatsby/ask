@@ -58,6 +58,7 @@ targets:
     entitlements:
       path: Sources/AskMac/AskMac.entitlements
       properties:
+        com.apple.application-identifier: B5J28L8ARB.com.kevinhill.askmac
         com.apple.developer.icloud-container-identifiers:
           - iCloud.simple.ask
         com.apple.developer.icloud-services:

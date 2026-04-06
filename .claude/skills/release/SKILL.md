@@ -215,7 +215,13 @@ This takes 10–20 minutes and does the following:
 11. Commits and pushes `docs/appcast.xml` to main
 12. Creates GitHub Release with **three artifacts**: `AskMac-{version}.pkg`, `AskMac-{version}-installer.dmg`, `AskMac-{version}.dmg`
 
-**Note on stapling:** `xcrun stapler` is broken on macOS 26 (Error 65 — known Apple regression, issue #32). The build script detects macOS 26+ and skips stapling. The `staple-release` GitHub Actions workflow automatically runs on `macos-15` (Sequoia) after publish and staples all three artifacts. Monitor CI to confirm stapling succeeded before telling users to download.
+**Note on stapling:** `xcrun stapler` may fail with Error 65 locally. This is NOT always a macOS version regression — it can be caused by an SSL certificate mismatch on Apple's `oscdn.apple.com` CDN at the user's network edge (Akamai routing issue). Before assuming a build problem, verify:
+```bash
+curl -v --max-time 5 https://oscdn.apple.com/ 2>&1 | grep -E "subjectAltName|SSL|error"
+```
+If you see "subjectAltName does not match", the CDN has an SSL issue and stapling will fail locally regardless of your build. The `staple-release` GitHub Actions workflow runs on `macos-15` (Sequoia) after publish and staples all four artifacts (PKG, installer DMG, Sparkle DMG, app zip). Monitor CI to confirm stapling succeeded.
+
+**Note on local Gatekeeper testing after a CDN SSL issue:** If `oscdn.apple.com` has the SSL mismatch on your machine, `spctl --assess` will always return "Unnotarized Developer ID" for freshly-downloaded files even when properly notarized and CI-stapled. This does NOT mean the app is broken for users — it means the local validation check cannot reach Apple's CDN. Users on other networks will see normal Gatekeeper approval. To test locally, bypass with right-click > Open or System Settings > Privacy & Security > Open Anyway (this caches the approval and won't recur).
 
 If the build fails, diagnose and stop — do not proceed to the iOS upload.
 
@@ -234,7 +240,7 @@ If it failed or didn't trigger, run manually:
 gh workflow run staple-release.yml --repo Gr8Gatsby/ask --field tag=v{version}
 ```
 
-Wait for completion, then verify all three artifacts are stapled on Sequoia (the CI log will show "The staple and validate action worked!" for each).
+Wait for completion, then verify all four artifacts are stapled on Sequoia (the CI log will show "The staple and validate action worked!" for PKG, installer DMG, Sparkle DMG, and the `.app` inside the app zip).
 
 ---
 
@@ -319,5 +325,20 @@ test -f ~/.appstoreconnect/private_keys/AuthKey_Q2A223X6SQ.p8 || echo "MISSING: 
 - A new script was added to the installer → create its `installer/scripts/{id}/postinstall`
 
 **Note:** System scripts (`"type": "system"` in `manifest.json`) are bundled into the app but never user-installable — excluded from PKG automatically. Do not add them to `distribution.xml`.
+
+**Entitlements check** — before building, verify `AskMac/Sources/AskMac/AskMac.entitlements` contains ALL required entitlements. Missing entitlements cause silent runtime failures even when the build succeeds and notarization is accepted. Required entitlements for this app:
+
+```bash
+grep -E "application-identifier|icloud-container|icloud-services|network.client" \
+  AskMac/Sources/AskMac/AskMac.entitlements
+```
+
+Must show all four keys. If any are missing, check `AskMac/project.yml` — the `entitlements.properties` block is the source of truth. xcodegen regenerates the entitlements file from project.yml on every run, so edits to the `.entitlements` file alone will be lost. Always edit `project.yml`.
+
+Critical entitlements and what breaks without them:
+- `com.apple.application-identifier` (`B5J28L8ARB.com.kevinhill.askmac`) — **required for CloudKit**. Missing this causes "Trying to initialize a container without an application ID" at runtime. Xcode adds it automatically from the provisioning profile, but our re-signing step in `build-release.sh` uses the entitlements file directly — if it's absent there, it gets stripped.
+- `com.apple.developer.icloud-container-identifiers` — identifies the CloudKit container
+- `com.apple.developer.icloud-services` — enables CloudKit access
+- `com.apple.security.network.client` — allows outbound network connections
 
 If anything is missing, stop and show the user what needs to be fixed before proceeding.
