@@ -800,6 +800,7 @@ If the Mac is offline or has not polled recently, the message remains in a trans
 
 | Date | Change |
 |---|---|
+| 2026-04-06 | v0.7.4: stable machine identity via IOPlatformUUID (survives reinstalls), CloudKit environment indicator in Mac and iOS settings |
 | 2026-04-06 | v0.7.3: fix CloudKit sync failure on fresh install (missing application-identifier entitlement), improved release pipeline with Gatekeeper-compatible stapling |
 | 2026-04-06 | v0.7.2: Feed sparkline (24h bar chart), brew-monitor feed items, codex-2 interactive mode + headless badge, heartbeat last_message fix, compact inline approval cards, markdown in session chat, unified alpha/beta/stable release pipeline |
 | 2026-04-03 | iOS: tool activity folded into session card (collapsible ActivityHistoryCard with count + time span); activity_feed standalone card suppressed; chat injects activity group cards after each work burst |
