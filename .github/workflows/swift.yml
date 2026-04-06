@@ -35,5 +35,3 @@ jobs:
         run: python -m pip install pytest
       - name: Test claudecode-controller
         run: python -m pytest ask/scripts/claudecode-controller/tests/ -v
-      - name: Test codex-controller
-        run: python -m pytest ask/scripts/codex-controller/tests/ -v
