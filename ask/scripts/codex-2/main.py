@@ -77,18 +77,6 @@ def _map_tool_name(tool: str) -> str:
 
 # ── Process helpers ───────────────────────────────────────────────────────────
 
-def _has_tmux_client(session_name: str) -> bool:
-    """Return True if any tmux client is currently attached to the named session."""
-    try:
-        r = subprocess.run(
-            [TMUX, 'list-clients', '-F', '#{client_session}', '-t', session_name],
-            capture_output=True, text=True, timeout=3,
-        )
-        return r.returncode == 0 and bool(r.stdout.strip())
-    except Exception:
-        return False
-
-
 def _pid_running(pid: int) -> bool:
     """Return True if the process with the given PID is still alive."""
     if not pid:
@@ -718,6 +706,7 @@ class CodexController:
         while True:
             await asyncio.sleep(30)
             try:
+                _log(f'Heartbeat: {len(self._sessions)} session(s)')
                 # Validate existing sessions — clean up any whose process died
                 for session_id in list(self._sessions.keys()):
                     info = self._sessions.get(session_id, {})
@@ -727,12 +716,12 @@ class CodexController:
                         asyncio.create_task(self._handle_session_stop(
                             {'session_id': session_id, 'last_message': 'Session ended'}))
                         continue
-                    # Infer is_headless for sessions that predate this field:
-                    # no attached tmux client means no terminal window → headless.
+                    # Sessions that predate is_headless tracking: default to headless.
+                    # We can't reliably detect launch mode for pre-existing sessions
+                    # (tmux list-clients returns true even when detached in background).
+                    # User can always tap ghost → Interactive to open a window.
                     if 'is_headless' not in info:
-                        tmux_target = info.get('tmux_target', '')
-                        session_name = tmux_target.split(':')[0] if tmux_target else 'codex'
-                        info['is_headless'] = not _has_tmux_client(session_name)
+                        info['is_headless'] = True
                     # Refresh session block TTL so it doesn't expire while we're running.
                     # Use force=True to bypass dedup — content may be unchanged but
                     # CloudKit needs the TTL refreshed or the record disappears.
