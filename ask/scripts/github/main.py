@@ -379,8 +379,8 @@ class GitReposScript:
             label, color = 'No repos found', 'orange'
         elif attn > 0:
             noun = 'repo' if attn == 1 else 'repos'
-            label = f'{attn} {noun} need attention'
-            color = 'orange'
+            label = f'{attn} {noun} with uncommitted changes'
+            color = 'blue'
         else:
             label = f'All {total} repos up to date'
             color = 'green'

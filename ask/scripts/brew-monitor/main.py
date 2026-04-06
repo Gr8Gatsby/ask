@@ -195,6 +195,7 @@ class BrewMonitor:
     def __init__(self, mcp: MCPClient):
         self.mcp = mcp
         self._sync_event = asyncio.Event()
+        self._pending_outdated: list = []   # saved before upgrade so feed_item can list them
 
     async def run(self):
         while True:
@@ -236,9 +237,15 @@ class BrewMonitor:
                 'icon': 'checkmark.circle',
                 'color': 'green',
             }, ttl=CHECK_INTERVAL)
+            feed_id = f'brew-monitor-feed-{int(datetime.now(timezone.utc).timestamp())}'
+            await self.mcp.emit_block(feed_id, 'feed_item', {
+                'headline': 'Homebrew — all packages up to date',
+                'statusColor': 'green',
+            }, ttl=CHECK_INTERVAL + 300, inbox=True)
             print('[brew-monitor] emitted up-to-date block', file=sys.stderr)
         else:
             await self.mcp.clear_block(BLOCK_UP_TO_DATE)
+            self._pending_outdated = outdated
 
             count = len(outdated)
             noun  = 'update' if count == 1 else 'updates'
@@ -350,6 +357,17 @@ class BrewMonitor:
                     'icon':  'checkmark.circle',
                     'color': 'green',
                 }, ttl=30)
+                pkgs = self._pending_outdated
+                count = len(pkgs)
+                noun = 'package' if count == 1 else 'packages'
+                headline = f'Homebrew — {count} {noun} upgraded' if count else 'Homebrew — packages upgraded'
+                body = '\n'.join(f'{name}  {inst} → {avail}' for name, inst, avail in pkgs) if pkgs else None
+                feed_id = f'brew-monitor-feed-{int(datetime.now(timezone.utc).timestamp())}'
+                await self.mcp.emit_block(feed_id, 'feed_item', {
+                    'headline': headline,
+                    'body':     body,
+                    'statusColor': 'green',
+                }, ttl=86400 * 30, inbox=True)
                 await asyncio.sleep(5)
             else:
                 await self.mcp.emit_block(BLOCK_STATUS, 'status', {
@@ -357,6 +375,11 @@ class BrewMonitor:
                     'icon':  'exclamationmark.triangle',
                     'color': 'orange',
                 }, ttl=60)
+                feed_id = f'brew-monitor-feed-{int(datetime.now(timezone.utc).timestamp())}'
+                await self.mcp.emit_block(feed_id, 'feed_item', {
+                    'headline': 'Homebrew — upgrade failed',
+                    'statusColor': 'red',
+                }, ttl=86400 * 30, inbox=True)
                 await asyncio.sleep(10)
 
         except asyncio.CancelledError:

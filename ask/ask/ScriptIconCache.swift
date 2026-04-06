@@ -36,6 +36,18 @@ final class ScriptIconCache {
         save()
     }
 
+    /// Call after a confirmed successful backend fetch to prune scripts that are
+    /// no longer active. Unlike `update`, this replaces the cache exactly with
+    /// the live list — removed scripts won't linger. Falls through to no-op if
+    /// `groups` is empty so a fetch that returns zero scripts never wipes the cache.
+    func reconcile(to groups: [(id: String, name: String, sfSymbol: String?, iconData: String?)]) {
+        guard !groups.isEmpty else { return }
+        entries = groups.map {
+            CachedScriptEntry(id: $0.id, name: $0.name, sfSymbol: $0.sfSymbol, iconData: $0.iconData)
+        }
+        save()
+    }
+
     // MARK: - Private
 
     private func load() {

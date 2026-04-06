@@ -308,8 +308,7 @@ async def show_model_selector(mcp: MCPClient, state: AppState, models: list[str]
         await mcp.clear_block(BLOCK_MODEL_SELECT)
         await show_chat(mcp, state)
 
-    await update_tile(mcp, 'Select a model', 'orange',
-                      body=f'{len(models)} model(s) available')
+    await update_tile(mcp, f'{len(models)} model(s) available', 'blue')
     mcp.set_callback(BLOCK_MODEL_SELECT, on_selected)
     await mcp.emit_block(BLOCK_MODEL_SELECT, 'picker', {
         'title':    'Select Model',

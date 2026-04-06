@@ -1,6 +1,7 @@
 import SwiftUI
 import CloudKit
 import SwiftData
+import Charts
 
 // MARK: - FeedView
 
@@ -14,7 +15,7 @@ struct FeedView: View {
 
     @State private var pollTask: Task<Void, Never>?
     @State private var hasLoaded = false
-    @State private var selectedScriptID: String?
+    @State private var selectedEntry: FeedHistoryEntry?
 
     @Query(sort: \FeedHistoryEntry.createdAt, order: .reverse)
     private var history: [FeedHistoryEntry]
@@ -33,25 +34,12 @@ struct FeedView: View {
             if !hasLoaded {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if history.isEmpty {
-                ContentUnavailableView {
-                    Label("No Feed Activity", systemImage: "tray")
-                } description: {
-                    Text("Results from scheduled scripts will appear here.")
-                }
             } else {
                 feedList
             }
         }
-        .fullScreenCover(
-            isPresented: Binding(
-                get: { selectedScriptID != nil },
-                set: { if !$0 { selectedScriptID = nil } }
-            )
-        ) {
-            if let id = selectedScriptID {
-                FeedScriptDetailView(scriptID: id, entries: historyFor(id))
-            }
+        .sheet(item: $selectedEntry) { entry in
+            FeedItemDetailView(entry: entry, scriptEntries: historyFor(entry.scriptID))
         }
         .task {
             await load()
@@ -71,14 +59,24 @@ struct FeedView: View {
     private var feedList: some View {
         List {
             Section {
-                ActivitySummaryCard(history: history)
+                ActivitySparklineCard(history: history)
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
             }
 
             Section {
-                ForEach(history) { entry in
-                    FeedEntryRow(entry: entry) {
-                        selectedScriptID = entry.scriptID
+                if history.isEmpty {
+                    ContentUnavailableView {
+                        Label("No Feed Activity", systemImage: "tray")
+                    } description: {
+                        Text("Results from scheduled scripts will appear here.")
+                    }
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets())
+                } else {
+                    ForEach(history) { entry in
+                        FeedEntryRow(entry: entry) {
+                            selectedEntry = entry
+                        }
                     }
                 }
             }
@@ -129,20 +127,32 @@ struct FeedView: View {
     }
 }
 
-// MARK: - Activity summary card
+// MARK: - Activity sparkline card
 
-private struct ActivitySummaryCard: View {
+private struct ActivitySparklineCard: View {
     let history: [FeedHistoryEntry]
 
-    private var scriptIDs: [String] { Array(Set(history.map(\.scriptID))).sorted() }
-    private var lastActivity: Date? { history.map(\.createdAt).max() }
-
-    private func latest(for scriptID: String) -> FeedHistoryEntry? {
-        history.filter { $0.scriptID == scriptID }.max(by: { $0.createdAt < $1.createdAt })
+    private struct HourBucket: Identifiable {
+        let id: Int
+        let start: Date
+        let count: Int
     }
 
+    private var buckets: [HourBucket] {
+        let now = Date()
+        let cal = Calendar.current
+        return (0..<24).map { i in
+            let start = cal.date(byAdding: .hour, value: -(24 - i), to: now)!
+            let end   = cal.date(byAdding: .hour, value: -(23 - i), to: now)!
+            let count = history.filter { $0.createdAt >= start && $0.createdAt < end }.count
+            return HourBucket(id: i, start: start, count: count)
+        }
+    }
+
+    private var lastActivity: Date? { history.map(\.createdAt).max() }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Activity")
                     .font(.subheadline.weight(.semibold))
@@ -154,21 +164,21 @@ private struct ActivitySummaryCard: View {
                 }
             }
 
-            HStack(spacing: 16) {
-                ForEach(scriptIDs, id: \.self) { id in
-                    if let entry = latest(for: id) {
-                        VStack(spacing: 4) {
-                            Circle()
-                                .fill(namedColor(entry.statusColor))
-                                .frame(width: 8, height: 8)
-                            Text(entry.scriptName ?? id)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-                }
+            Chart(buckets) { bucket in
+                BarMark(
+                    x: .value("Hour", bucket.start),
+                    y: .value("Events", bucket.count)
+                )
+                .foregroundStyle(Color.secondary.opacity(0.55))
+                .cornerRadius(2)
             }
+            .chartXAxis(.hidden)
+            .chartYAxis(.hidden)
+            .frame(height: 44)
+
+            Text("\(history.count) events · 24 h")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
         .padding(.vertical, 4)
     }
@@ -219,30 +229,88 @@ private struct FeedEntryRow: View {
 struct FeedScriptDetailView: View {
     let scriptID: String
     let entries: [FeedHistoryEntry]
+
+    var body: some View {
+        List {
+            ForEach(entries) { entry in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Circle()
+                            .fill(namedColor(entry.statusColor))
+                            .frame(width: 8, height: 8)
+                        Text(entry.headline)
+                            .font(.subheadline.weight(.medium))
+                        Spacer()
+                        Text(entry.createdAt, style: .relative)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle(entries.first?.scriptName ?? scriptID)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Feed item detail view
+
+struct FeedItemDetailView: View {
+    let entry: FeedHistoryEntry
+    let scriptEntries: [FeedHistoryEntry]
     @Environment(\.dismiss) private var dismiss
+
+    private var itemBody: String? {
+        guard entry.blockTypeRaw == "feed_item",
+              let data = entry.payloadJSON.data(using: .utf8) else { return nil }
+        return (try? JSONDecoder().decode(RKFeedItemPayload.self, from: data))?.body
+    }
 
     var body: some View {
         NavigationStack {
             List {
-                ForEach(entries) { entry in
+                Section {
                     VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Circle()
-                                .fill(namedColor(entry.statusColor))
-                                .frame(width: 8, height: 8)
+                        HStack(spacing: 8) {
+                            if let color = entry.statusColor {
+                                Circle()
+                                    .fill(namedColor(color))
+                                    .frame(width: 8, height: 8)
+                            }
                             Text(entry.headline)
-                                .font(.subheadline.weight(.medium))
-                            Spacer()
-                            Text(entry.createdAt, style: .relative)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .font(.headline)
                         }
+                        Text(entry.createdAt.formatted(date: .long, time: .shortened))
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
-                    .padding(.vertical, 2)
+                    .padding(.vertical, 4)
+                }
+
+                if let body = itemBody {
+                    Section("Details") {
+                        Text(body)
+                            .font(.callout)
+                            .foregroundStyle(.primary)
+                    }
+                }
+
+                Section {
+                    NavigationLink {
+                        FeedScriptDetailView(scriptID: entry.scriptID, entries: scriptEntries)
+                    } label: {
+                        Label(
+                            entry.scriptName ?? entry.scriptID,
+                            systemImage: entry.scriptIcon ?? "doc.text"
+                        )
+                        .font(.subheadline)
+                    }
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle(entries.first?.scriptName ?? scriptID)
+            .navigationTitle(entry.scriptName ?? entry.scriptID)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
