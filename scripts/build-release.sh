@@ -161,6 +161,7 @@ echo "==> Bundling scripts into app…"
 BUNDLE_SCRIPTS="$APP_PATH/Contents/Resources/Scripts"
 mkdir -p "$BUNDLE_SCRIPTS"
 for script_dir in "$SCRIPTS_SRC"/*/; do
+    [[ -f "$script_dir/manifest.json" ]] || continue
     dest="$BUNDLE_SCRIPTS/$(basename "$script_dir")"
     rsync -a --exclude='.build' --exclude='*.xcodeproj' "$script_dir" "$dest/"
 done
@@ -196,6 +197,7 @@ pkgbuild \
     "$BUILD_DIR/pkgs/AskMac-app.pkg"
 
 for script_dir in "$SCRIPTS_SRC"/*/; do
+    [[ -f "$script_dir/manifest.json" ]] || continue
     script_name="$(basename "$script_dir")"
     version=$(python3 -c \
         "import json; d=json.load(open('$script_dir/manifest.json')); print(d.get('version','1.0'))")
@@ -219,7 +221,7 @@ get_ver() {
 sed -i '' "s/ASKMAC_VERSION/$VERSION/g"                       "$DIST_XML"
 sed -i '' "s/BREW_MONITOR_VERSION/$(get_ver brew-monitor)/g"  "$DIST_XML"
 sed -i '' "s/CLAUDECODE_VERSION/$(get_ver claudecode-controller)/g" "$DIST_XML"
-sed -i '' "s/CODEX_VERSION/$(get_ver codex-controller)/g"     "$DIST_XML"
+sed -i '' "s/CODEX_VERSION/$(get_ver codex-2)/g"              "$DIST_XML"
 sed -i '' "s/GITHUB_VERSION/$(get_ver github)/g"              "$DIST_XML"
 sed -i '' "s/OLLAMA_VERSION/$(get_ver ollama)/g"              "$DIST_XML"
 

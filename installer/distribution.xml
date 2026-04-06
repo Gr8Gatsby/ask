@@ -8,7 +8,7 @@
         <line choice="app"/>
         <line choice="brew-monitor"/>
         <line choice="claudecode-controller"/>
-        <line choice="codex-controller"/>
+        <line choice="codex-2"/>
         <line choice="github"/>
         <line choice="ollama"/>
     </choices-outline>
@@ -37,11 +37,11 @@
         <pkg-ref id="com.kevinhill.askmac.script.claudecode-controller"/>
     </choice>
 
-    <choice id="codex-controller"
+    <choice id="codex-2"
             title="Codex Controller"
             description="Codex CLI session supervisor — routes tool-use permissions and notifications to iPhone."
             start_selected="false">
-        <pkg-ref id="com.kevinhill.askmac.script.codex-controller"/>
+        <pkg-ref id="com.kevinhill.askmac.script.codex-2"/>
     </choice>
 
     <choice id="github"
@@ -71,9 +71,9 @@
              version="CLAUDECODE_VERSION"
              onConclusion="none">script-claudecode-controller.pkg</pkg-ref>
 
-    <pkg-ref id="com.kevinhill.askmac.script.codex-controller"
+    <pkg-ref id="com.kevinhill.askmac.script.codex-2"
              version="CODEX_VERSION"
-             onConclusion="none">script-codex-controller.pkg</pkg-ref>
+             onConclusion="none">script-codex-2.pkg</pkg-ref>
 
     <pkg-ref id="com.kevinhill.askmac.script.github"
              version="GITHUB_VERSION"
