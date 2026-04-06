@@ -1395,11 +1395,31 @@ end tell
             return
         is_new = self._register_session(session_id, cwd)
         if is_new:
-            asyncio.create_task(self._emit_session_block(session_id))
+            asyncio.create_task(self._backfill_tty_and_emit(session_id, cwd))
         project = self._sessions.get(session_id, {}).get('project', 'Claude Code')
         asyncio.create_task(self.emit_block(str(uuid.uuid4()), 'session_event', {
             'event': 'started', 'project': project, 'cwd': cwd, 'ts': time.time()
         }, ttl=3600))
+
+    async def _backfill_tty_and_emit(self, session_id: str, cwd: str):
+        """Find the TTY for a freshly-started session and emit its block.
+
+        Called on SessionStart so the session appears on iOS immediately —
+        without waiting for the first PostToolUse to report the TTY.
+        Retries a few times to give the process a moment to appear in ps."""
+        for attempt in range(4):
+            if session_id not in self._sessions:
+                return
+            if self._sessions[session_id].get('tty') or self._sessions[session_id].get('tmux_target'):
+                break  # already have routing info (PostToolUse beat us here)
+            tty = await self._find_tty_for_cwd(cwd, 'claude')
+            if tty:
+                self._sessions[session_id]['tty'] = tty
+                self._save_sessions()
+                print(f'[claudecode-controller] session_start TTY found: {session_id[:8]} -> {tty}', file=sys.stderr)
+                break
+            await asyncio.sleep(1)
+        await self._emit_session_block(session_id)
 
     async def _handle_pre_compact(self, msg):
         """PreCompact hook — surface compaction as live session activity."""
