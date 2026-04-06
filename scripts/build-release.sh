@@ -82,6 +82,35 @@ for var in APPLE_ID APPLE_ID_PASSWORD APPLE_TEAM_ID; do
 done
 
 # ── Validate prerequisites ─────────────────────────────────────────────────────
+
+# Verify distribution.xml choices all have a corresponding script + installer dir.
+# Catches mismatches when scripts are archived or renamed without updating the installer.
+echo "==> Checking installer consistency…"
+DIST_CHOICES=$(python3 - <<'PYEOF'
+import xml.etree.ElementTree as ET
+tree = ET.parse('installer/distribution.xml')
+for el in tree.iter('pkg-ref'):
+    ref_id = el.get('id', '')
+    # strip com.kevinhill.askmac.script. prefix, skip app pkg-ref
+    if '.script.' in ref_id:
+        print(ref_id.split('.script.', 1)[1])
+PYEOF
+)
+CONSISTENCY_OK=true
+for script_id in $DIST_CHOICES; do
+    if [[ ! -f "$SCRIPTS_SRC/$script_id/manifest.json" ]]; then
+        echo "ERROR: distribution.xml references '$script_id' but ask/scripts/$script_id/manifest.json not found."
+        echo "  Fix: update installer/distribution.xml to match current scripts."
+        CONSISTENCY_OK=false
+    fi
+    if [[ ! -d "$INSTALLER_DIR/scripts/$script_id" ]]; then
+        echo "ERROR: distribution.xml references '$script_id' but installer/scripts/$script_id/ not found."
+        echo "  Fix: create installer/scripts/$script_id/postinstall or remove from distribution.xml."
+        CONSISTENCY_OK=false
+    fi
+done
+[[ "$CONSISTENCY_OK" == true ]] || exit 1
+
 for var in APPLE_ID APPLE_ID_PASSWORD APPLE_TEAM_ID; do
     if [[ -z "${!var:-}" ]]; then
         echo "ERROR: \$$var is not set and not found in Keychain."
@@ -198,8 +227,11 @@ pkgbuild \
 
 for script_dir in "$SCRIPTS_SRC"/*/; do
     [[ -f "$script_dir/manifest.json" ]] || continue
+    # Skip system scripts (type=system in manifest) and scripts with no installer entry
+    script_type=$(python3 -c "import json; d=json.load(open('$script_dir/manifest.json')); print(d.get('type','user'))" 2>/dev/null)
+    [[ "$script_type" == "system" ]] && continue
     script_name="$(basename "$script_dir")"
-    [[ -d "$INSTALLER_DIR/scripts/$script_name" ]] || continue  # skip system/non-installable scripts
+    [[ -d "$INSTALLER_DIR/scripts/$script_name" ]] || continue  # safety fallback
     version=$(python3 -c \
         "import json; d=json.load(open('$script_dir/manifest.json')); print(d.get('version','1.0'))")
     pkgbuild \

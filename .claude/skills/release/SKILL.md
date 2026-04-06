@@ -189,11 +189,13 @@ git push origin "v{version}" "ios-v{version}"
 
 ## Phase 6 — Build and publish Mac release
 
-Run the Mac build script, passing the version and channel (do NOT run in background — stream output):
+Run the Mac build script, passing the version and channel (do NOT run in background). Pipe through `tee` so the full log is preserved and progress is visible without flooding context:
 
 ```bash
-./scripts/build-release.sh {version} {channel}
+./scripts/build-release.sh {version} {channel} 2>&1 | tee /tmp/build-{version}.log | grep -E "^==>|^ERROR|error:|✅|SUCCEEDED|FAILED|WARNING: stapler"
 ```
+
+If the grep filter misses the failure, read the full log: `tail -50 /tmp/build-{version}.log`
 
 This takes 10–20 minutes and:
 1. Generates `AskMac.xcodeproj` via xcodegen
@@ -230,6 +232,8 @@ ASC_ISSUER_ID=$(security find-generic-password -a "$USER" -s ASC_ISSUER_ID -w) \
 
 This archives the iOS app, signs it, and uploads to App Store Connect.
 Upload takes ~5 min. Apple processes the build after upload (~10–30 min).
+
+**After upload:** Apple sends a compliance email to the Apple ID on the account asking "Does your app use encryption?" — the build will **not appear in TestFlight** until this is answered. Check the inbox for `no_reply@email.apple.com` and answer the export compliance question. The answer for this app is "Yes, but it uses only standard OS encryption (HTTPS/TLS)" — select the exempt category.
 
 ---
 
@@ -281,5 +285,12 @@ security find-generic-password -a "$USER" -s ASC_KEY_ID -w &>/dev/null || echo "
 security find-generic-password -a "$USER" -s ASC_ISSUER_ID -w &>/dev/null || echo "MISSING: ASC_ISSUER_ID in Keychain"
 test -f ~/.appstoreconnect/private_keys/AuthKey_Q2A223X6SQ.p8 || echo "MISSING: AuthKey_Q2A223X6SQ.p8"
 ```
+
+**Installer consistency check** — also verify that every script referenced in `installer/distribution.xml` has both a source directory in `ask/scripts/` and an installer scripts dir in `installer/scripts/`. The `build-release.sh` script runs this check automatically and will exit with a clear error if there's a mismatch. If it fails:
+- A script was archived → remove it from `distribution.xml` and `installer/scripts/`
+- A script was renamed → update both locations to match the new ID
+- A new script was added to the installer → create its `installer/scripts/{id}/postinstall`
+
+**Note:** System scripts (`"type": "system"` in `manifest.json`) are bundled into the app but are never user-installable — they are excluded from the PKG automatically. Do not add them to `distribution.xml`.
 
 If anything is missing, stop and show the user what needs to be fixed before proceeding.
