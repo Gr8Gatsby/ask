@@ -1378,6 +1378,15 @@ struct SettingsSheetView: View {
 
                 Section("Developer") {
                     Toggle("Show Debug Info on Cards", isOn: $showDebugInfo)
+                    LabeledContent("CloudKit Environment") {
+                        #if DEBUG
+                        Text("Development")
+                            .foregroundStyle(.orange)
+                        #else
+                        Text("Production")
+                            .foregroundStyle(.green)
+                        #endif
+                    }
                     LabeledContent("App Version") {
                         Text(appVersion)
                             .foregroundStyle(.secondary)
