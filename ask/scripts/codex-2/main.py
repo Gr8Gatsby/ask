@@ -517,6 +517,7 @@ class CodexController:
             'project': project,
             'cwd': cwd,
             'is_working': info.get('is_working', False),
+            'is_headless': info.get('is_headless', False),
         }
         # Include last agent message if available (captured from PostToolUse hook)
         if last_msg := info.get('last_message'):
@@ -990,6 +991,7 @@ class CodexController:
         # Register the session immediately — don't wait for zsh login startup
         if pane_target:
             synth_id = f'tmux-{pane_target}'
+            is_headless = not self._settings.get('interactive', True)
             if synth_id not in self._sessions:
                 pid = _get_pane_pid(pane_target)
                 await self._handle_session_active({
@@ -999,6 +1001,10 @@ class CodexController:
                     'tmux_target': pane_target,
                     'pid': pid,
                 })
+            # Tag with the mode it was launched in (after _handle_session_active creates the entry)
+            if synth_id in self._sessions:
+                self._sessions[synth_id]['is_headless'] = is_headless
+                await self._emit_session_tile(synth_id, force=True)
 
         # Open a Terminal.app window attached to the new pane if interactive mode is on
         if self._settings.get('interactive', True) and pane_target:
@@ -1294,6 +1300,20 @@ class CodexController:
                 subprocess.run([TMUX, 'send-keys', '-t', tmux_target, 'C-c'],
                                capture_output=True, timeout=3)
                 _log(f'Sent C-c x2 to {tmux_target}')
+            return
+        elif value == '__go_interactive__':
+            # User tapped the ghost button — open a Terminal.app window for this session
+            info = self._sessions.get(session_id, {})
+            tmux_target = info.get('tmux_target', '')
+            if tmux_target:
+                win_target = tmux_target.rsplit('.', 1)[0]
+                attach_cmd = f'tmux attach-session -t {win_target}'
+                osascript_script = f'tell application "Terminal" to do script "{attach_cmd}"'
+                subprocess.Popen(['osascript', '-e', osascript_script],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                _log(f'Go interactive: opened Terminal.app for {win_target}')
+                info['is_headless'] = False
+                self._schedule_session_tile(session_id)
             return
         elif '-menu-' in block_id:
             # Value is "N  option text" — extract the leading number to send to tmux

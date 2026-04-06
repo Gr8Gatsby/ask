@@ -1,7 +1,7 @@
 {
   "id": "codex-2",
   "name": "Codex",
-  "version": "1.5.7",
+  "version": "1.5.8",
   "description": "Codex CLI session supervisor — uses terminal-manager for TUI detection",
   "entry": "main.py",
   "icon": "sparkles",

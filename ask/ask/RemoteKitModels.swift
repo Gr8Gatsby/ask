@@ -94,6 +94,7 @@ struct RKAgentSessionPayload: Codable {
     let currentPreview: String?
     let toolHistory: [ToolHistoryEntry]?
     let permissionMode: String?
+    let isHeadless: Bool?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
@@ -108,6 +109,7 @@ struct RKAgentSessionPayload: Codable {
         case currentPreview = "current_preview"
         case toolHistory = "tool_history"
         case permissionMode = "permission_mode"
+        case isHeadless = "is_headless"
     }
 
     /// Parses `brandColor` hex string (e.g. `#74AA9C`) into a SwiftUI Color.
