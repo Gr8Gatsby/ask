@@ -277,6 +277,23 @@ productbuild \
     --sign "$SIGN_PKG" \
     "$PKG_PATH"
 
+# ── Notarize the .app bundle (via zip) ────────────────────────────────────────
+# The notarization ticket must be stapled INTO the .app bundle itself — not just
+# the outer DMG/PKG container — so that Gatekeeper can verify the app offline
+# after it is extracted or installed. We submit a zip of the .app for notarization,
+# then staple the ticket directly into the .app. DMGs/PKGs are built AFTER this so
+# the .app they contain already carries its embedded ticket.
+echo "==> Notarizing .app bundle (via zip)…"
+APP_ZIP="$BUILD_DIR/AskMac-${VERSION}.app.zip"
+ditto -c -k --keepParent "$APP_PATH" "$APP_ZIP"
+xcrun notarytool submit "$APP_ZIP" \
+    --apple-id "$APPLE_ID" \
+    --password "$APPLE_ID_PASSWORD" \
+    --team-id "$APPLE_TEAM_ID" \
+    --wait
+echo "==> Stapling ticket into .app bundle…"
+staple_with_retry "$APP_PATH"
+
 # ── Notarize + staple PKG ─────────────────────────────────────────────────────
 echo "==> Notarizing PKG…"
 xcrun notarytool submit "$PKG_PATH" \
@@ -310,6 +327,7 @@ xcrun notarytool submit "$INSTALLER_DMG" \
 staple_with_retry "$INSTALLER_DMG"
 
 # ── Sparkle update DMG ────────────────────────────────────────────────────────
+# Built AFTER .app stapling so the DMG contains the ticket-embedded .app.
 echo "==> Creating Sparkle update DMG…"
 SPARKLE_DMG="$BUILD_DIR/AskMac-${VERSION}.dmg"
 create-dmg \
@@ -383,7 +401,7 @@ NOTARY_HISTORY=$(xcrun notarytool history \
     --password "$APPLE_ID_PASSWORD" \
     --team-id "$APPLE_TEAM_ID" 2>/dev/null)
 
-for artifact in "$PKG_PATH" "$INSTALLER_DMG" "$SPARKLE_DMG"; do
+for artifact in "$PKG_PATH" "$INSTALLER_DMG" "$SPARKLE_DMG" "$APP_ZIP"; do
     name="$(basename "$artifact")"
 
     if [[ ! -f "$artifact" ]]; then
@@ -443,14 +461,20 @@ gh release create "v${VERSION}" \
     $PRERELEASE_FLAG \
     "$INSTALLER_DMG" \
     "$SPARKLE_DMG" \
-    "$PKG_PATH"
+    "$PKG_PATH" \
+    "$APP_ZIP"
 
 echo ""
 echo "✅ Release complete"
 echo "   PKG           : $PKG_PATH"
 echo "   Installer DMG : $INSTALLER_DMG"
 echo "   Sparkle DMG   : $SPARKLE_DMG"
+echo "   App ZIP       : $APP_ZIP  ← CI will staple the .app inside this"
 echo "   GitHub Release: https://github.com/Gr8Gatsby/ask/releases/tag/v${VERSION}"
 echo ""
-echo "   ⏳ The staple-release CI workflow will staple all artifacts on macOS Sequoia."
+echo "   ⏳ The staple-release CI workflow will run on macOS Sequoia and:"
+echo "      1. Staple PKG and DMG containers"
+echo "      2. Staple the .app bundle inside the zip and re-upload"
+echo "      → AskMac-${VERSION}.app.zip will contain a properly stapled .app"
+echo "        that passes Gatekeeper on macOS 26+ (drag to Applications to install)"
 echo "      Monitor: https://github.com/Gr8Gatsby/ask/actions"

@@ -1,8 +1,15 @@
 name: Staple Release Artifacts
 
 # Runs on macOS Sequoia (15.x) to staple notarization tickets to PKG and DMG.
-# Needed because xcrun stapler fails on macOS Tahoe 26.x (Error 65 — CloudKit
-# ticket validation broken in current production macOS). See issue #32.
+# Also staples the .app bundle itself and re-uploads it as AskMac-{version}.app.zip,
+# which is the correct format for Gatekeeper on macOS 26+: the .app bundle must carry
+# an embedded ticket, not just the outer DMG container.
+#
+# Background: on macOS Tahoe 26.x, Gatekeeper cannot verify tickets embedded in DMG or
+# PKG containers (Error 65 regression). It CAN verify tickets embedded in .app bundles.
+# Providing a stapled .app.zip lets users install by drag-drop without hitting this bug.
+# See: https://github.com/Gr8Gatsby/ask/issues/32
+#
 # Triggered automatically when a release is published, or manually for a specific tag.
 
 on:
@@ -25,39 +32,37 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            VERSION="${{ inputs.tag }}"
           else
             echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+            VERSION="${{ github.event.release.tag_name }}"
           fi
+          # Strip 'v' prefix for filenames (v0.7.2 → 0.7.2)
+          echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Download PKG and DMG from release
+      - name: Download artifacts from release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
+          VERSION="${{ steps.tag.outputs.version }}"
           echo "Downloading artifacts for $TAG…"
           gh release download "$TAG" \
             --repo "${{ github.repository }}" \
             --pattern "AskMac-*.dmg" \
             --pattern "AskMac-*.pkg" \
+            --pattern "AskMac-${VERSION}.app.zip" \
             --dir artifacts
           ls -lh artifacts/
 
-      - name: Verify notarization before stapling
-        run: |
-          for f in artifacts/AskMac-*.pkg artifacts/AskMac-*.dmg; do
-            [[ -f "$f" ]] || continue
-            echo "==> $(basename $f)"
-            spctl --assess --verbose --type install "$f" 2>&1 || true
-          done
-
-      - name: Staple all artifacts
+      - name: Staple PKG and DMG containers
         id: staple
         run: |
           STAPLED=""
           FAILED=""
           for f in artifacts/AskMac-*.pkg artifacts/AskMac-*.dmg; do
             [[ -f "$f" ]] || continue
-            name="$(basename $f)"
+            name="$(basename "$f")"
             echo "==> Stapling $name…"
             if xcrun stapler staple "$f"; then
               echo "    ✅ Stapled $name"
@@ -67,33 +72,74 @@ jobs:
               FAILED="$FAILED $name"
             fi
           done
-          # Export for later steps (trim leading space)
           echo "stapled=${STAPLED# }" >> "$GITHUB_OUTPUT"
           echo "failed=${FAILED# }" >> "$GITHUB_OUTPUT"
-          # Don't fail here — upload what we have, report at end
+
+      - name: Staple .app bundle and repack zip
+        id: staple_app
+        run: |
+          VERSION="${{ steps.tag.outputs.version }}"
+          APP_ZIP="artifacts/AskMac-${VERSION}.app.zip"
+          if [[ ! -f "$APP_ZIP" ]]; then
+            echo "No app zip found at $APP_ZIP — skipping (build may predate this feature)"
+            echo "stapled_app=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "==> Extracting .app from zip…"
+          mkdir -p /tmp/app-staple
+          ditto -x -k "$APP_ZIP" /tmp/app-staple/
+          APP_PATH=$(find /tmp/app-staple -maxdepth 1 -name "*.app" | head -1)
+          if [[ -z "$APP_PATH" ]]; then
+            echo "ERROR: No .app found inside $APP_ZIP"
+            echo "stapled_app=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "==> Stapling $(basename "$APP_PATH")…"
+          if xcrun stapler staple "$APP_PATH"; then
+            echo "    ✅ Stapled $(basename "$APP_PATH")"
+            echo "==> Repacking stapled .app into zip…"
+            STAPLED_ZIP="/tmp/AskMac-${VERSION}.app.zip"
+            ditto -c -k --keepParent "$APP_PATH" "$STAPLED_ZIP"
+            cp "$STAPLED_ZIP" "$APP_ZIP"
+            echo "stapled_app=$APP_ZIP" >> "$GITHUB_OUTPUT"
+          else
+            echo "    ❌ Staple failed for $(basename "$APP_PATH")"
+            echo "stapled_app=" >> "$GITHUB_OUTPUT"
+          fi
+          rm -rf /tmp/app-staple /tmp/AskMac-*.app.zip
 
       - name: Re-upload stapled artifacts
-        if: steps.staple.outputs.stapled != ''
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
+          UPLOAD_LIST=""
+          [[ -n "${{ steps.staple.outputs.stapled }}" ]] && UPLOAD_LIST="$UPLOAD_LIST ${{ steps.staple.outputs.stapled }}"
+          [[ -n "${{ steps.staple_app.outputs.stapled_app }}" ]] && UPLOAD_LIST="$UPLOAD_LIST ${{ steps.staple_app.outputs.stapled_app }}"
+          if [[ -z "$UPLOAD_LIST" ]]; then
+            echo "Nothing to upload."
+            exit 0
+          fi
           echo "Uploading stapled artifacts to $TAG…"
           # shellcheck disable=SC2086
           gh release upload "$TAG" \
             --repo "${{ github.repository }}" \
             --clobber \
-            ${{ steps.staple.outputs.stapled }}
-          echo "✅ Uploaded: ${{ steps.staple.outputs.stapled }}"
+            $UPLOAD_LIST
+          echo "✅ Uploaded: $UPLOAD_LIST"
 
       - name: Report
         run: |
           if [[ -n "${{ steps.staple.outputs.stapled }}" ]]; then
-            echo "✅ Stapled and uploaded: ${{ steps.staple.outputs.stapled }}"
+            echo "✅ Stapled PKG/DMG: ${{ steps.staple.outputs.stapled }}"
+          fi
+          if [[ -n "${{ steps.staple_app.outputs.stapled_app }}" ]]; then
+            echo "✅ Stapled .app zip: ${{ steps.staple_app.outputs.stapled_app }}"
           fi
           if [[ -n "${{ steps.staple.outputs.failed }}" ]]; then
             echo "⚠️  Not stapled (missing notarization): ${{ steps.staple.outputs.failed }}"
-            echo "   These artifacts were not notarized via notarytool before upload."
-            echo "   Fix: ensure build script submits all DMGs to notarytool."
+            echo "   Fix: ensure build script submits all artifacts to notarytool."
             exit 1
           fi
