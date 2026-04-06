@@ -800,6 +800,7 @@ If the Mac is offline or has not polled recently, the message remains in a trans
 
 | Date | Change |
 |---|---|
+| 2026-04-06 | v0.7.6: fix sessions from iOS start_session not appearing on iPhone; fix setup.py failing on fresh install (missing ask_sdk.py) |
 | 2026-04-06 | v0.7.5: fix production CloudKit routing (missing icloud-container-environment entitlement caused Mac to write to development database) |
 | 2026-04-06 | v0.7.4: stable machine identity via IOPlatformUUID (survives reinstalls), CloudKit environment indicator in Mac and iOS settings |
 | 2026-04-06 | v0.7.3: fix CloudKit sync failure on fresh install (missing application-identifier entitlement), improved release pipeline with Gatekeeper-compatible stapling |
