@@ -47,7 +47,7 @@ struct SessionRowView: View {
             Spacer()
             HStack(spacing: 6) {
                 if payload.isHeadless == true {
-                    Image(systemName: "ghost")
+                    Image(systemName: "rectangle.slash")
                         .foregroundStyle(.secondary)
                         .font(.caption)
                 }
@@ -179,7 +179,7 @@ struct SessionChatView: View {
                     Button {
                         Task { await onRespond(block, "__go_interactive__") }
                     } label: {
-                        Image(systemName: "ghost")
+                        Image(systemName: "rectangle.slash")
                             .symbolRenderingMode(.hierarchical)
                     }
                 }
