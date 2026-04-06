@@ -481,6 +481,7 @@ struct HomeView: View {
             print("[HomeView] Failed to fetch machines: \(error)")
             fetchFailed = machines.isEmpty  // only flag as failed if we have nothing to show
         }
+        var blockFetchSucceeded = false
         if let machine = activeMachine {
             deviceEnabled = await cloudKit.checkDeviceEnabled(machineID: machine.id)
             if deviceEnabled, let fresh = try? await cloudKit.fetchBlocks(machineID: machine.id) {
@@ -491,6 +492,7 @@ struct HomeView: View {
                         .filter { $0.blockType != .sessionEvent }
                 }
                 actionInbox.replace(machineID: machine.id, blocks: blocks)
+                blockFetchSucceeded = true
             } else {
                 actionInbox.clear()
             }
@@ -502,10 +504,17 @@ struct HomeView: View {
             lastHeartbeatAt = Date()
         }
         hasLoaded = true
-        // Update the icon cache so the next launch has fresh data
-        iconCache.update(from: scriptGroups.map {
+        // Reconcile the icon cache against the live script list on a successful fetch
+        // so removed scripts don't persist across launches. Fall back to a merge-update
+        // on failure so the cache is preserved when the backend is unreachable.
+        let cacheGroups = scriptGroups.map {
             (id: $0.scriptID, name: $0.name, sfSymbol: $0.icon, iconData: $0.iconData)
-        })
+        }
+        if blockFetchSucceeded {
+            iconCache.reconcile(to: cacheGroups)
+        } else {
+            iconCache.update(from: cacheGroups)
+        }
         notifyNewActionGroups()
     }
 
