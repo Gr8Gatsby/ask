@@ -51,3 +51,4 @@ __pycache__/
 *.mobileprovision
 AuthKey_*.p8
 AskMac/AskMac.xcodeproj
+codesign*
