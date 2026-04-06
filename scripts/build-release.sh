@@ -412,12 +412,34 @@ for artifact in "$PKG_PATH" "$INSTALLER_DMG" "$SPARKLE_DMG" "$APP_ZIP"; do
         continue
     fi
 
-    # Codesign check
-    if codesign --verify --deep "$artifact" 2>/dev/null; then
-        sign_ok="✅ signed"
+    # Codesign check — PKGs use productsign, zip files contain signed .app
+    ext="${artifact##*.}"
+    if [[ "$ext" == "pkg" ]]; then
+        if pkgutil --check-signature "$artifact" 2>/dev/null | grep -q "Status: signed"; then
+            sign_ok="✅ signed"
+        else
+            sign_ok="❌ NOT SIGNED"
+            VERIFY_OK=false
+        fi
+    elif [[ "$ext" == "zip" ]]; then
+        # Verify the .app bundle inside the zip
+        TMPDIR_VERIFY=$(mktemp -d)
+        ditto -x -k "$artifact" "$TMPDIR_VERIFY" 2>/dev/null
+        INNER_APP=$(find "$TMPDIR_VERIFY" -name "*.app" -maxdepth 1 | head -1)
+        if [[ -n "$INNER_APP" ]] && codesign --verify --deep "$INNER_APP" 2>/dev/null; then
+            sign_ok="✅ signed"
+        else
+            sign_ok="❌ NOT SIGNED"
+            VERIFY_OK=false
+        fi
+        rm -rf "$TMPDIR_VERIFY"
     else
-        sign_ok="❌ NOT SIGNED"
-        VERIFY_OK=false
+        if codesign --verify --deep "$artifact" 2>/dev/null; then
+            sign_ok="✅ signed"
+        else
+            sign_ok="❌ NOT SIGNED"
+            VERIFY_OK=false
+        fi
     fi
 
     # Notarization check — look for most recent Accepted entry in history
