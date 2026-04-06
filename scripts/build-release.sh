@@ -373,6 +373,66 @@ git add docs/appcast.xml
 git commit -m "chore(release): update appcast for v${VERSION}"
 git push origin main
 
+# ── Verify artifacts before publishing ────────────────────────────────────────
+echo "==> Verifying artifacts before publish…"
+VERIFY_OK=true
+
+# Fetch notarization history once (covers all three artifacts)
+NOTARY_HISTORY=$(xcrun notarytool history \
+    --apple-id "$APPLE_ID" \
+    --password "$APPLE_ID_PASSWORD" \
+    --team-id "$APPLE_TEAM_ID" 2>/dev/null)
+
+for artifact in "$PKG_PATH" "$INSTALLER_DMG" "$SPARKLE_DMG"; do
+    name="$(basename "$artifact")"
+
+    if [[ ! -f "$artifact" ]]; then
+        echo "  ❌ MISSING: $name"
+        VERIFY_OK=false
+        continue
+    fi
+
+    # Codesign check
+    if codesign --verify --deep "$artifact" 2>/dev/null; then
+        sign_ok="✅ signed"
+    else
+        sign_ok="❌ NOT SIGNED"
+        VERIFY_OK=false
+    fi
+
+    # Notarization check — look for most recent Accepted entry in history
+    notary_status=$(echo "$NOTARY_HISTORY" | python3 -c "
+import sys
+lines = sys.stdin.read().splitlines()
+target = '$name'
+found = False
+for line in lines:
+    line = line.strip()
+    if line == f'name: {target}':
+        found = True
+    elif found and line.startswith('status:'):
+        print(line.split(': ', 1)[1].strip())
+        sys.exit(0)
+print('not found')
+")
+
+    if [[ "$notary_status" == "Accepted" ]]; then
+        notary_ok="✅ notarized"
+    else
+        notary_ok="❌ NOT NOTARIZED ($notary_status)"
+        VERIFY_OK=false
+    fi
+
+    echo "  $name: $sign_ok, $notary_ok"
+done
+
+if [[ "$VERIFY_OK" != true ]]; then
+    echo "ERROR: Artifact verification failed — aborting publish."
+    echo "  Check that all three artifacts were built, signed, and submitted to notarytool."
+    exit 1
+fi
+echo "  All artifacts verified ✅"
+
 # ── Publish GitHub Release ────────────────────────────────────────────────────
 echo "==> Creating GitHub Release v${VERSION} [${CHANNEL}]…"
 PRERELEASE_FLAG=""
@@ -382,10 +442,15 @@ gh release create "v${VERSION}" \
     --notes-from-tag \
     $PRERELEASE_FLAG \
     "$INSTALLER_DMG" \
-    "$SPARKLE_DMG"
+    "$SPARKLE_DMG" \
+    "$PKG_PATH"
 
 echo ""
 echo "✅ Release complete"
+echo "   PKG           : $PKG_PATH"
 echo "   Installer DMG : $INSTALLER_DMG"
 echo "   Sparkle DMG   : $SPARKLE_DMG"
 echo "   GitHub Release: https://github.com/Gr8Gatsby/ask/releases/tag/v${VERSION}"
+echo ""
+echo "   ⏳ The staple-release CI workflow will staple all artifacts on macOS Sequoia."
+echo "      Monitor: https://github.com/Gr8Gatsby/ask/actions"

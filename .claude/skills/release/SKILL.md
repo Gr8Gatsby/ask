@@ -59,10 +59,14 @@ Use `--merge` (not squash) to preserve individual commit history:
 gh pr merge --merge --delete-branch
 ```
 
+If the branch is behind main, merge main in first:
+```bash
+git fetch origin main && git merge origin/main --no-edit && git push
+```
+
 Wait for it to complete, then:
 ```bash
-git checkout main
-git pull
+git checkout main && git pull
 ```
 
 ---
@@ -192,31 +196,45 @@ git push origin "v{version}" "ios-v{version}"
 Run the Mac build script, passing the version and channel (do NOT run in background). Pipe through `tee` so the full log is preserved and progress is visible without flooding context:
 
 ```bash
-./scripts/build-release.sh {version} {channel} 2>&1 | tee /tmp/build-{version}.log | grep -E "^==>|^ERROR|error:|✅|SUCCEEDED|FAILED|WARNING: stapler"
+./scripts/build-release.sh {version} {channel} 2>&1 | tee /tmp/build-{version}.log | grep -E "^==>|^ERROR|error:|✅|❌|SUCCEEDED|FAILED|WARNING"
 ```
 
-If the grep filter misses the failure, read the full log: `tail -50 /tmp/build-{version}.log`
+If the grep filter misses a failure, read the full log: `tail -50 /tmp/build-{version}.log`
 
-This takes 10–20 minutes and:
-1. Generates `AskMac.xcodeproj` via xcodegen
-2. Archives + exports the app
-3. Signs scripts with Developer ID
-4. Builds component + distribution PKGs
-5. Notarizes + staples the PKG
-6. Creates installer and Sparkle DMGs
-7. Notarizes + staples Sparkle DMG
-8. Signs the Sparkle DMG and injects the entry into `docs/appcast.xml`:
-   - For `alpha`/`beta`: entry includes `<sparkle:channel>{channel}</sparkle:channel>` — only users enrolled in that channel receive the auto-update
-   - For `stable`: no channel tag — served to all users
-9. Commits and pushes `docs/appcast.xml` to main
-10. Creates a GitHub Release:
-    - `alpha`/`beta`: marked as **prerelease** with title "AskMac v{version} ({channel})"
-    - `stable`: standard release with title "AskMac v{version}"
-    - Both DMGs attached; release notes taken from the annotated tag (`--notes-from-tag`)
+This takes 10–20 minutes and does the following:
+1. Runs installer consistency check (distribution.xml vs ask/scripts/ vs installer/scripts/)
+2. Generates `AskMac.xcodeproj` via xcodegen
+3. Archives + exports the app
+4. Signs scripts with Developer ID
+5. Builds component + distribution PKGs
+6. Notarizes PKG
+7. Creates installer DMG → signs → **notarizes** installer DMG
+8. Creates Sparkle update DMG → signs → notarizes Sparkle DMG
+9. **Verifies all three artifacts** (signed + notarized) before publishing — exits if any fail
+10. Signs Sparkle DMG with EdDSA and injects entry into `docs/appcast.xml`
+11. Commits and pushes `docs/appcast.xml` to main
+12. Creates GitHub Release with **three artifacts**: `AskMac-{version}.pkg`, `AskMac-{version}-installer.dmg`, `AskMac-{version}.dmg`
 
-**Known warning:** "Could not validate ticket / WARNING: stapler failed" may appear — this is a known macOS Tahoe issue. The build script guards against it and the artifacts are fully notarized.
+**Note on stapling:** `xcrun stapler` is broken on macOS 26 (Error 65 — known Apple regression, issue #32). The build script detects macOS 26+ and skips stapling. The `staple-release` GitHub Actions workflow automatically runs on `macos-15` (Sequoia) after publish and staples all three artifacts. Monitor CI to confirm stapling succeeded before telling users to download.
 
 If the build fails, diagnose and stop — do not proceed to the iOS upload.
+
+---
+
+## Phase 6b — Confirm CI stapling
+
+After the GitHub release is created, the `staple-release` workflow triggers automatically. Check it completed successfully:
+
+```bash
+gh run list --repo Gr8Gatsby/ask --workflow staple-release.yml --limit 3
+```
+
+If it failed or didn't trigger, run manually:
+```bash
+gh workflow run staple-release.yml --repo Gr8Gatsby/ask --field tag=v{version}
+```
+
+Wait for completion, then verify all three artifacts are stapled on Sequoia (the CI log will show "The staple and validate action worked!" for each).
 
 ---
 
@@ -249,15 +267,24 @@ Mac
     → {prerelease (alpha/beta) | standard release (stable)}
   Sparkle: appcast.xml updated
     → {channel="alpha"/"beta" (only enrolled users) | all users (stable)}
-  Artifacts: AskMac-{version}-installer.dmg, AskMac-{version}.dmg
+  Artifacts: AskMac-{version}.pkg, AskMac-{version}-installer.dmg, AskMac-{version}.dmg
+  Stapling: CI workflow stapling on macOS Sequoia — check https://github.com/Gr8Gatsby/ask/actions
 
 iOS
   Tag: ios-v{version} pushed
   TestFlight upload complete — Apple processing (~10–30 min)
   Monitor: https://appstoreconnect.apple.com
     → {Distribute to internal testers (alpha) | external testers (beta) | submit for review (stable)}
+```
 
-CI: https://github.com/Gr8Gatsby/ask/actions
+**macOS 26 install workaround:** Due to a known Apple regression (`spctl --type install` broken for PKG installers on macOS 26, issue #32), users on macOS 26 may see "Apple could not verify..." even after CI stapling. Workaround:
+```bash
+# Option 1 — install via Terminal (bypasses Gatekeeper UI):
+sudo installer -pkg "/Volumes/Install AskMac {version}/AskMac-{version}.pkg" -target /
+
+# Option 2 — remove quarantine then open normally:
+xattr -d com.apple.quarantine ~/Downloads/AskMac-{version}.pkg
+open ~/Downloads/AskMac-{version}.pkg
 ```
 
 For `stable` releases, remind the user to:
@@ -286,11 +313,11 @@ security find-generic-password -a "$USER" -s ASC_ISSUER_ID -w &>/dev/null || ech
 test -f ~/.appstoreconnect/private_keys/AuthKey_Q2A223X6SQ.p8 || echo "MISSING: AuthKey_Q2A223X6SQ.p8"
 ```
 
-**Installer consistency check** — also verify that every script referenced in `installer/distribution.xml` has both a source directory in `ask/scripts/` and an installer scripts dir in `installer/scripts/`. The `build-release.sh` script runs this check automatically and will exit with a clear error if there's a mismatch. If it fails:
+**Installer consistency check** — the build script verifies every script in `installer/distribution.xml` has both a source directory in `ask/scripts/` and an installer scripts dir in `installer/scripts/`. If it fails:
 - A script was archived → remove it from `distribution.xml` and `installer/scripts/`
 - A script was renamed → update both locations to match the new ID
 - A new script was added to the installer → create its `installer/scripts/{id}/postinstall`
 
-**Note:** System scripts (`"type": "system"` in `manifest.json`) are bundled into the app but are never user-installable — they are excluded from the PKG automatically. Do not add them to `distribution.xml`.
+**Note:** System scripts (`"type": "system"` in `manifest.json`) are bundled into the app but never user-installable — excluded from PKG automatically. Do not add them to `distribution.xml`.
 
 If anything is missing, stop and show the user what needs to be fixed before proceeding.
