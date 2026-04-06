@@ -42,6 +42,18 @@ SIGN_PKG="Developer ID Installer"
 staple_with_retry() {
     local file="$1"
     local backup="${file}.pre-staple-backup"
+    # Detect macOS Tahoe (26.x) — xcrun stapler has a known bug on Tahoe beta where
+    # CloudKit ticket validation fails (Error 65) even for properly notarized files.
+    # See: https://github.com/Gr8Gatsby/ask/issues/32
+    local macos_major
+    macos_major=$(sw_vers -productVersion | cut -d. -f1)
+    if [[ "$macos_major" -ge 26 ]]; then
+        echo "WARNING: macOS Tahoe detected — xcrun stapler is broken on this OS (Error 65 bug)."
+        echo "         Skipping staple. The artifact IS notarized (Apple: Accepted)."
+        echo "         A GitHub Actions job on macOS Sequoia will staple the artifacts post-release."
+        echo "         Tahoe users: right-click → Open or disable Gatekeeper to install. See issue #32."
+        return 0
+    fi
     cp "$file" "$backup"
     for i in 1 2 3; do
         cp "$backup" "$file"
