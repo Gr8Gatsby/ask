@@ -38,12 +38,13 @@ jobs:
           gh release download "$TAG" \
             --repo "${{ github.repository }}" \
             --pattern "AskMac-*.dmg" \
+            --pattern "AskMac-*.pkg" \
             --dir artifacts
           ls -lh artifacts/
 
       - name: Verify notarization before stapling
         run: |
-          for f in artifacts/AskMac-*.dmg; do
+          for f in artifacts/AskMac-*.pkg artifacts/AskMac-*.dmg; do
             [[ -f "$f" ]] || continue
             echo "==> $(basename $f)"
             spctl --assess --verbose --type install "$f" 2>&1 || true
@@ -54,7 +55,7 @@ jobs:
         run: |
           STAPLED=""
           FAILED=""
-          for f in artifacts/AskMac-*.dmg; do
+          for f in artifacts/AskMac-*.pkg artifacts/AskMac-*.dmg; do
             [[ -f "$f" ]] || continue
             name="$(basename $f)"
             echo "==> Stapling $name…"
