@@ -199,6 +199,7 @@ pkgbuild \
 for script_dir in "$SCRIPTS_SRC"/*/; do
     [[ -f "$script_dir/manifest.json" ]] || continue
     script_name="$(basename "$script_dir")"
+    [[ -d "$INSTALLER_DIR/scripts/$script_name" ]] || continue  # skip system/non-installable scripts
     version=$(python3 -c \
         "import json; d=json.load(open('$script_dir/manifest.json')); print(d.get('version','1.0'))")
     pkgbuild \
