@@ -25,6 +25,8 @@ SOCKET_PATH  = os.environ.get('ASK_SOCKET_PATH',
 LOG_PATH     = os.path.expanduser('~/.ask/logs/codex-2.log')
 TILE_ID               = 'codex-2-tile'
 START_SESSION_BLOCK_ID = 'codex2-start'
+SETTINGS_BLOCK_ID     = 'codex2-settings'
+SETTINGS_PATH         = os.path.expanduser('~/.ask/codex2-settings.json')
 SESSION_TTL           = 300  # heartbeat refreshes every 30s; 300s gives buffer for MCP hiccups
 
 # Common repo search roots — scanned by start_session picker
@@ -225,6 +227,25 @@ def _write_hooks_json():
         _log(f'Could not write hooks.json: {e}', 'WARN')
 
 
+# ── Settings ──────────────────────────────────────────────────────────────────
+
+def _load_settings_file() -> dict:
+    try:
+        with open(SETTINGS_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {'interactive': True}
+
+
+def _save_settings_file(settings: dict):
+    os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
+    try:
+        with open(SETTINGS_PATH, 'w') as f:
+            json.dump(settings, f, indent=2)
+    except Exception as e:
+        _log(f'Could not save settings: {e}', 'WARN')
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _find_tmux_target(session_name: str = 'codex') -> str:
@@ -306,6 +327,8 @@ class CodexController:
         self._real_to_stable = {}         # hook UUID → stable tmux-based session_id
         self._start_repos = {}            # display name → abs path (populated by start_session)
         self._initialized = False
+        # Persistent settings (interactive mode, etc.)
+        self._settings = _load_settings_file()
         # Deduplication: last payload hash per block_id — skip emit if unchanged
         self._last_payload_hash = {}      # block_id → sha256 hex
         # Debounce: pending tile-emit tasks per session
@@ -704,8 +727,9 @@ class CodexController:
                         'status_color': 'blue',
                         'action_required': False,
                     }, ttl=600)
-                # Always refresh the start-session block to prevent TTL expiry
+                # Always refresh persistent blocks to prevent TTL expiry
                 await self._emit_start_session_block(force=True)
+                await self._emit_settings_block(force=True)
             except Exception:
                 pass
 
@@ -882,6 +906,17 @@ class CodexController:
         await self.emit_block(START_SESSION_BLOCK_ID, 'start_session', payload,
                               ttl=600, force=force)
 
+    async def _emit_settings_block(self, force: bool = False):
+        """Emit the interactive-mode settings block so the user can toggle it from iPhone."""
+        interactive = self._settings.get('interactive', True)
+        mode_label = 'Interactive' if interactive else 'Headless'
+        payload = {
+            'title': 'Session Mode',
+            'body': f'New sessions open in: {mode_label}\n\nInteractive opens a Terminal window.\nHeadless runs silently in the background.',
+            'options': ['Interactive', 'Headless'],
+        }
+        await self.emit_block(SETTINGS_BLOCK_ID, 'confirmation', payload, ttl=600, force=force)
+
     async def _launch_codex(self, repo_path: str):
         """Launch Codex in a tmux session at repo_path."""
         project = os.path.basename(repo_path.rstrip('/'))
@@ -909,6 +944,11 @@ class CodexController:
         # Auto-trust the repo so Codex skips the interactive trust prompt.
         _ensure_repo_trusted(repo_path)
 
+        # Re-install hooks immediately before launch so codex-2's hooks take
+        # precedence over any other script (e.g. codex-controller) that may
+        # have overwritten ~/.codex/hooks.json since startup.
+        _install_hooks()
+
         _log(f'Launching Codex: project={project!r} cwd={repo_path!r} bin={codex_bin!r}')
 
         # Wrap in a login shell so ~/.zshrc / ~/.zprofile is sourced and
@@ -916,11 +956,14 @@ class CodexController:
         # AskMac runs with a restricted PATH (/usr/bin:/bin:/usr/sbin:/sbin). Codex's
         # Node runtime needs 'node' in PATH for subprocess spawning, so prepend the
         # nvm bin dir and Homebrew explicitly before exec-ing codex.
+        # Also force ASK_SOCKET_PATH so that hook scripts connect to codex-2's socket
+        # regardless of which hook files are registered in hooks.json.
         shell = os.environ.get('SHELL', '/bin/zsh')
         node_bin_dir = shlex.quote(os.path.dirname(codex_bin))
         path_prefix = f'{node_bin_dir}:/opt/homebrew/bin:/usr/local/bin'
         shell_cmd = (
             f'export PATH={path_prefix}:$PATH; '
+            f'export ASK_SOCKET_PATH={shlex.quote(SOCKET_PATH)}; '
             f'cd {shlex.quote(repo_path)} && exec {shlex.quote(codex_bin)}'
         )
 
@@ -967,6 +1010,19 @@ class CodexController:
                     'tmux_target': pane_target,
                     'pid': pid,
                 })
+
+        # Open a Terminal.app window attached to the new pane if interactive mode is on
+        if self._settings.get('interactive', True) and pane_target:
+            try:
+                # Target the specific window (e.g. 'codex:2' from 'codex:2.0')
+                win_target = pane_target.rsplit('.', 1)[0]
+                attach_cmd = f'tmux attach-session -t {win_target}'
+                osascript_script = f'tell application "Terminal" to do script "{attach_cmd}"'
+                subprocess.Popen(['osascript', '-e', osascript_script],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                _log(f'Opened Terminal.app for {win_target}')
+            except Exception as e:
+                _log(f'Could not open Terminal.app: {e}', 'WARN')
 
         # Schedule a delayed pane snapshot to log what Codex shows on startup
         if pane_target:
@@ -1202,6 +1258,14 @@ class CodexController:
     async def _handle_picker_response(self, block_id: str, value: str):
         """Route a TUI menu response to the terminal."""
         # Handle global blocks first — they don't belong to a session.
+        if block_id == SETTINGS_BLOCK_ID:
+            self._settings['interactive'] = (value == 'Interactive')
+            _save_settings_file(self._settings)
+            mode = 'Interactive' if self._settings['interactive'] else 'Headless'
+            _log(f'Session mode set to: {mode}')
+            await self._emit_settings_block(force=True)
+            return
+
         if block_id == START_SESSION_BLOCK_ID:
             # value is the repo path sent by the iPhone picker
             path = self._start_repos.get(value, value)
@@ -1286,6 +1350,8 @@ class CodexController:
             }, ttl=600)
             # Emit the start-session block so the + button appears on iPhone
             await self._emit_start_session_block(force=True)
+            # Emit the interactive-mode settings block
+            await self._emit_settings_block(force=True)
             # Discover any Codex sessions already running before we started
             await self._discover_active_sessions()
         except Exception as e:

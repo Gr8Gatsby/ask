@@ -1242,6 +1242,12 @@ end tell
         payload = {'title': f'Allow {tool}?', 'body': preview, 'options': options}
         if session_id:
             payload['session_id'] = session_id
+        # Capture TTY from the permission hook — ensures the session block is surfaced
+        # even on the very first tool use before any PostToolUse has fired.
+        tty = msg.get('tty')
+        if tty and session_id and session_id in self._sessions and not self._sessions[session_id].get('tty'):
+            self._sessions[session_id]['tty'] = tty
+            self._save_sessions()
         # Update live tool activity so the session subtitle shows the pending tool
         if session_id and session_id in self._sessions:
             entry = {'tool': tool, 'preview': preview, 'ts': time.time()}
