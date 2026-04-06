@@ -71,6 +71,7 @@ private enum BlockStyle {
     static let detailFont = UIFont.preferredFont(forTextStyle: .caption2)
     static let buttonFont = UIFont.preferredFont(forTextStyle: .subheadline).withWeight(.semibold)
     static let listItemFont = UIFont.preferredFont(forTextStyle: .subheadline)
+    static let confirmationOptionFont = UIFont.preferredFont(forTextStyle: .footnote)
     static let listSubtitleFont = UIFont.preferredFont(forTextStyle: .caption2)
     static let monoFont: UIFont = {
         let size = UIFont.preferredFont(forTextStyle: .caption2).pointSize
@@ -313,7 +314,7 @@ struct ConfirmationBlockView: View {
                                     .frame(width: 9, height: 9)
                             }
                         }
-                        EmojiText(text: option, uiFont: BlockStyle.listItemFont)
+                        EmojiText(text: option, uiFont: BlockStyle.confirmationOptionFont)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }

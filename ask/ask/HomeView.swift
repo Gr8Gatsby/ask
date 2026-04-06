@@ -924,7 +924,7 @@ struct ScriptDetailView: View {
                                         await onRespond(confBlock, value)
                                     })
                                     .listRowBackground(Color.orange.opacity(0.05))
-                                    .listRowInsets(EdgeInsets(top: 0, leading: 32, bottom: 5, trailing: 16))
+                                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 5, trailing: 16))
                                 }
                             }
                         }
