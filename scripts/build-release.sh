@@ -203,6 +203,8 @@ APP_PATH="$BUILD_DIR/export/AskMac.app"
 echo "==> Bundling scripts into app…"
 BUNDLE_SCRIPTS="$APP_PATH/Contents/Resources/Scripts"
 mkdir -p "$BUNDLE_SCRIPTS"
+# Copy ask_sdk.py so bundled scripts can import it without a deployed vault
+[[ -f "$SCRIPTS_SRC/ask_sdk.py" ]] && cp "$SCRIPTS_SRC/ask_sdk.py" "$BUNDLE_SCRIPTS/ask_sdk.py"
 for script_dir in "$SCRIPTS_SRC"/*/; do
     [[ -f "$script_dir/manifest.json" ]] || continue
     dest="$BUNDLE_SCRIPTS/$(basename "$script_dir")"
