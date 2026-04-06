@@ -63,6 +63,7 @@ targets:
           - iCloud.simple.ask
         com.apple.developer.icloud-services:
           - CloudKit
+        com.apple.developer.icloud-container-environment: Production
         com.apple.security.network.client: true
     settings:
       base:

@@ -1,3 +1,4 @@
+import Security
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -2395,6 +2396,15 @@ private enum MachineSection: String, CaseIterable, Identifiable {
     }
 }
 
+/// Reads the `com.apple.developer.icloud-container-environment` entitlement
+/// from the running process's code signature. Returns "Production" or "Development".
+private func cloudKitEnvironmentFromEntitlements() -> String {
+    var error: Unmanaged<CFError>?
+    guard let task = SecTaskCreateFromSelf(nil) else { return "Development" }
+    let value = SecTaskCopyValueForEntitlement(task, "com.apple.developer.icloud-container-environment" as CFString, &error)
+    return (value as? String) ?? "Development"
+}
+
 private struct MachineDetailView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(HeartbeatService.self) private var heartbeat
@@ -2477,15 +2487,10 @@ private struct MachineDetailView: View {
                         .font(.caption)
                 }
                 LabeledContent("Environment") {
-                    #if DEBUG
-                    Text("Development")
-                        .foregroundStyle(.orange)
+                    let env = cloudKitEnvironmentFromEntitlements()
+                    Text(env)
+                        .foregroundStyle(env == "Production" ? .green : .orange)
                         .font(.caption)
-                    #else
-                    Text("Production")
-                        .foregroundStyle(.green)
-                        .font(.caption)
-                    #endif
                 }
             }
         }
