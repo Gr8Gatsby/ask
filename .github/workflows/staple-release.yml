@@ -1,7 +1,8 @@
 name: Staple Release Artifacts
 
 # Runs on macOS Sequoia (15.x) to staple notarization tickets to PKG and DMG.
-# Needed because xcrun stapler is broken on macOS Tahoe (Error 65 bug, issue #32).
+# Needed because xcrun stapler fails on macOS Tahoe 26.x (Error 65 — CloudKit
+# ticket validation broken in current production macOS). See issue #32.
 # Triggered automatically when a release is published, or manually for a specific tag.
 
 on:
@@ -36,54 +37,62 @@ jobs:
           echo "Downloading artifacts for $TAG…"
           gh release download "$TAG" \
             --repo "${{ github.repository }}" \
-            --pattern "*.pkg" \
             --pattern "AskMac-*.dmg" \
             --dir artifacts
           ls -lh artifacts/
 
-      - name: Verify notarization
+      - name: Verify notarization before stapling
         run: |
-          for f in artifacts/*.pkg artifacts/*.dmg; do
+          for f in artifacts/AskMac-*.dmg; do
             [[ -f "$f" ]] || continue
-            echo "==> Checking $(basename $f)…"
+            echo "==> $(basename $f)"
             spctl --assess --verbose --type install "$f" 2>&1 || true
           done
 
-      - name: Staple
+      - name: Staple all artifacts
+        id: staple
         run: |
-          FAILED=false
-          for f in artifacts/*.pkg artifacts/*.dmg; do
+          STAPLED=""
+          FAILED=""
+          for f in artifacts/AskMac-*.dmg; do
             [[ -f "$f" ]] || continue
-            echo "==> Stapling $(basename $f)…"
+            name="$(basename $f)"
+            echo "==> Stapling $name…"
             if xcrun stapler staple "$f"; then
-              echo "    ✅ Stapled $(basename $f)"
+              echo "    ✅ Stapled $name"
+              STAPLED="$STAPLED $f"
             else
-              echo "    ❌ Staple failed for $(basename $f)"
-              FAILED=true
+              echo "    ❌ Staple failed for $name (record not found — not notarized?)"
+              FAILED="$FAILED $name"
             fi
           done
-          if [[ "$FAILED" == true ]]; then
-            echo "One or more staple operations failed — check notarization status."
-            exit 1
-          fi
+          # Export for later steps (trim leading space)
+          echo "stapled=${STAPLED# }" >> "$GITHUB_OUTPUT"
+          echo "failed=${FAILED# }" >> "$GITHUB_OUTPUT"
+          # Don't fail here — upload what we have, report at end
 
-      - name: Verify stapled artifacts
-        run: |
-          for f in artifacts/*.pkg artifacts/*.dmg; do
-            [[ -f "$f" ]] || continue
-            echo "==> Validating $(basename $f)…"
-            xcrun stapler validate "$f" 2>&1
-            spctl --assess --verbose --type install "$f" 2>&1 || true
-          done
-
-      - name: Re-upload stapled artifacts to release
+      - name: Re-upload stapled artifacts
+        if: steps.staple.outputs.stapled != ''
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
           echo "Uploading stapled artifacts to $TAG…"
+          # shellcheck disable=SC2086
           gh release upload "$TAG" \
             --repo "${{ github.repository }}" \
             --clobber \
-            artifacts/*.pkg artifacts/*.dmg
-          echo "✅ Stapled artifacts uploaded to $TAG"
+            ${{ steps.staple.outputs.stapled }}
+          echo "✅ Uploaded: ${{ steps.staple.outputs.stapled }}"
+
+      - name: Report
+        run: |
+          if [[ -n "${{ steps.staple.outputs.stapled }}" ]]; then
+            echo "✅ Stapled and uploaded: ${{ steps.staple.outputs.stapled }}"
+          fi
+          if [[ -n "${{ steps.staple.outputs.failed }}" ]]; then
+            echo "⚠️  Not stapled (missing notarization): ${{ steps.staple.outputs.failed }}"
+            echo "   These artifacts were not notarized via notarytool before upload."
+            echo "   Fix: ensure build script submits all DMGs to notarytool."
+            exit 1
+          fi

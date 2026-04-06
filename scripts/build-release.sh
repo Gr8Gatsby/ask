@@ -48,10 +48,10 @@ staple_with_retry() {
     local macos_major
     macos_major=$(sw_vers -productVersion | cut -d. -f1)
     if [[ "$macos_major" -ge 26 ]]; then
-        echo "WARNING: macOS Tahoe detected — xcrun stapler is broken on this OS (Error 65 bug)."
+        echo "WARNING: macOS 26+ detected — xcrun stapler has a known Error 65 regression on macOS 26."
         echo "         Skipping staple. The artifact IS notarized (Apple: Accepted)."
-        echo "         A GitHub Actions job on macOS Sequoia will staple the artifacts post-release."
-        echo "         Tahoe users: right-click → Open or disable Gatekeeper to install. See issue #32."
+        echo "         The staple-release GitHub Actions workflow will staple on macOS Sequoia post-publish."
+        echo "         See: https://github.com/Gr8Gatsby/ask/issues/32"
         return 0
     fi
     cp "$file" "$backup"
@@ -300,6 +300,14 @@ create-dmg \
     "$INSTALLER_DMG" \
     "$BUILD_DIR/installer-contents/"
 codesign --sign "$SIGN_APP" --timestamp "$INSTALLER_DMG"
+
+echo "==> Notarizing installer DMG…"
+xcrun notarytool submit "$INSTALLER_DMG" \
+    --apple-id "$APPLE_ID" \
+    --password "$APPLE_ID_PASSWORD" \
+    --team-id "$APPLE_TEAM_ID" \
+    --wait
+staple_with_retry "$INSTALLER_DMG"
 
 # ── Sparkle update DMG ────────────────────────────────────────────────────────
 echo "==> Creating Sparkle update DMG…"
