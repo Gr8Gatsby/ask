@@ -6,7 +6,16 @@
 #   AskMac-{VERSION}.dmg            — DMG containing .app (Sparkle auto-updates)
 #
 # Usage:
-#   ./scripts/build-release.sh [version]
+#   ./scripts/build-release.sh [version] [channel]
+#
+#   channel: alpha | beta | stable (default: stable)
+#
+#   alpha  — GitHub prerelease, appcast entry tagged with sparkle:channel="alpha"
+#   beta   — GitHub prerelease, appcast entry tagged with sparkle:channel="beta"
+#   stable — GitHub release (not prerelease), appcast entry with no channel tag
+#              (served to all users via standard Sparkle update check)
+#
+# The RELEASE_CHANNEL env var can be used instead of the positional arg.
 #
 # Prerequisites:
 #   brew install create-dmg gh
@@ -46,14 +55,20 @@ staple_with_retry() {
     echo "         Notarization was accepted; Gatekeeper will verify online at first launch."
 }
 
-# ── Version ────────────────────────────────────────────────────────────────────
+# ── Version + channel ─────────────────────────────────────────────────────────
 VERSION="${1:-}"
 if [[ -z "$VERSION" ]]; then
     VERSION=$(grep 'MARKETING_VERSION' "$ASKMAC_DIR/project.yml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
 fi
 BUILD_NUMBER="$(date +%s)"
 
-echo "==> Building AskMac ${VERSION} (build ${BUILD_NUMBER})"
+# Channel: alpha | beta | stable  (env var takes precedence, then positional arg 2)
+CHANNEL="${RELEASE_CHANNEL:-${2:-stable}}"
+if [[ "$CHANNEL" != "alpha" && "$CHANNEL" != "beta" && "$CHANNEL" != "stable" ]]; then
+    echo "ERROR: channel must be alpha, beta, or stable (got: $CHANNEL)"; exit 1
+fi
+
+echo "==> Building AskMac ${VERSION} [${CHANNEL}] (build ${BUILD_NUMBER})"
 
 # ── Load Apple credentials from Keychain if not already set ───────────────────
 for var in APPLE_ID APPLE_ID_PASSWORD APPLE_TEAM_ID; do
@@ -276,13 +291,15 @@ PUB_DATE=$(date -u '+%a, %d %b %Y %H:%M:%S +0000')
 DMG_NAME="AskMac-${VERSION}.dmg"
 
 python3 - <<PYEOF
+channel = "${CHANNEL}"
+channel_tag = f"\n      <sparkle:channel>{channel}</sparkle:channel>" if channel != "stable" else ""
 with open('docs/appcast.xml', 'r') as f:
     content = f.read()
-new_item = """    <item>
+new_item = f"""    <item>
       <title>Version ${VERSION}</title>
       <sparkle:version>${BUILD_NUMBER}</sparkle:version>
       <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>{channel_tag}
       <pubDate>${PUB_DATE}</pubDate>
       <enclosure
         url="https://github.com/Gr8Gatsby/ask/releases/download/v${VERSION}/${DMG_NAME}"
@@ -302,10 +319,13 @@ git commit -m "chore(release): update appcast for v${VERSION}"
 git push origin main
 
 # ── Publish GitHub Release ────────────────────────────────────────────────────
-echo "==> Creating GitHub Release v${VERSION}…"
+echo "==> Creating GitHub Release v${VERSION} [${CHANNEL}]…"
+PRERELEASE_FLAG=""
+[[ "$CHANNEL" != "stable" ]] && PRERELEASE_FLAG="--prerelease"
 gh release create "v${VERSION}" \
-    --title "AskMac v${VERSION}" \
+    --title "AskMac v${VERSION} (${CHANNEL})" \
     --notes-from-tag \
+    $PRERELEASE_FLAG \
     "$INSTALLER_DMG" \
     "$SPARKLE_DMG"
 

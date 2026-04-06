@@ -1,13 +1,23 @@
 ---
 name: release
-description: Full release of Ask — merges the feature branch, bumps both Mac and iOS versions, writes release notes, tags both platforms, builds the Mac PKG, and uploads to TestFlight. One confirmation required.
+description: Full release of Ask — merges the feature branch, bumps both Mac and iOS versions, writes release notes, tags both platforms, builds the Mac PKG, and uploads to TestFlight. Supports alpha / beta / stable channels.
 ---
 
 Release the Ask app (Mac + iOS) to the given version. Do all work yourself using tools. One confirmation is required from the user (after showing release notes). Everything else runs automatically.
 
-Invocation: `/release {version}` — e.g. `/release 0.7.2`
+Invocation: `/release {version} [channel]`
 
-If no version is provided, stop and ask the user for one.
+Examples:
+- `/release 0.7.2 alpha`  — prerelease GitHub release, Sparkle alpha channel, TestFlight
+- `/release 0.7.2 beta`   — prerelease GitHub release, Sparkle beta channel, TestFlight
+- `/release 0.7.2`        — stable release (default), full GitHub release, Sparkle served to all users
+
+**Channel rules:**
+- `alpha` — GitHub release marked as prerelease. Sparkle appcast entry includes `<sparkle:channel>alpha</sparkle:channel>` so only alpha-enrolled users receive the auto-update.
+- `beta` — Same as alpha but channel tag is `beta`.
+- `stable` (default) — GitHub release not marked as prerelease. No channel tag in appcast — all users receive the update via standard Sparkle check.
+
+If no version is provided, stop and ask the user for one. If no channel is provided, default to `alpha` and tell the user (since the project is currently in alpha).
 
 ---
 
@@ -179,10 +189,10 @@ git push origin "v{version}" "ios-v{version}"
 
 ## Phase 6 — Build and publish Mac release
 
-Run the Mac build script (do NOT run in background — stream output):
+Run the Mac build script, passing the version and channel (do NOT run in background — stream output):
 
 ```bash
-./scripts/build-release.sh
+./scripts/build-release.sh {version} {channel}
 ```
 
 This takes 10–20 minutes and:
@@ -193,8 +203,14 @@ This takes 10–20 minutes and:
 5. Notarizes + staples the PKG
 6. Creates installer and Sparkle DMGs
 7. Notarizes + staples Sparkle DMG
-8. Updates `docs/appcast.xml` and pushes to main
-9. Creates a GitHub Release with both DMGs attached
+8. Signs the Sparkle DMG and injects the entry into `docs/appcast.xml`:
+   - For `alpha`/`beta`: entry includes `<sparkle:channel>{channel}</sparkle:channel>` — only users enrolled in that channel receive the auto-update
+   - For `stable`: no channel tag — served to all users
+9. Commits and pushes `docs/appcast.xml` to main
+10. Creates a GitHub Release:
+    - `alpha`/`beta`: marked as **prerelease** with title "AskMac v{version} ({channel})"
+    - `stable`: standard release with title "AskMac v{version}"
+    - Both DMGs attached; release notes taken from the annotated tag (`--notes-from-tag`)
 
 **Known warning:** "Could not validate ticket / WARNING: stapler failed" may appear — this is a known macOS Tahoe issue. The build script guards against it and the artifacts are fully notarized.
 
@@ -222,20 +238,27 @@ Upload takes ~5 min. Apple processes the build after upload (~10–30 min).
 Show the user:
 
 ```
-✅ Ask v{version} released
+✅ Ask v{version} [{channel}] released
 
 Mac
   GitHub Release: https://github.com/Gr8Gatsby/ask/releases/tag/v{version}
-  Sparkle update: appcast.xml updated
+    → {prerelease (alpha/beta) | standard release (stable)}
+  Sparkle: appcast.xml updated
+    → {channel="alpha"/"beta" (only enrolled users) | all users (stable)}
   Artifacts: AskMac-{version}-installer.dmg, AskMac-{version}.dmg
 
 iOS
   Tag: ios-v{version} pushed
   TestFlight upload complete — Apple processing (~10–30 min)
   Monitor: https://appstoreconnect.apple.com
+    → {Distribute to internal testers (alpha) | external testers (beta) | submit for review (stable)}
 
 CI: https://github.com/Gr8Gatsby/ask/actions
 ```
+
+For `stable` releases, remind the user to:
+- Promote the TestFlight build to external testers or submit for App Store review in App Store Connect
+- Verify the Sparkle update reaches users by checking appcast.xml is live
 
 ---
 
