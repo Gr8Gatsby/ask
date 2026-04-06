@@ -734,7 +734,13 @@ class MCPClient:
         """Emit (or re-emit) the claude_session block for this session.
 
         touch_last_seen=False during startup re-emit so that sessions whose
-        last hook activity predates SESSION_TTL are not artificially kept alive."""
+        last hook activity predates SESSION_TTL are not artificially kept alive.
+
+        last_message defaults to the stored value in self._sessions so that
+        heartbeat re-emissions preserve the last response text."""
+        # Fall back to stored last_message so heartbeats don't erase it
+        if not last_message:
+            last_message = self._sessions.get(session_id, {}).get('last_message', '')
         # pid-* sessions are background process discoveries; only surface ones the
         # user explicitly launched via Start Session (cwd is in _recently_launched_cwds).
         if session_id.startswith('pid-'):

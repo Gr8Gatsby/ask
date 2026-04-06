@@ -34,12 +34,6 @@ struct FeedView: View {
             if !hasLoaded {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if history.isEmpty {
-                ContentUnavailableView {
-                    Label("No Feed Activity", systemImage: "tray")
-                } description: {
-                    Text("Results from scheduled scripts will appear here.")
-                }
             } else {
                 feedList
             }
@@ -70,9 +64,19 @@ struct FeedView: View {
             }
 
             Section {
-                ForEach(history) { entry in
-                    FeedEntryRow(entry: entry) {
-                        selectedEntry = entry
+                if history.isEmpty {
+                    ContentUnavailableView {
+                        Label("No Feed Activity", systemImage: "tray")
+                    } description: {
+                        Text("Results from scheduled scripts will appear here.")
+                    }
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets())
+                } else {
+                    ForEach(history) { entry in
+                        FeedEntryRow(entry: entry) {
+                            selectedEntry = entry
+                        }
                     }
                 }
             }
