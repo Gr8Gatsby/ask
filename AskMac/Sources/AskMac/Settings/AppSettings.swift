@@ -1,4 +1,5 @@
 import Foundation
+import IOKit
 import Observation
 import SystemConfiguration
 
@@ -69,6 +70,15 @@ final class AppSettings {
         !machineName.isEmpty
     }
 
+    /// Returns the IOPlatformUUID — a hardware-level identifier stable across reinstalls.
+    static func hardwareUUID() -> String? {
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPlatformExpertDevice"))
+        guard service != IO_OBJECT_NULL else { return nil }
+        defer { IOObjectRelease(service) }
+        return IORegistryEntryCreateCFProperty(service, "IOPlatformUUID" as CFString, kCFAllocatorDefault, 0)
+            .takeRetainedValue() as? String
+    }
+
     /// The Mac's computer name as set in System Settings › General › About.
     /// This is the same name shown in Finder and About This Mac.
     static var defaultMachineName: String {
@@ -81,8 +91,11 @@ final class AppSettings {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
 
-        // Generate a stable machineID on first launch
-        if let existing = defaults.string(forKey: Key.machineID) {
+        // Use hardware UUID as stable machine identity — survives reinstalls and dev cycles.
+        // Falls back to a stored random UUID only if IOKit is unavailable.
+        if let hwUUID = AppSettings.hardwareUUID() {
+            self.machineID = hwUUID
+        } else if let existing = defaults.string(forKey: Key.machineID) {
             self.machineID = existing
         } else {
             let newID = UUID().uuidString
