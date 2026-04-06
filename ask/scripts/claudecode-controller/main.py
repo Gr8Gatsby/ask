@@ -682,6 +682,9 @@ class MCPClient:
         if not session_id.startswith('pid-'):
             for sid in list(self._sessions.keys()):
                 if sid.startswith('pid-') and self._sessions[sid].get('cwd') == cwd:
+                    # Migrate tmux_target from pid placeholder so reply routing is preserved
+                    if not entry.get('tmux_target') and self._sessions[sid].get('tmux_target'):
+                        entry['tmux_target'] = self._sessions[sid]['tmux_target']
                     self._sessions.pop(sid)
                     self._recently_launched_cwds.discard(cwd)
                     asyncio.create_task(self.clear_block(self._session_block_id(sid)))
@@ -751,8 +754,8 @@ class MCPClient:
             print(f'[claudecode-controller] skipping session block — not yet initialized', file=sys.stderr)
             return
         session = self._sessions.get(session_id, {})
-        if not session.get('tty'):
-            # Can't route replies without a TTY — don't surface this session on iOS
+        if not session.get('tty') and not session.get('tmux_target'):
+            # Can't route replies without a TTY or tmux target — don't surface this session on iOS
             asyncio.create_task(self.clear_block(self._session_block_id(session_id)))
             return
         project = session.get('project', 'Claude Code')
