@@ -2476,6 +2476,17 @@ private struct MachineDetailView: View {
                         .foregroundStyle(.secondary)
                         .font(.caption)
                 }
+                LabeledContent("Environment") {
+                    #if DEBUG
+                    Text("Development")
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                    #else
+                    Text("Production")
+                        .foregroundStyle(.green)
+                        .font(.caption)
+                    #endif
+                }
             }
         }
         .formStyle(.grouped)
