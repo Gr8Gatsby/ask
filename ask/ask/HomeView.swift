@@ -862,7 +862,9 @@ struct ScriptDetailView: View {
             $0.blockType != .startSession &&
             $0.blockType != .feedItem &&
             $0.blockType != .detail &&
-            $0.blockType != .confirmation
+            // Confirmation blocks with a sessionId are shown inline under their session.
+            // Confirmation blocks without a sessionId (e.g. global settings toggles) belong here.
+            !($0.blockType == .confirmation && $0.confirmationPayload?.sessionId != nil)
         }
     }
 

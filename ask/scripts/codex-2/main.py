@@ -25,7 +25,7 @@ SOCKET_PATH  = os.environ.get('ASK_SOCKET_PATH',
 LOG_PATH     = os.path.expanduser('~/.ask/logs/codex-2.log')
 TILE_ID               = 'codex-2-tile'
 START_SESSION_BLOCK_ID = 'codex2-start'
-SETTINGS_BLOCK_ID     = 'codex2-settings'
+MODE_PICK_BLOCK_ID    = 'codex2-mode-pick'
 SETTINGS_PATH         = os.path.expanduser('~/.ask/codex2-settings.json')
 SESSION_TTL           = 300  # heartbeat refreshes every 30s; 300s gives buffer for MCP hiccups
 
@@ -327,8 +327,9 @@ class CodexController:
         self._real_to_stable = {}         # hook UUID → stable tmux-based session_id
         self._start_repos = {}            # display name → abs path (populated by start_session)
         self._initialized = False
-        # Persistent settings (interactive mode, etc.)
+        # Persistent settings (last-used interactive mode, etc.)
         self._settings = _load_settings_file()
+        self._pending_launch_path = ''   # repo path waiting for mode selection
         # Deduplication: last payload hash per block_id — skip emit if unchanged
         self._last_payload_hash = {}      # block_id → sha256 hex
         # Debounce: pending tile-emit tasks per session
@@ -727,9 +728,8 @@ class CodexController:
                         'status_color': 'blue',
                         'action_required': False,
                     }, ttl=600)
-                # Always refresh persistent blocks to prevent TTL expiry
+                # Refresh start-session block to prevent TTL expiry
                 await self._emit_start_session_block(force=True)
-                await self._emit_settings_block(force=True)
             except Exception:
                 pass
 
@@ -905,17 +905,6 @@ class CodexController:
         payload = {'repos': repo_list}
         await self.emit_block(START_SESSION_BLOCK_ID, 'start_session', payload,
                               ttl=600, force=force)
-
-    async def _emit_settings_block(self, force: bool = False):
-        """Emit the interactive-mode settings block so the user can toggle it from iPhone."""
-        interactive = self._settings.get('interactive', True)
-        mode_label = 'Interactive' if interactive else 'Headless'
-        payload = {
-            'title': 'Session Mode',
-            'body': f'New sessions open in: {mode_label}\n\nInteractive opens a Terminal window.\nHeadless runs silently in the background.',
-            'options': ['Interactive', 'Headless'],
-        }
-        await self.emit_block(SETTINGS_BLOCK_ID, 'confirmation', payload, ttl=600, force=force)
 
     async def _launch_codex(self, repo_path: str):
         """Launch Codex in a tmux session at repo_path."""
@@ -1258,18 +1247,29 @@ class CodexController:
     async def _handle_picker_response(self, block_id: str, value: str):
         """Route a TUI menu response to the terminal."""
         # Handle global blocks first — they don't belong to a session.
-        if block_id == SETTINGS_BLOCK_ID:
-            self._settings['interactive'] = (value == 'Interactive')
-            _save_settings_file(self._settings)
-            mode = 'Interactive' if self._settings['interactive'] else 'Headless'
-            _log(f'Session mode set to: {mode}')
-            await self._emit_settings_block(force=True)
-            return
-
         if block_id == START_SESSION_BLOCK_ID:
-            # value is the repo path sent by the iPhone picker
+            # value is the repo name/path sent by the iPhone picker
             path = self._start_repos.get(value, value)
             if path and path != '(no repos found)':
+                # Store path and ask user to pick session mode before launching.
+                self._pending_launch_path = path
+                project = os.path.basename(path.rstrip('/'))
+                await self.clear_block(START_SESSION_BLOCK_ID)
+                await self.emit_block(MODE_PICK_BLOCK_ID, 'confirmation', {
+                    'title': f'Start "{project}" as…',
+                    'body': 'Interactive opens a Terminal window on this Mac.\nHeadless runs silently in the background.',
+                    'options': ['Interactive', 'Headless'],
+                }, ttl=120)
+            return
+
+        if block_id == MODE_PICK_BLOCK_ID:
+            path = self._pending_launch_path
+            self._pending_launch_path = ''
+            self._settings['interactive'] = (value == 'Interactive')
+            _save_settings_file(self._settings)
+            _log(f'Session mode: {value!r} → launching {path!r}')
+            await self.clear_block(MODE_PICK_BLOCK_ID)
+            if path:
                 asyncio.create_task(self._launch_codex(path))
             return
 
@@ -1350,8 +1350,6 @@ class CodexController:
             }, ttl=600)
             # Emit the start-session block so the + button appears on iPhone
             await self._emit_start_session_block(force=True)
-            # Emit the interactive-mode settings block
-            await self._emit_settings_block(force=True)
             # Discover any Codex sessions already running before we started
             await self._discover_active_sessions()
         except Exception as e:
