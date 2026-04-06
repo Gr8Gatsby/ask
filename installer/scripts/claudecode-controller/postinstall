@@ -23,6 +23,15 @@ if [[ ! -d "$BUNDLED_SCRIPT" ]]; then
     exit 1
 fi
 
+# --- Copy ask_sdk.py (shared library used by all scripts) ---
+SDK_SRC="$APP_BUNDLE/Contents/Resources/Scripts/ask_sdk.py"
+if [[ -f "$SDK_SRC" ]]; then
+    mkdir -p "$VAULT"
+    cp "$SDK_SRC" "$VAULT/ask_sdk.py"
+    chown "$LOGGED_IN_USER" "$VAULT/ask_sdk.py"
+    echo "Installed ask_sdk.py to $VAULT/ask_sdk.py"
+fi
+
 # --- Copy script files ---
 mkdir -p "$VAULT/$SCRIPT_ID"
 cp -r "$BUNDLED_SCRIPT/." "$VAULT/$SCRIPT_ID/"

@@ -24,6 +24,7 @@ enum RKBlockType: String, Codable {
     case activityFeed = "activity_feed"
     case compactSummary = "compact_summary"
     case sessionEvent = "session_event"
+    case diagnostics
 }
 
 // MARK: - Block payloads
@@ -275,6 +276,28 @@ struct RKSessionEventPayload: Codable {
     }
 }
 
+struct RKDiagnosticsHook: Codable, Identifiable {
+    let event: String
+    let path: String
+    let ok: Bool
+    var id: String { event + path }
+}
+
+struct RKDiagnosticsPayload: Codable {
+    let version: String
+    let hooks: [RKDiagnosticsHook]
+    let hooksOk: Bool
+    let socketOk: Bool
+    let logLines: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case version, hooks
+        case hooksOk = "hooks_ok"
+        case socketOk = "socket_ok"
+        case logLines = "log_lines"
+    }
+}
+
 // MARK: - RKBlock model
 
 struct RKBlock: Identifiable {
@@ -298,7 +321,7 @@ struct RKBlock: Identifiable {
         switch blockType {
         case .confirmation, .prompt, .chatPrompt, .picker, .list, .detail, .agentSession, .startSession: return true
         case .alert, .status, .infoCard, .iconCard, .claudeMessage, .tile, .countdown, .feedItem,
-             .activityFeed, .compactSummary, .sessionEvent: return false
+             .activityFeed, .compactSummary, .sessionEvent, .diagnostics: return false
         }
     }
 
@@ -396,6 +419,11 @@ struct RKBlock: Identifiable {
     var sessionEventPayload: RKSessionEventPayload? {
         guard blockType == .sessionEvent else { return nil }
         return try? JSONDecoder().decode(RKSessionEventPayload.self, from: payloadData)
+    }
+
+    var diagnosticsPayload: RKDiagnosticsPayload? {
+        guard blockType == .diagnostics else { return nil }
+        return try? JSONDecoder().decode(RKDiagnosticsPayload.self, from: payloadData)
     }
 
     /// payloadJSON with UTF-16 surrogate pairs decoded to real Unicode scalars, as UTF-8 Data.

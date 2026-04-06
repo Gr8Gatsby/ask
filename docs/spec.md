@@ -783,6 +783,66 @@ If the Mac is offline or has not polled recently, the message remains in a trans
 
 ---
 
+## Script Distribution and Diagnostics
+
+### Scripts Zip
+
+A standalone zip archive (`ask-scripts-{version}.zip`) is published alongside each GitHub Release. It allows a user to install Ask scripts and Claude Code hooks on any Mac without running the full PKG installer — useful for work machines, secondary machines, or recovering from a broken hook configuration.
+
+**Contents:**
+```
+ask-scripts-{version}/
+├── install.sh          ← installs scripts and registers hooks
+├── ask_sdk.py
+├── claudecode-controller/
+│   ├── main.py
+│   ├── manifest.json
+│   ├── setup.py
+│   └── hooks/
+└── (other scripts...)
+```
+
+**`install.sh` behavior:**
+1. Copies all script directories to `~/.ask/scripts/`
+2. Copies `ask_sdk.py` to `~/.ask/scripts/`
+3. For each script that has a `setup.py`, runs `PYTHONPATH=~/.ask/scripts python3 setup.py --install`
+4. Prints a per-script summary: which hooks were registered and at what paths
+5. Prints next steps (reload scripts in AskMac, or restart AskMac)
+
+**PKG postinstall:**
+The PKG installer postinstall script also runs the equivalent of `install.sh` — it always deploys scripts from the bundle to `~/.ask/scripts/` during installation. AskMac runs scripts from `~/.ask/scripts/` only, never directly from the `.app` bundle.
+
+### Remote Log Extraction
+
+Each script writes logs to `~/.ask/logs/{script-id}.log`. AskMac exposes log content and diagnostics to the iOS app via a dedicated Logs page per script.
+
+**iOS — Script Log Page:**
+- Accessible from the script card (tap a "Logs" button or chevron)
+- Shows diagnostics at the top: script version, hook registration status (each hook and whether its registered path exists on disk), socket status
+- Below diagnostics: last 200 lines of the script log, displayed in a monospace scrollable view
+- "Extract Logs" button: triggers the Mac to zip the last 24 hours of all script logs (`~/.ask/logs/`) into `~/Downloads/ask-logs-{date}.zip`, then notifies iOS with the save path
+
+**Mac — log delivery:**
+- AskMac reads `~/.ask/logs/{script-id}.log` and emits a `script_log` block to CloudKit when requested by iOS
+- Log block TTL: 60 seconds (fetch-on-demand, not persisted long-term)
+- If the log file does not exist, returns an empty result with a "No logs yet" message
+
+**Mac — log extraction:**
+- AskMac filters each log in `~/.ask/logs/` to lines from the last 24 hours
+- Zips all filtered logs into `~/Downloads/ask-logs-{YYYY-MM-DD}.zip`
+- Emits a notification block to iOS: "Logs saved to ~/Downloads/ask-logs-{date}.zip"
+
+**Diagnostics block:**
+Each script emits a `diagnostics` block on startup containing:
+- Script version (from manifest.json)
+- Hook registration status: list of hooks and whether their registered paths exist on disk
+- Socket status: whether the Unix socket is listening
+- Last 10 log lines
+
+The diagnostics block is shown at the top of the iOS Log Page for that script.
+
+---
+
 ## Constraints and Scope (v1)
 
 - Single iCloud account — no sharing between users

@@ -477,6 +477,31 @@ if [[ "$VERIFY_OK" != true ]]; then
 fi
 echo "  All artifacts verified ✅"
 
+# ── Build scripts zip ─────────────────────────────────────────────────────────
+echo "==> Building scripts zip…"
+SCRIPTS_ZIP="$BUILD_DIR/ask-scripts-${VERSION}.zip"
+SCRIPTS_STAGING="$BUILD_DIR/ask-scripts-${VERSION}"
+rm -rf "$SCRIPTS_STAGING"
+mkdir -p "$SCRIPTS_STAGING"
+# Copy install.sh
+cp "$REPO_ROOT/scripts/install.sh" "$SCRIPTS_STAGING/install.sh"
+chmod +x "$SCRIPTS_STAGING/install.sh"
+# Copy ask_sdk.py
+[[ -f "$SCRIPTS_SRC/ask_sdk.py" ]] && cp "$SCRIPTS_SRC/ask_sdk.py" "$SCRIPTS_STAGING/ask_sdk.py"
+# Copy each non-system, non-archived script directory
+for script_dir in "$SCRIPTS_SRC"/*/; do
+    script_id="$(basename "$script_dir")"
+    manifest="$script_dir/manifest.json"
+    [[ -f "$manifest" ]] || continue
+    script_type=$(python3 -c "import json,sys; print(json.load(open('$manifest')).get('type',''))" 2>/dev/null || echo "")
+    [[ "$script_type" == "system" ]] && continue
+    cp -r "$script_dir" "$SCRIPTS_STAGING/$script_id"
+done
+# Zip
+(cd "$BUILD_DIR" && zip -r "ask-scripts-${VERSION}.zip" "ask-scripts-${VERSION}" --quiet)
+rm -rf "$SCRIPTS_STAGING"
+echo "  Scripts zip    : $SCRIPTS_ZIP"
+
 # ── Publish GitHub Release ────────────────────────────────────────────────────
 echo "==> Creating GitHub Release v${VERSION} [${CHANNEL}]…"
 PRERELEASE_FLAG=""
@@ -488,7 +513,8 @@ gh release create "v${VERSION}" \
     "$INSTALLER_DMG" \
     "$SPARKLE_DMG" \
     "$PKG_PATH" \
-    "$APP_ZIP"
+    "$APP_ZIP" \
+    "$SCRIPTS_ZIP"
 
 echo ""
 echo "✅ Release complete"
@@ -496,6 +522,7 @@ echo "   PKG           : $PKG_PATH"
 echo "   Installer DMG : $INSTALLER_DMG"
 echo "   Sparkle DMG   : $SPARKLE_DMG"
 echo "   App ZIP       : $APP_ZIP  ← CI will staple the .app inside this"
+echo "   Scripts ZIP   : $SCRIPTS_ZIP  ← install on any machine without PKG"
 echo "   GitHub Release: https://github.com/Gr8Gatsby/ask/releases/tag/v${VERSION}"
 echo ""
 echo "   ⏳ The staple-release CI workflow will run on macOS Sequoia and:"

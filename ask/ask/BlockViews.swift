@@ -194,6 +194,8 @@ struct BlockView: View {
             if let p = block.sessionEventPayload {
                 SessionEventBlockView(payload: p)
             }
+        case .diagnostics:
+            EmptyView() // rendered on ScriptLogView, not inline
         }
     }
 

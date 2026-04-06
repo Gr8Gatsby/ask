@@ -123,6 +123,7 @@ class MCPClient:
                 self._emit_session_block(session_id, last_message=info.get('last_message', ''), touch_last_seen=False)
             )
         asyncio.create_task(self._emit_start_session_block())
+        asyncio.create_task(self._emit_diagnostics_block())
 
     async def emit_block(self, block_id, block_type, payload, ttl=None, inbox=False):
         args = {'blockId': block_id, 'blockType': block_type, 'payload': payload}
@@ -311,6 +312,128 @@ class MCPClient:
             repos.append({'name': name, 'path': path})
         repos.sort(key=lambda x: x['name'].lower())
         return repos
+
+    # ------------------------------------------------------------------
+    # Diagnostics
+    # ------------------------------------------------------------------
+
+    DIAG_BLOCK_ID = 'claudecode-diagnostics'
+
+    def _check_hooks(self) -> list:
+        """Return a list of {event, path, ok} dicts for each registered hook."""
+        results = []
+        try:
+            settings_path = os.path.expanduser('~/.claude/settings.json')
+            if not os.path.exists(settings_path):
+                return [{'event': '(settings.json missing)', 'path': settings_path, 'ok': False}]
+            with open(settings_path) as f:
+                settings = json.load(f)
+            hooks = settings.get('hooks', {})
+            for event, blocks in hooks.items():
+                for block in blocks:
+                    for h in block.get('hooks', []):
+                        cmd = h.get('command', '')
+                        if 'claudecode-controller' in cmd:
+                            results.append({
+                                'event': event,
+                                'path': cmd,
+                                'ok': os.path.exists(cmd),
+                            })
+        except Exception as e:
+            results.append({'event': '(error)', 'path': str(e), 'ok': False})
+        return results
+
+    def _tail_log(self, n: int = 10) -> list:
+        """Return the last n lines of the log file."""
+        try:
+            if not os.path.exists(LOG_PATH):
+                return []
+            with open(LOG_PATH) as f:
+                lines = f.readlines()
+            return [l.rstrip() for l in lines[-n:]]
+        except Exception:
+            return []
+
+    async def _emit_diagnostics_block(self):
+        """Emit a diagnostics block with hook status, socket state, and recent logs."""
+        if not self._initialized:
+            return
+        import datetime, zipfile
+
+        hooks = self._check_hooks()
+        all_ok = all(h['ok'] for h in hooks) and len(hooks) > 0
+        socket_ok = os.path.exists(SOCKET_PATH)
+        log_lines = self._tail_log(10)
+
+        # Read version from manifest
+        try:
+            manifest_path = os.path.join(os.path.dirname(__file__), 'manifest.json')
+            with open(manifest_path) as f:
+                version = json.load(f).get('version', '?')
+        except Exception:
+            version = '?'
+
+        payload = {
+            'version': version,
+            'hooks': hooks,
+            'hooks_ok': all_ok,
+            'socket_ok': socket_ok,
+            'log_lines': log_lines,
+        }
+        self._response_callbacks[self.DIAG_BLOCK_ID] = lambda v: self._on_diagnostics_reply(v)
+        try:
+            await self.emit_block(self.DIAG_BLOCK_ID, 'diagnostics', payload, ttl=3600)
+        except Exception as e:
+            print(f'[claudecode-controller] diagnostics emit failed: {e}', file=sys.stderr)
+
+    async def _on_diagnostics_reply(self, value: str):
+        """Called when the user taps 'Collect Logs' on iOS."""
+        self._response_callbacks[self.DIAG_BLOCK_ID] = lambda v: self._on_diagnostics_reply(v)
+        if value == 'collect_logs':
+            await self._collect_logs()
+
+    async def _collect_logs(self):
+        """Zip the last 24 hours of all script logs into ~/Downloads/ask-logs-{date}.zip."""
+        import datetime, zipfile
+        now = datetime.datetime.now()
+        cutoff = now - datetime.timedelta(hours=24)
+        logs_dir = os.path.expanduser('~/.ask/logs')
+        downloads = os.path.expanduser('~/Downloads')
+        zip_name = f"ask-logs-{now.strftime('%Y-%m-%d')}.zip"
+        zip_path = os.path.join(downloads, zip_name)
+
+        try:
+            os.makedirs(downloads, exist_ok=True)
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                if os.path.isdir(logs_dir):
+                    for fname in os.listdir(logs_dir):
+                        fpath = os.path.join(logs_dir, fname)
+                        if not os.path.isfile(fpath):
+                            continue
+                        # Filter to lines from last 24h
+                        try:
+                            with open(fpath) as f:
+                                lines = f.readlines()
+                            recent = []
+                            for line in lines:
+                                # Lines are prefixed [HH:MM:SS] — filter by file mtime date
+                                recent.append(line)
+                            # Include file if modified in last 24h
+                            mtime = datetime.datetime.fromtimestamp(os.path.getmtime(fpath))
+                            if mtime >= cutoff:
+                                zf.writestr(fname, ''.join(recent))
+                        except Exception:
+                            pass
+            print(f'[claudecode-controller] logs collected: {zip_path}', file=sys.stderr)
+            # Notify iOS
+            await self.emit_block(str(uuid.uuid4()), 'notification', {
+                'title': 'Logs collected',
+                'body': f'Saved to ~/Downloads/{zip_name}',
+            }, ttl=300)
+            # Refresh diagnostics
+            await self._emit_diagnostics_block()
+        except Exception as e:
+            print(f'[claudecode-controller] collect_logs failed: {e}', file=sys.stderr)
 
     async def _emit_start_session_block(self):
         """Emit (or refresh) the start_session block containing the repo list."""

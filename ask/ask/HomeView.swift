@@ -871,6 +871,7 @@ struct ScriptDetailView: View {
             $0.blockType != .startSession &&
             $0.blockType != .feedItem &&
             $0.blockType != .detail &&
+            $0.blockType != .diagnostics &&  // lives on log page, not detail view
             // Confirmation blocks with a sessionId are shown inline under their session.
             // Confirmation blocks without a sessionId (e.g. global settings toggles) belong here.
             !($0.blockType == .confirmation && $0.confirmationPayload?.sessionId != nil)
@@ -957,6 +958,17 @@ struct ScriptDetailView: View {
                         .frame(width: 22, height: 22)
                         Text(scriptDisplayName)
                             .font(.headline)
+                    }
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink(destination: ScriptLogView(
+                        scriptID: scriptID,
+                        diagnosticsBlock: group.blocks.first { $0.blockType == .diagnostics },
+                        onRespond: onRespond
+                    )) {
+                        Image(systemName: "doc.text.magnifyingglass")
                     }
                 }
             }
@@ -1606,5 +1618,96 @@ private struct QueueEntryRow: View {
             }
         }
         .padding(.vertical, 2)
+    }
+}
+
+// MARK: - Script Log Page
+
+struct ScriptLogView: View {
+    let scriptID: String
+    let diagnosticsBlock: RKBlock?
+    let onRespond: (RKBlock, String) async -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var diag: RKDiagnosticsPayload? { diagnosticsBlock?.diagnosticsPayload }
+
+    var body: some View {
+        List {
+            // ── Diagnostics ──────────────────────────────────────────────
+            Section("Diagnostics") {
+                if let d = diag {
+                    LabeledContent("Version", value: d.version)
+                    LabeledContent("Socket") {
+                        Label(d.socketOk ? "Listening" : "Not found",
+                              systemImage: d.socketOk ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundStyle(d.socketOk ? .green : .red)
+                            .font(.subheadline)
+                    }
+                    LabeledContent("Hooks") {
+                        Label(d.hooksOk ? "All registered" : "Problems found",
+                              systemImage: d.hooksOk ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(d.hooksOk ? .green : .orange)
+                            .font(.subheadline)
+                    }
+                    if !d.hooksOk {
+                        ForEach(d.hooks) { hook in
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: hook.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                    .foregroundStyle(hook.ok ? .green : .red)
+                                    .font(.caption)
+                                    .padding(.top, 2)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(hook.event)
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                    Text(hook.path)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                }
+                            }
+                            .listRowInsets(EdgeInsets(top: 4, leading: 32, bottom: 4, trailing: 16))
+                        }
+                    }
+                } else {
+                    Text("No diagnostics received yet")
+                        .foregroundStyle(.secondary)
+                        .font(.subheadline)
+                }
+            }
+
+            // ── Collect Logs ─────────────────────────────────────────────
+            Section {
+                if let block = diagnosticsBlock {
+                    Button {
+                        Task { await onRespond(block, "collect_logs") }
+                    } label: {
+                        Label("Collect Logs (last 24h)", systemImage: "archivebox")
+                    }
+                } else {
+                    Text("Waiting for script to connect…")
+                        .foregroundStyle(.secondary)
+                        .font(.subheadline)
+                }
+            } footer: {
+                Text("Zips all script logs from the last 24 hours and saves to ~/Downloads on the Mac.")
+            }
+
+            // ── Recent log lines ─────────────────────────────────────────
+            if let lines = diag?.logLines, !lines.isEmpty {
+                Section("Recent Logs") {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                        Text(line)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .listRowBackground(Color(.secondarySystemGroupedBackground))
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Logs")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
