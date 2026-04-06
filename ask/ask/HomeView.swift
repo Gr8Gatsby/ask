@@ -862,7 +862,9 @@ struct ScriptDetailView: View {
             $0.blockType != .startSession &&
             $0.blockType != .feedItem &&
             $0.blockType != .detail &&
-            $0.blockType != .confirmation
+            // Confirmation blocks with a sessionId are shown inline under their session.
+            // Confirmation blocks without a sessionId (e.g. global settings toggles) belong here.
+            !($0.blockType == .confirmation && $0.confirmationPayload?.sessionId != nil)
         }
     }
 
@@ -1145,6 +1147,7 @@ private struct DetailFullView: View {
     let onClose: () -> Void
     var onAction: ((String) async -> Void)? = nil
 
+    @Environment(\.dismiss) private var dismiss
     @State private var responding = false
     @State private var selectedAction: String?
 
@@ -1169,7 +1172,10 @@ private struct DetailFullView: View {
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Close", action: onClose)
+                Button("Close") {
+                    dismiss()
+                    onClose()
+                }
                     .disabled(responding)
             }
         }

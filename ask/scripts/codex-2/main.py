@@ -25,6 +25,8 @@ SOCKET_PATH  = os.environ.get('ASK_SOCKET_PATH',
 LOG_PATH     = os.path.expanduser('~/.ask/logs/codex-2.log')
 TILE_ID               = 'codex-2-tile'
 START_SESSION_BLOCK_ID = 'codex2-start'
+MODE_PICK_BLOCK_ID    = 'codex2-mode-pick'
+SETTINGS_PATH         = os.path.expanduser('~/.ask/codex2-settings.json')
 SESSION_TTL           = 300  # heartbeat refreshes every 30s; 300s gives buffer for MCP hiccups
 
 # Common repo search roots — scanned by start_session picker
@@ -225,6 +227,25 @@ def _write_hooks_json():
         _log(f'Could not write hooks.json: {e}', 'WARN')
 
 
+# ── Settings ──────────────────────────────────────────────────────────────────
+
+def _load_settings_file() -> dict:
+    try:
+        with open(SETTINGS_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {'interactive': True}
+
+
+def _save_settings_file(settings: dict):
+    os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
+    try:
+        with open(SETTINGS_PATH, 'w') as f:
+            json.dump(settings, f, indent=2)
+    except Exception as e:
+        _log(f'Could not save settings: {e}', 'WARN')
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _find_tmux_target(session_name: str = 'codex') -> str:
@@ -306,6 +327,9 @@ class CodexController:
         self._real_to_stable = {}         # hook UUID → stable tmux-based session_id
         self._start_repos = {}            # display name → abs path (populated by start_session)
         self._initialized = False
+        # Persistent settings (last-used interactive mode, etc.)
+        self._settings = _load_settings_file()
+        self._pending_launch_path = ''   # repo path waiting for mode selection
         # Deduplication: last payload hash per block_id — skip emit if unchanged
         self._last_payload_hash = {}      # block_id → sha256 hex
         # Debounce: pending tile-emit tasks per session
@@ -493,6 +517,7 @@ class CodexController:
             'project': project,
             'cwd': cwd,
             'is_working': info.get('is_working', False),
+            'is_headless': info.get('is_headless', False),
         }
         # Include last agent message if available (captured from PostToolUse hook)
         if last_msg := info.get('last_message'):
@@ -681,6 +706,7 @@ class CodexController:
         while True:
             await asyncio.sleep(30)
             try:
+                _log(f'Heartbeat: {len(self._sessions)} session(s)')
                 # Validate existing sessions — clean up any whose process died
                 for session_id in list(self._sessions.keys()):
                     info = self._sessions.get(session_id, {})
@@ -690,6 +716,12 @@ class CodexController:
                         asyncio.create_task(self._handle_session_stop(
                             {'session_id': session_id, 'last_message': 'Session ended'}))
                         continue
+                    # Sessions that predate is_headless tracking: default to headless.
+                    # We can't reliably detect launch mode for pre-existing sessions
+                    # (tmux list-clients returns true even when detached in background).
+                    # User can always tap ghost → Interactive to open a window.
+                    if 'is_headless' not in info:
+                        info['is_headless'] = True
                     # Refresh session block TTL so it doesn't expire while we're running.
                     # Use force=True to bypass dedup — content may be unchanged but
                     # CloudKit needs the TTL refreshed or the record disappears.
@@ -704,7 +736,7 @@ class CodexController:
                         'status_color': 'blue',
                         'action_required': False,
                     }, ttl=600)
-                # Always refresh the start-session block to prevent TTL expiry
+                # Refresh start-session block to prevent TTL expiry
                 await self._emit_start_session_block(force=True)
             except Exception:
                 pass
@@ -909,6 +941,11 @@ class CodexController:
         # Auto-trust the repo so Codex skips the interactive trust prompt.
         _ensure_repo_trusted(repo_path)
 
+        # Re-install hooks immediately before launch so codex-2's hooks take
+        # precedence over any other script (e.g. codex-controller) that may
+        # have overwritten ~/.codex/hooks.json since startup.
+        _install_hooks()
+
         _log(f'Launching Codex: project={project!r} cwd={repo_path!r} bin={codex_bin!r}')
 
         # Wrap in a login shell so ~/.zshrc / ~/.zprofile is sourced and
@@ -916,11 +953,14 @@ class CodexController:
         # AskMac runs with a restricted PATH (/usr/bin:/bin:/usr/sbin:/sbin). Codex's
         # Node runtime needs 'node' in PATH for subprocess spawning, so prepend the
         # nvm bin dir and Homebrew explicitly before exec-ing codex.
+        # Also force ASK_SOCKET_PATH so that hook scripts connect to codex-2's socket
+        # regardless of which hook files are registered in hooks.json.
         shell = os.environ.get('SHELL', '/bin/zsh')
         node_bin_dir = shlex.quote(os.path.dirname(codex_bin))
         path_prefix = f'{node_bin_dir}:/opt/homebrew/bin:/usr/local/bin'
         shell_cmd = (
             f'export PATH={path_prefix}:$PATH; '
+            f'export ASK_SOCKET_PATH={shlex.quote(SOCKET_PATH)}; '
             f'cd {shlex.quote(repo_path)} && exec {shlex.quote(codex_bin)}'
         )
 
@@ -958,6 +998,7 @@ class CodexController:
         # Register the session immediately — don't wait for zsh login startup
         if pane_target:
             synth_id = f'tmux-{pane_target}'
+            is_headless = not self._settings.get('interactive', True)
             if synth_id not in self._sessions:
                 pid = _get_pane_pid(pane_target)
                 await self._handle_session_active({
@@ -967,6 +1008,23 @@ class CodexController:
                     'tmux_target': pane_target,
                     'pid': pid,
                 })
+            # Tag with the mode it was launched in (after _handle_session_active creates the entry)
+            if synth_id in self._sessions:
+                self._sessions[synth_id]['is_headless'] = is_headless
+                await self._emit_session_tile(synth_id, force=True)
+
+        # Open a Terminal.app window attached to the new pane if interactive mode is on
+        if self._settings.get('interactive', True) and pane_target:
+            try:
+                # Target the specific window (e.g. 'codex:2' from 'codex:2.0')
+                win_target = pane_target.rsplit('.', 1)[0]
+                attach_cmd = f'tmux attach-session -t {win_target}'
+                osascript_script = f'tell application "Terminal" to do script "{attach_cmd}"'
+                subprocess.Popen(['osascript', '-e', osascript_script],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                _log(f'Opened Terminal.app for {win_target}')
+            except Exception as e:
+                _log(f'Could not open Terminal.app: {e}', 'WARN')
 
         # Schedule a delayed pane snapshot to log what Codex shows on startup
         if pane_target:
@@ -1203,9 +1261,28 @@ class CodexController:
         """Route a TUI menu response to the terminal."""
         # Handle global blocks first — they don't belong to a session.
         if block_id == START_SESSION_BLOCK_ID:
-            # value is the repo path sent by the iPhone picker
+            # value is the repo name/path sent by the iPhone picker
             path = self._start_repos.get(value, value)
             if path and path != '(no repos found)':
+                # Store path and ask user to pick session mode before launching.
+                self._pending_launch_path = path
+                project = os.path.basename(path.rstrip('/'))
+                await self.clear_block(START_SESSION_BLOCK_ID)
+                await self.emit_block(MODE_PICK_BLOCK_ID, 'confirmation', {
+                    'title': f'Start "{project}" as…',
+                    'body': 'Interactive opens a Terminal window on this Mac.\nHeadless runs silently in the background.',
+                    'options': ['Interactive', 'Headless'],
+                }, ttl=120)
+            return
+
+        if block_id == MODE_PICK_BLOCK_ID:
+            path = self._pending_launch_path
+            self._pending_launch_path = ''
+            self._settings['interactive'] = (value == 'Interactive')
+            _save_settings_file(self._settings)
+            _log(f'Session mode: {value!r} → launching {path!r}')
+            await self.clear_block(MODE_PICK_BLOCK_ID)
+            if path:
                 asyncio.create_task(self._launch_codex(path))
             return
 
@@ -1230,6 +1307,20 @@ class CodexController:
                 subprocess.run([TMUX, 'send-keys', '-t', tmux_target, 'C-c'],
                                capture_output=True, timeout=3)
                 _log(f'Sent C-c x2 to {tmux_target}')
+            return
+        elif value == '__go_interactive__':
+            # User tapped the ghost button — open a Terminal.app window for this session
+            info = self._sessions.get(session_id, {})
+            tmux_target = info.get('tmux_target', '')
+            if tmux_target:
+                win_target = tmux_target.rsplit('.', 1)[0]
+                attach_cmd = f'tmux attach-session -t {win_target}'
+                osascript_script = f'tell application "Terminal" to do script "{attach_cmd}"'
+                subprocess.Popen(['osascript', '-e', osascript_script],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                _log(f'Go interactive: opened Terminal.app for {win_target}')
+                info['is_headless'] = False
+                self._schedule_session_tile(session_id)
             return
         elif '-menu-' in block_id:
             # Value is "N  option text" — extract the leading number to send to tmux

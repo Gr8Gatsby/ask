@@ -1242,6 +1242,12 @@ end tell
         payload = {'title': f'Allow {tool}?', 'body': preview, 'options': options}
         if session_id:
             payload['session_id'] = session_id
+        # Capture TTY from the permission hook — ensures the session block is surfaced
+        # even on the very first tool use before any PostToolUse has fired.
+        tty = msg.get('tty')
+        if tty and session_id and session_id in self._sessions and not self._sessions[session_id].get('tty'):
+            self._sessions[session_id]['tty'] = tty
+            self._save_sessions()
         # Update live tool activity so the session subtitle shows the pending tool
         if session_id and session_id in self._sessions:
             entry = {'tool': tool, 'preview': preview, 'ts': time.time()}
@@ -1387,26 +1393,45 @@ end tell
         }, ttl=3600))
 
     async def _handle_pre_compact(self, msg):
-        """PreCompact hook — notify iPhone that context is being summarized."""
+        """PreCompact hook — surface compaction as live session activity."""
         session_id = msg.get('session_id', '')
         trigger = msg.get('trigger', 'auto')
-        project = self._sessions.get(session_id, {}).get('project', 'Claude Code')
-        label = 'Manual compact' if trigger == 'manual' else 'Auto compact'
-        await self._handle_notification({
-            'title': f'{label} — {project}',
-            'body': 'Claude is summarizing the conversation context.',
-            'icon': 'doc.text.magnifyingglass',
-        })
+        cwd = msg.get('cwd', '')
+        if not session_id:
+            return
+        self._register_session(session_id, cwd)
+        self._working_sessions.add(session_id)
+        label = 'manual context' if trigger == 'manual' else 'conversation context'
+        entry = {
+            'tool': 'Compact',
+            'preview': label,
+            'ts': time.time(),
+        }
+        self._current_tools[session_id] = entry
+        history = self._tool_histories.setdefault(session_id, [])
+        history.append(entry)
+        if len(history) > 20:
+            del history[:-20]
+        await self._emit_session_block(session_id)
 
     async def _handle_post_compact(self, msg):
-        """PostCompact hook — emit compact_summary block to iPhone."""
+        """PostCompact hook — finish live compaction state and persist summary."""
         session_id = msg.get('session_id', '')
         trigger = msg.get('trigger', 'auto')
         summary = msg.get('summary', '').strip()
         cwd = msg.get('cwd', '')
+        if session_id:
+            self._register_session(session_id, cwd)
+            self._working_sessions.discard(session_id)
+            self._current_tools.pop(session_id, None)
         project = self._sessions.get(session_id, {}).get('project', 'Claude Code')
         if not summary:
+            if session_id:
+                await self._emit_session_block(session_id)
             return
+        if session_id and session_id in self._sessions:
+            self._sessions[session_id]['last_message'] = 'Context summary ready'
+            await self._emit_session_block(session_id, last_message='Context summary ready')
         block_id = f'claudecode-compact-{session_id[:16]}' if session_id else str(uuid.uuid4())
         await self.emit_block(block_id, 'compact_summary', {
             'session_id': session_id,

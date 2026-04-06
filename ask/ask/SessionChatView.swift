@@ -45,10 +45,17 @@ struct SessionRowView: View {
                 .lineLimit(1)
             }
             Spacer()
-            if confirmationCount > 0 {
-                Image(systemName: "exclamationmark.circle.fill")
-                    .foregroundStyle(.orange)
-                    .font(.caption)
+            HStack(spacing: 6) {
+                if payload.isHeadless == true {
+                    Image(systemName: "ghost")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
+                if confirmationCount > 0 {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                }
             }
         }
         .padding(.vertical, 2)
@@ -165,6 +172,16 @@ struct SessionChatView: View {
                     Text(displayProject)
                         .font(.headline)
                     statusLabel
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                if isActive, livePayload?.isHeadless == true, let block = liveBlock {
+                    Button {
+                        Task { await onRespond(block, "__go_interactive__") }
+                    } label: {
+                        Image(systemName: "ghost")
+                            .symbolRenderingMode(.hierarchical)
+                    }
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
