@@ -210,10 +210,10 @@ This takes 10–20 minutes and does the following:
 6. Notarizes PKG
 7. Creates installer DMG → signs → **notarizes** installer DMG
 8. Creates Sparkle update DMG → signs → notarizes Sparkle DMG
-9. **Verifies all three artifacts** (signed + notarized) before publishing — exits if any fail
+9. **Verifies all four artifacts** (signed + notarized) before publishing — exits if any fail
 10. Signs Sparkle DMG with EdDSA and injects entry into `docs/appcast.xml`
 11. Commits and pushes `docs/appcast.xml` to main
-12. Creates GitHub Release with **three artifacts**: `AskMac-{version}.pkg`, `AskMac-{version}-installer.dmg`, `AskMac-{version}.dmg`
+12. Creates GitHub Release with **four artifacts**: `AskMac-{version}.pkg`, `AskMac-{version}-installer.dmg`, `AskMac-{version}.dmg`, `AskMac-{version}.app.zip`
 
 **Note on stapling:** `xcrun stapler` may fail with Error 65 locally. This is NOT always a macOS version regression — it can be caused by an SSL certificate mismatch on Apple's `oscdn.apple.com` CDN at the user's network edge (Akamai routing issue). Before assuming a build problem, verify:
 ```bash
@@ -326,18 +326,34 @@ test -f ~/.appstoreconnect/private_keys/AuthKey_Q2A223X6SQ.p8 || echo "MISSING: 
 
 **Note:** System scripts (`"type": "system"` in `manifest.json`) are bundled into the app but never user-installable — excluded from PKG automatically. Do not add them to `distribution.xml`.
 
-**Entitlements check** — before building, verify `AskMac/Sources/AskMac/AskMac.entitlements` contains ALL required entitlements. Missing entitlements cause silent runtime failures even when the build succeeds and notarization is accepted. Required entitlements for this app:
+**Provisioning profile check** — verify the installed profile has production CloudKit enabled:
 
 ```bash
-grep -E "application-identifier|icloud-container|icloud-services|network.client" \
+security cms -D -i ~/Library/MobileDevice/Provisioning\ Profiles/$(
+  grep -r "036fee16" ~/Library/MobileDevice/Provisioning\ Profiles/ -l 2>/dev/null | head -1
+) 2>/dev/null | python3 -c "
+import sys, plistlib
+p = plistlib.loads(sys.stdin.buffer.read())
+env = p.get('Entitlements', {}).get('com.apple.developer.icloud-container-environment', 'MISSING')
+print('icloud-container-environment:', env)
+" 2>/dev/null || echo "Profile not found in system — check ~/Downloads for .provisionprofile files"
+```
+
+Must show `icloud-container-environment: Production`. If it shows `MISSING` or `Development`, the provisioning profile does not have production CloudKit enabled. The profile in `~/Downloads/AskMac (2).provisionprofile` (UUID `036fee16`) is known good — install it by double-clicking before building.
+
+**Entitlements check** — before building, verify `AskMac/Sources/AskMac/AskMac.entitlements` contains ALL five required entitlements. Missing entitlements cause silent runtime failures even when the build succeeds and notarization is accepted. Required entitlements for this app:
+
+```bash
+grep -E "application-identifier|icloud-container-environment|icloud-container-identifiers|icloud-services|network.client" \
   AskMac/Sources/AskMac/AskMac.entitlements
 ```
 
-Must show all four keys. If any are missing, check `AskMac/project.yml` — the `entitlements.properties` block is the source of truth. xcodegen regenerates the entitlements file from project.yml on every run, so edits to the `.entitlements` file alone will be lost. Always edit `project.yml`.
+Must show all five keys. The `entitlements.properties` block in `AskMac/project.yml` is the source of truth — xcodegen regenerates the `.entitlements` file on every run, so edits to the file directly are lost. Always edit `project.yml`.
 
 Critical entitlements and what breaks without them:
-- `com.apple.application-identifier` (`B5J28L8ARB.com.kevinhill.askmac`) — **required for CloudKit**. Missing this causes "Trying to initialize a container without an application ID" at runtime. Xcode adds it automatically from the provisioning profile, but our re-signing step in `build-release.sh` uses the entitlements file directly — if it's absent there, it gets stripped.
-- `com.apple.developer.icloud-container-identifiers` — identifies the CloudKit container
+- `com.apple.application-identifier` (`B5J28L8ARB.com.kevinhill.askmac`) — **required for CloudKit init**. Missing causes "Trying to initialize a container without an application ID" crash at runtime. Our re-signing step in `build-release.sh` uses this file directly — if absent, it gets stripped.
+- `com.apple.developer.icloud-container-environment: Production` — **routes to production CloudKit**. Without this the app silently writes to the development database — data will not be visible to iOS or other production clients. `CLOUDKIT_ENVIRONMENT: PRODUCTION` in `project.yml` build settings is NOT sufficient on its own; this entitlement must be present in the entitlements file AND allowed by the provisioning profile.
+- `com.apple.developer.icloud-container-identifiers` — identifies the CloudKit container (`iCloud.simple.ask`)
 - `com.apple.developer.icloud-services` — enables CloudKit access
 - `com.apple.security.network.client` — allows outbound network connections
 
