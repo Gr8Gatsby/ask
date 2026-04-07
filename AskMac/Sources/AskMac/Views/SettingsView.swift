@@ -328,7 +328,9 @@ private struct ScriptsTabView: View {
                 ScriptsVaultView(installer: installer, scriptManager: scriptManager)
             } else if let id = selectedScriptID,
                       let script = scriptManager.scripts.first(where: { $0.id == id }) {
-                ScriptDetailView(script: script, scriptManager: scriptManager)
+                ScriptDetailView(script: script, scriptManager: scriptManager) {
+                                selectedScriptID = nil
+                            }
             } else {
                 ContentUnavailableView(
                     "Select a Script",
@@ -593,9 +595,11 @@ private enum CardColorSchemePreview: String, CaseIterable {
 private struct ScriptDetailView: View {
     let script: ManagedScript
     let scriptManager: ScriptManager
+    var onUninstall: () -> Void = {}
 
     @Environment(AppSettings.self) private var settings
 
+    @State private var showUninstallConfirm = false
     @State private var cardFlipped = false
     @State private var previewBranded = true
     @State private var previewScheme: CardColorSchemePreview = .light
@@ -964,6 +968,29 @@ private struct ScriptDetailView: View {
             .toggleStyle(.switch)
             .controlSize(.regular)
             .padding(14)
+        }
+        .overlay(alignment: .bottomLeading) {
+            if !script.isBundled {
+                Button {
+                    showUninstallConfirm = true
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.caption)
+                        .foregroundStyle(.red.opacity(0.7))
+                }
+                .buttonStyle(.borderless)
+                .help("Move to Trash")
+                .padding(14)
+            }
+        }
+        .alert("Remove \(script.name)?", isPresented: $showUninstallConfirm) {
+            Button("Remove", role: .destructive) {
+                onUninstall()
+                scriptManager.uninstallScript(id: script.id)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will stop the script, clear its blocks from your iPhone, and move its files to the Trash.")
         }
     }
 
@@ -3159,17 +3186,34 @@ private struct ScriptInstallSheet: View {
         return allUpdates ? "Update" : "Install"
     }
 
+    @Environment(\.colorScheme) private var colorScheme
+
+    private func pendingScriptIcon(_ script: ScriptInstaller.PendingScript) -> NSImage? {
+        guard let img = script.iconImage else { return nil }
+        guard colorScheme == .dark, let svg = script.svgString else { return img }
+        return svgToWhite(svg) ?? img
+    }
+
     private func scriptRow(_ script: ScriptInstaller.PendingScript) -> some View {
         let hasWarnings = !script.warnings.isEmpty
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 12) {
                 // Icon
-                Image(systemName: script.icon ?? "terminal.fill")
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 32, height: 32)
-                    .background(Color.secondary.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                Group {
+                    if let img = pendingScriptIcon(script) {
+                        Image(nsImage: img)
+                            .resizable()
+                            .scaledToFit()
+                            .padding(6)
+                    } else {
+                        Image(systemName: script.icon ?? "square.grid.2x2")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(width: 32, height: 32)
+                .background(Color.secondary.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 7))
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {

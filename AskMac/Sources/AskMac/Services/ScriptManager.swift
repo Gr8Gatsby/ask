@@ -125,6 +125,7 @@ struct ManagedScript: Identifiable {
     var setupChecks: [SetupCheck] = []        // last --check results
     var setupCheckRunning: Bool = false        // true while --check is in flight
     var stderrLog: [String] = []              // last 50 lines of stderr from most recent run
+    var isBundled: Bool = false               // true if the script lives in the app bundle
 
     var hasSetup: Bool { setupScript != nil || !configItems.isEmpty }
     var needsSetup: Bool {
@@ -184,6 +185,10 @@ final class ScriptManager: @unchecked Sendable {
     // Install lock: reload() defers while an install is in progress
     private var installLockCount = 0
     private var pendingReload = false
+
+    // In-flight dep-check guard: prevents double-launch when reload() fires twice
+    // rapidly (e.g. endInstall + stale file-watcher debounce both calling reload()).
+    private var launchingScripts: Set<String> = []
 
     // Circuit breaker: tracks recent crash timestamps per script
     private var crashHistory: [String: [Date]] = [:]
@@ -249,6 +254,7 @@ final class ScriptManager: @unchecked Sendable {
         feedScheduler.cancelAll()
         feedTimeoutTasks.values.forEach { $0.cancel() }
         feedTimeoutTasks = [:]
+        launchingScripts = []
     }
 
     /// Rescans the scripts directory, picks up newly discovered scripts, and restarts
@@ -368,6 +374,51 @@ final class ScriptManager: @unchecked Sendable {
         }
     }
 
+    func uninstallScript(id: String) {
+        // Stop all connections
+        connections[id]?.stop()
+        connections.removeValue(forKey: id)
+        systemConnections[id]?.stop()
+        systemConnections.removeValue(forKey: id)
+
+        // Cancel feed scheduler + timeout tasks
+        feedScheduler.cancel(scriptID: id)
+        feedTimeoutTasks[id]?.cancel()
+        feedTimeoutTasks.removeValue(forKey: id)
+
+        // Clear all runtime state
+        launchingScripts.remove(id)
+        crashHistory.removeValue(forKey: id)
+        restartDelays.removeValue(forKey: id)
+        activeBlocks.removeValue(forKey: id)
+
+        // Remove from disabled-scripts list (cleanup, the script is gone)
+        settings.setScriptEnabled(id, enabled: true)
+
+        // Clear CloudKit blocks
+        Task {
+            let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: id)
+            try? await blockService.clearAllBlocks()
+        }
+
+        // Capture directory before removing from cache
+        let isBundled = scripts.first(where: { $0.id == id })?.isBundled ?? true
+        let scriptDir = manifests[id]?.dir
+
+        // Remove from cache and UI
+        manifests.removeValue(forKey: id)
+        scripts.removeAll { $0.id == id }
+
+        // Move vault folder to Trash (bundled scripts are never trashed)
+        guard !isBundled, let dir = scriptDir else { return }
+        do {
+            try FileManager.default.trashItem(at: dir, resultingItemURL: nil)
+            print("[ScriptManager] Moved script \(id) to trash: \(dir.path)")
+        } catch {
+            print("[ScriptManager] Failed to move script \(id) to trash: \(error)")
+        }
+    }
+
     /// Deliver a user response to a block directly from the Mac UI.
     func respondToBlock(scriptID: String, blockID: String, value: String) {
         connections[scriptID]?.deliverResponse(blockID: blockID, value: value)
@@ -375,6 +426,7 @@ final class ScriptManager: @unchecked Sendable {
     }
 
     func enableScript(id: String) {
+        launchingScripts.remove(id)  // Clear stale guard from any previous failed launch
         let name = scripts.first(where: { $0.id == id })?.name ?? id
         settings.setScriptEnabled(id, enabled: true)
         if let idx = scripts.firstIndex(where: { $0.id == id }) {
@@ -417,6 +469,11 @@ final class ScriptManager: @unchecked Sendable {
     func endInstall() {
         installLockCount = max(0, installLockCount - 1)
         if installLockCount == 0 {
+            // Cancel any file-watcher debounce that fired during the install.
+            // Without this, the stale work item calls reload() ~0.5s after we do,
+            // causing double-launch of every newly installed script.
+            reloadDebounceWork?.cancel()
+            reloadDebounceWork = nil
             pendingReload = false
             reload()
         }
@@ -486,6 +543,15 @@ final class ScriptManager: @unchecked Sendable {
     }
 
     private func launch(manifest: ScriptManifest, scriptDir: URL) {
+        // Defense in depth: stop any orphaned connection before launching a new one.
+        // Normally launchWithDepCheck's guard prevents double-launch, but if something
+        // slips through we don't want two processes running for the same script.
+        if let orphan = connections[manifest.id] {
+            orphan.stop()
+            connections.removeValue(forKey: manifest.id)
+            activeBlocks.removeValue(forKey: manifest.id)
+        }
+
         let entryURL = scriptDir.appendingPathComponent(manifest.entry)
         let fm = FileManager.default
 
@@ -838,7 +904,13 @@ final class ScriptManager: @unchecked Sendable {
     // MARK: - Dependency checking
 
     private func launchWithDepCheck(manifest: ScriptManifest, scriptDir: URL) {
+        guard !launchingScripts.contains(manifest.id) else {
+            print("[ScriptManager] \(manifest.id): launch already in-flight, skipping duplicate")
+            return
+        }
+        launchingScripts.insert(manifest.id)
         Task { @MainActor in
+            defer { self.launchingScripts.remove(manifest.id) }
             let failed = await checkDependencies(manifest)
             guard !self.settings.disabledScripts.contains(manifest.id) else { return }
             if !failed.isEmpty {
@@ -851,7 +923,13 @@ final class ScriptManager: @unchecked Sendable {
     }
 
     private func launchFeedRunWithDepCheck(manifest: ScriptManifest, scriptDir: URL) {
+        guard !launchingScripts.contains(manifest.id) else {
+            print("[ScriptManager] \(manifest.id): feed launch already in-flight, skipping duplicate")
+            return
+        }
+        launchingScripts.insert(manifest.id)
         Task { @MainActor in
+            defer { self.launchingScripts.remove(manifest.id) }
             let failed = await checkDependencies(manifest)
             guard !self.settings.disabledScripts.contains(manifest.id) else { return }
             if !failed.isEmpty {
@@ -866,7 +944,13 @@ final class ScriptManager: @unchecked Sendable {
     // MARK: - System script lifecycle
 
     private func launchSystemWithDepCheck(manifest: ScriptManifest, scriptDir: URL) {
+        guard !launchingScripts.contains(manifest.id) else {
+            print("[ScriptManager] \(manifest.id): system launch already in-flight, skipping duplicate")
+            return
+        }
+        launchingScripts.insert(manifest.id)
         Task { @MainActor in
+            defer { self.launchingScripts.remove(manifest.id) }
             let failed = await checkDependencies(manifest)
             if !failed.isEmpty {
                 print("[ScriptManager] \(manifest.id): system script missing deps — \(failed.map(\.name).joined(separator: ", "))")
@@ -1099,6 +1183,11 @@ final class ScriptManager: @unchecked Sendable {
         } else {
             let svgString = manifests[id]?.svgString
             let dir = manifests[id]?.dir
+            let bundledScriptsPath = Bundle.main.resourceURL?.appendingPathComponent("Scripts").path
+            let isBundled: Bool = {
+                guard let bundledPath = bundledScriptsPath, let d = dir else { return false }
+                return d.path.hasPrefix(bundledPath)
+            }()
             scripts.append(ManagedScript(
                 id: id, name: name, version: manifest?.version,
                 description: manifest?.description, icon: icon, iconImage: iconImage,
@@ -1108,7 +1197,8 @@ final class ScriptManager: @unchecked Sendable {
                 entry: manifest?.entry,
                 manifestPath: dir.map { $0.appendingPathComponent("manifest.json") },
                 setupScript: manifest?.setup,
-                configItems: manifest?.config ?? []
+                configItems: manifest?.config ?? [],
+                isBundled: isBundled
             ))
         }
     }
