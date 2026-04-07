@@ -2,7 +2,7 @@
   "id": "terminal-manager",
   "name": "Terminal Manager",
   "type": "system",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "Local terminal session registry and TUI detector. Tools are available to all scripts via AskMac MCP — not exposed to iPhone.",
   "entry": "main.py",
   "tools": [
@@ -67,6 +67,32 @@
       "name": "list_sessions",
       "description": "Return all registered sessions.",
       "params": []
+    },
+    {
+      "name": "inject_tty",
+      "description": "Inject text into the TTY input queue via TIOCSTI — no clipboard, no Terminal.app focus required. Falls back to tmux send-keys for tmux sessions.",
+      "params": [
+        { "name": "session_id", "type": "string", "required": true },
+        { "name": "text",       "type": "string", "required": true }
+      ]
+    },
+    {
+      "name": "focus_window",
+      "description": "Bring the terminal window or tmux pane for this session to the foreground without typing anything.",
+      "params": [
+        { "name": "session_id", "type": "string", "required": true }
+      ]
+    },
+    {
+      "name": "wait_for_idle",
+      "description": "Poll the session until the Claude Code idle prompt appears, then return the response text above it. Works for both TTY and tmux sessions.",
+      "params": [
+        { "name": "session_id",     "type": "string",  "required": true },
+        { "name": "timeout",        "type": "number",  "required": false },
+        { "name": "prompt_pattern", "type": "string",  "required": false },
+        { "name": "poll_interval",  "type": "number",  "required": false },
+        { "name": "stable_count",   "type": "integer", "required": false }
+      ]
     }
   ]
 }

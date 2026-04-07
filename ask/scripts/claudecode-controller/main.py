@@ -1175,6 +1175,28 @@ end tell
                 stable_count = 0
             prev_content = content
 
+    async def _capture_tty_response(self, session_id: str):
+        """After routing a reply to a TTY session, wait for Claude to finish
+        and emit the response as last_message — mirrors _capture_tmux_response
+        for non-tmux sessions using terminal-manager's wait_for_idle tool."""
+        await asyncio.sleep(2)   # give Claude a moment to start processing
+        try:
+            result = await self._rpc('tools/call', {
+                'name': 'wait_for_idle',
+                'arguments': {
+                    'session_id': session_id,
+                    'timeout': 300,
+                    'poll_interval': 1,
+                    'stable_count': 2,
+                }
+            }, timeout=320.0)
+            if isinstance(result, dict) and result.get('idle') and result.get('output'):
+                response = result['output']
+                _log(f'[claudecode] TTY response captured for {session_id[:8]} ({len(response)} chars)')
+                asyncio.create_task(self._emit_session_block(session_id, last_message=response))
+        except Exception as e:
+            _log(f'[claudecode] _capture_tty_response failed: {e}')
+
     async def _route_to_terminal(self, session_id: str, text: str):
         """Route text to the terminal running this session.
 
@@ -1191,26 +1213,68 @@ end tell
             await self._route_to_terminal_locked(session_id, text)
 
     async def _route_to_terminal_locked(self, session_id: str, text: str):
-        """Inner routing logic, always called under the per-session lock."""
+        """Inner routing logic, always called under the per-session lock.
+
+        Transport priority:
+          TTY sessions:  inject_tty (TIOCSTI, no focus/clipboard) →
+                         send_text (osascript fallback) →
+                         pbcopy+osascript (last resort)
+          tmux sessions: send_text (terminal-manager) →
+                         direct tmux send-keys fallback
+
+        Response capture:
+          tmux — _capture_tmux_response (polls capture-pane)
+          TTY  — _capture_tty_response  (polls via wait_for_idle)
+        """
         session = self._sessions.get(session_id, {})
         tmux_target = session.get('tmux_target')
 
-        # Primary path: terminal-manager send_text
-        try:
-            result = await self._rpc('tools/call', {
-                'name': 'send_text',
-                'arguments': {'session_id': session_id, 'text': text}
-            }, timeout=3.0)
-            if isinstance(result, dict) and result.get('ok'):
-                _log(f'[claudecode] routed via terminal-manager send_text: {session_id[:8]}')
-                if tmux_target:
-                    asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
-                return
-        except Exception as e:
-            _log(f'[claudecode] send_text failed, falling back: {e}')
+        # ── TTY sessions ─────────────────────────────────────────────────────
+        if not tmux_target:
+            # Priority 1: inject_tty — TIOCSTI, no clipboard, no focus needed
+            try:
+                result = await self._rpc('tools/call', {
+                    'name': 'inject_tty',
+                    'arguments': {'session_id': session_id, 'text': text}
+                }, timeout=3.0)
+                if isinstance(result, dict) and result.get('ok'):
+                    _log(f'[claudecode] routed via inject_tty: {session_id[:8]}')
+                    asyncio.create_task(self._capture_tty_response(session_id))
+                    return
+            except Exception as e:
+                _log(f'[claudecode] inject_tty failed, falling back: {e}')
 
-        # Fallback for tmux sessions: direct send-keys
-        if tmux_target:
+            # Priority 2: send_text via terminal-manager (osascript, focuses window)
+            try:
+                result = await self._rpc('tools/call', {
+                    'name': 'send_text',
+                    'arguments': {'session_id': session_id, 'text': text}
+                }, timeout=3.0)
+                if isinstance(result, dict) and result.get('ok'):
+                    _log(f'[claudecode] routed via send_text: {session_id[:8]}')
+                    asyncio.create_task(self._capture_tty_response(session_id))
+                    return
+            except Exception as e:
+                _log(f'[claudecode] send_text failed, falling back to osascript: {e}')
+
+            # Priority 3 handled below (pbcopy + osascript)
+
+        # ── tmux sessions ─────────────────────────────────────────────────────
+        else:
+            # Primary: terminal-manager send_text
+            try:
+                result = await self._rpc('tools/call', {
+                    'name': 'send_text',
+                    'arguments': {'session_id': session_id, 'text': text}
+                }, timeout=3.0)
+                if isinstance(result, dict) and result.get('ok'):
+                    _log(f'[claudecode] routed via terminal-manager send_text: {session_id[:8]}')
+                    asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
+                    return
+            except Exception as e:
+                _log(f'[claudecode] send_text failed, falling back: {e}')
+
+            # Fallback: direct tmux send-keys
             try:
                 p1 = await asyncio.create_subprocess_exec(
                     'tmux', 'send-keys', '-t', tmux_target, '-l', text,
@@ -1227,7 +1291,7 @@ end tell
             asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
             return
 
-        # Fallback for TTY sessions: pbcopy + osascript
+        # ── TTY last-resort: pbcopy + osascript ──────────────────────────────
 
         try:
             pbcopy = await asyncio.create_subprocess_exec(
@@ -1392,6 +1456,7 @@ end tell
                 _log(f'[claudecode] osascript error: {err.decode().strip()}')
             else:
                 _log(f'[claudecode] osascript succeeded (rc={proc.returncode})')
+                asyncio.create_task(self._capture_tty_response(session_id))
         except Exception as e:
             _log(f'[claudecode] _route_to_terminal exception: {e}')
 

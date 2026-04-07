@@ -595,6 +595,68 @@ return true'''
     return ok
 
 
+async def _terminal_inject_tty(tty: str, text: str) -> bool:
+    """Inject text directly into the TTY input queue via TIOCSTI ioctl.
+
+    Sends Ctrl-U + text + newline as raw input characters without needing
+    Terminal.app to be focused or Accessibility permissions.  Works with any
+    terminal emulator.  Falls back gracefully if TIOCSTI is unavailable
+    (e.g. SIP-restricted environment).
+
+    TIOCSTI (0x80017472) is still supported on macOS unlike Linux >= 6.2.
+    The calling process must own the TTY (same uid) — satisfied because
+    claudecode-controller runs as the same user that owns the terminal.
+    """
+    TIOCSTI = 0x80017472
+    full = _tty_to_full(tty)
+    payload = '\x15' + text + '\n'   # Ctrl-U clears the line, \n submits
+    try:
+        import fcntl
+        fd = os.open(full, os.O_RDWR | os.O_NOCTTY)
+        try:
+            for ch in payload:
+                fcntl.ioctl(fd, TIOCSTI, ch.encode('utf-8', errors='replace'))
+        finally:
+            os.close(fd)
+        _dbg(f'  [inject_tty] injected {len(payload)} chars via TIOCSTI to {full}')
+        return True
+    except Exception as e:
+        _log(f'inject_tty failed ({full}): {e}', 'WARN')
+        return False
+
+
+async def _terminal_focus(tty: str) -> bool:
+    """Bring the Terminal.app tab with this TTY to the front without typing."""
+    safe = _tty_to_full(tty).replace('"', '\\"')
+    script = f'''set targetTTY to "{safe}"
+set found to false
+if application "Terminal" is running then
+    tell application "Terminal"
+        repeat with w in windows
+            set tabCount to count of tabs of w
+            repeat with i from 1 to tabCount
+                set t to tab i of w
+                try
+                    if tty of t is targetTTY then
+                        set selected tab of w to t
+                        set index of w to 1
+                        activate
+                        set found to true
+                        exit repeat
+                    end if
+                end try
+            end repeat
+            if found then exit repeat
+        end repeat
+    end tell
+end if
+return found'''
+    result = await _run_script(script)
+    ok = result.strip() == 'true'
+    _dbg(f'  [terminal_focus] tty={tty} ok={ok}')
+    return ok
+
+
 async def _terminal_send_raw(tty: str, text: str) -> bool:
     """Type raw text without clearing or pressing Enter."""
     safe_tty = _tty_to_full(tty).replace('"', '\\"')
@@ -991,6 +1053,123 @@ class TerminalManager:
         _log(f'send_raw {sid[:12]} text={text!r}')
         ok = await self._send_raw(session, text)
         return {'ok': ok}
+
+    async def _tool_inject_tty(self, args: dict) -> dict:
+        """Inject text into the TTY input queue via TIOCSTI — no clipboard, no focus needed."""
+        sid = args.get('session_id', '')
+        text = args.get('text', '')
+        session = self._sessions.get(sid)
+        if not session:
+            raise ValueError(f'Unknown session: {sid}')
+        if session.session_type == 'tmux':
+            # tmux sessions don't use a TTY device — fall back to send_text
+            _log(f'inject_tty {sid[:12]} — tmux session, delegating to send_text')
+            ok = await _tmux_send_text(session.tmux_target, text)
+        else:
+            _log(f'inject_tty {sid[:12]} tty={session.tty!r}')
+            ok = await _terminal_inject_tty(session.tty, text)
+        return {'ok': ok}
+
+    async def _tool_focus_window(self, args: dict) -> dict:
+        """Bring the terminal window/pane for this session to the foreground."""
+        sid = args.get('session_id', '')
+        session = self._sessions.get(sid)
+        if not session:
+            raise ValueError(f'Unknown session: {sid}')
+        if session.session_type == 'tmux':
+            # Select the tmux window containing this pane
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    TMUX, 'select-window', '-t', session.tmux_target,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await asyncio.wait_for(proc.wait(), timeout=3)
+                _log(f'focus_window {sid[:12]} tmux={session.tmux_target}')
+                return {'ok': True}
+            except Exception as e:
+                _log(f'focus_window tmux error: {e}', 'WARN')
+                return {'ok': False}
+        else:
+            _log(f'focus_window {sid[:12]} tty={session.tty!r}')
+            ok = await _terminal_focus(session.tty)
+            return {'ok': ok}
+
+    async def _tool_wait_for_idle(self, args: dict) -> dict:
+        """Poll until the session shows a Claude Code idle prompt, then return the response.
+
+        Returns {'idle': bool, 'output': str} where output is the text above the
+        final prompt line — i.e. Claude's most recent response.  Useful for TTY
+        sessions where response capture isn't available via tmux capture-pane.
+
+        params:
+          session_id     — required
+          timeout        — seconds to wait (default 120)
+          prompt_pattern — regex for the idle prompt line (default Claude Code '> ')
+          poll_interval  — seconds between polls (default 1)
+          stable_count   — how many identical idle reads confirm idle (default 2)
+        """
+        import re as _re
+        sid = args.get('session_id', '')
+        timeout = float(args.get('timeout', 120))
+        pattern = args.get('prompt_pattern', r'^\s*>\s*$')
+        poll_interval = float(args.get('poll_interval', 1))
+        stable_needed = int(args.get('stable_count', 2))
+
+        session = self._sessions.get(sid)
+        if not session:
+            raise ValueError(f'Unknown session: {sid}')
+
+        prompt_re = _re.compile(pattern)
+        deadline = asyncio.get_event_loop().time() + timeout
+        prev_content = ''
+        stable = 0
+
+        _log(f'wait_for_idle {sid[:12]} timeout={timeout}s pattern={pattern!r}')
+
+        while asyncio.get_event_loop().time() < deadline:
+            content = await self._read(session, 120)
+            lines = [l for l in content.splitlines() if l.strip()]
+
+            if lines and prompt_re.match(lines[-1]):
+                if content == prev_content:
+                    stable += 1
+                    if stable >= stable_needed:
+                        output = self._extract_response(content, prompt_re)
+                        _log(f'wait_for_idle {sid[:12]} idle — {len(output)} chars')
+                        return {'idle': True, 'output': output}
+                else:
+                    stable = 0
+            else:
+                stable = 0
+
+            prev_content = content
+            await asyncio.sleep(poll_interval)
+
+        _log(f'wait_for_idle {sid[:12]} timed out after {timeout}s')
+        return {'idle': False, 'output': ''}
+
+    @staticmethod
+    def _extract_response(content: str, prompt_re) -> str:
+        """Extract the text above the trailing prompt line(s)."""
+        import re as _re
+        lines = content.splitlines()
+        # Find the last prompt line
+        bottom = len(lines)
+        for i in range(len(lines) - 1, -1, -1):
+            if prompt_re.match(lines[i]):
+                bottom = i
+            else:
+                break
+        candidate = lines[:bottom]
+        # Strip trailing blank lines and decorative separators
+        while candidate and not candidate[-1].strip():
+            candidate.pop()
+        response_lines = [
+            l for l in candidate
+            if l.strip() and not _re.match(r'^[-─━═╌╍\s]+$', l)
+        ]
+        return '\n'.join(response_lines[-40:]).strip()[:4000]
 
     # -----------------------------------------------------------------------
     # I/O dispatch
