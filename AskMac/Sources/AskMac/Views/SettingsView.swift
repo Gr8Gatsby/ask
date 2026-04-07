@@ -162,8 +162,13 @@ struct MacScriptsView: View {
 
 private struct ScriptsTabView: View {
     @Environment(ScriptManager.self) private var scriptManager
+    @Environment(AppSettings.self) private var settings
     @State private var selectedScriptID: String?
     @State private var showVault = false
+    @State private var installer = ScriptInstaller()
+    @State private var isDropTargeted = false
+    @State private var showSuccessBanner = false
+    @State private var successMessage = ""
 
     var body: some View {
         NavigationSplitView {
@@ -186,6 +191,50 @@ private struct ScriptsTabView: View {
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 220, ideal: 240)
+            .overlay {
+                if isDropTargeted {
+                    DropHighlightOverlay()
+                        .padding(6)
+                        .allowsHitTesting(false)
+                }
+                if installer.phase == .parsing {
+                    Color.black.opacity(0.08)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text("Reading zip…").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(6)
+                }
+            }
+            .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+                guard installer.phase == .idle else { return false }
+                providers.first?.loadItem(forTypeIdentifier: "public.file-url", options: nil) { item, _ in
+                    guard let data = item as? Data,
+                          let url = URL(dataRepresentation: data, relativeTo: nil),
+                          url.pathExtension.lowercased() == "zip"
+                    else { return }
+                    DispatchQueue.main.async {
+                        installer.load(zipURL: url, existingScripts: scriptManager.scripts)
+                    }
+                }
+                return true
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if showSuccessBanner {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        Text(successMessage).font(.caption).foregroundStyle(.primary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.green.opacity(0.1))
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
             .onAppear {
                 if selectedScriptID == nil {
                     selectedScriptID = scriptManager.scripts.first(where: { !$0.isSystem })?.id
@@ -202,29 +251,81 @@ private struct ScriptsTabView: View {
             .onChange(of: selectedScriptID) { _, id in
                 if id != nil { showVault = false }
             }
+            .onChange(of: installer.phase) { _, phase in
+                if phase == .done {
+                    let count = installer.pending.count - installer.skipped.filter { $0.folderName != "" }.count
+                    successMessage = installer.pending.count == 1
+                        ? "Installed \(installer.pending.first?.name ?? "script")"
+                        : "Installed \(installer.pending.count) scripts"
+                    withAnimation { showSuccessBanner = true }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        withAnimation { showSuccessBanner = false }
+                    }
+                    _ = count // suppress unused warning
+                }
+            }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 0) {
-                    Divider()
-                    Button {
-                        showVault = true
-                        selectedScriptID = nil
-                    } label: {
-                        Label("Scripts Vault", systemImage: "lock")
-                            .font(.callout)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
-                            .background(showVault ? Color.accentColor.opacity(0.12) : Color.clear)
-                            .contentShape(Rectangle())
+                    if let label = installer.installProgressLabel {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text(label).font(.caption2).foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity)
+                        .background(.bar)
+                        Divider()
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(showVault ? Color.accentColor : Color.secondary)
+                    Divider()
+                    HStack(spacing: 0) {
+                        Button {
+                            showVault = true
+                            selectedScriptID = nil
+                        } label: {
+                            Label("Scripts Vault", systemImage: "lock")
+                                .font(.callout)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
+                                .background(showVault ? Color.accentColor.opacity(0.12) : Color.clear)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(showVault ? Color.accentColor : Color.secondary)
+
+                        Divider().frame(height: 20)
+
+                        Button {
+                            let panel = NSOpenPanel()
+                            panel.allowedContentTypes = [.zip]
+                            panel.allowsMultipleSelection = false
+                            panel.message = "Choose a script .zip to install"
+                            if panel.runModal() == .OK, let url = panel.url {
+                                installer.load(zipURL: url, existingScripts: scriptManager.scripts)
+                            }
+                        } label: {
+                            Label("Upload", systemImage: "square.and.arrow.up")
+                                .font(.callout)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 10)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Install a script from a .zip file")
+                        .disabled(installer.phase != .idle)
+                    }
                 }
                 .background(.bar)
             }
+            .sheet(isPresented: $installer.showSheet) {
+                ScriptInstallSheet(installer: installer, scriptManager: scriptManager,
+                                   vaultURL: settings.vaultPath ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ask/scripts"))
+            }
         } detail: {
             if showVault {
-                ScriptsVaultView()
+                ScriptsVaultView(installer: installer, scriptManager: scriptManager)
             } else if let id = selectedScriptID,
                       let script = scriptManager.scripts.first(where: { $0.id == id }) {
                 ScriptDetailView(script: script, scriptManager: scriptManager)
@@ -240,58 +341,115 @@ private struct ScriptsTabView: View {
 }
 
 private struct ScriptsVaultView: View {
+    @Bindable var installer: ScriptInstaller
+    let scriptManager: ScriptManager
+
     @Environment(AppSettings.self) private var settings
     @State private var vaultPathText: String = ""
     @State private var showVaultPicker = false
+    @State private var isDropTargeted = false
 
     var body: some View {
-        Form {
-            Section {
-                GroupBox {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "info.circle.fill")
-                            .foregroundStyle(.secondary)
-                            .font(.body)
-                            .padding(.top, 1)
-                        Text("We have provided sample scripts so you can see how this system works. Scripts are yours to make and control — we recommend vibe coding them, testing, and iterating until they do exactly what you need to be most productive.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+        VStack(spacing: 0) {
+            Form {
+                Section {
+                    GroupBox {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "info.circle.fill")
+                                .foregroundStyle(.secondary)
+                                .font(.body)
+                                .padding(.top, 1)
+                            Text("We have provided sample scripts so you can see how this system works. Scripts are yours to make and control — we recommend vibe coding them, testing, and iterating until they do exactly what you need to be most productive.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(2)
                     }
-                    .padding(2)
+                }
+
+                Section {
+                    Toggle("Include App Bundle Scripts", isOn: Binding(
+                        get: { settings.usesBundledScripts },
+                        set: { settings.usesBundledScripts = $0 }
+                    ))
+
+                    if settings.usesBundledScripts,
+                       let bundlePath = Bundle.main.resourceURL?.appendingPathComponent("Scripts").abbreviatingWithTildeInPath {
+                        Text(bundlePath)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    HStack(spacing: 6) {
+                        TextField("Vault Path", text: $vaultPathText)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit { applyVaultPathText() }
+                        Button { showVaultPicker = true } label: {
+                            Image(systemName: "folder")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Choose folder")
+                    }
+                } header: {
+                    Text("Scripts Vault")
+                } footer: {
+                    Text("Vault scripts override bundle scripts with the same ID.")
                 }
             }
+            .formStyle(.grouped)
 
-            Section {
-                Toggle("Include App Bundle Scripts", isOn: Binding(
-                    get: { settings.usesBundledScripts },
-                    set: { settings.usesBundledScripts = $0 }
-                ))
+            // Upload drop zone
+            ZStack {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(
+                        isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.25),
+                        style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])
+                    )
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(isDropTargeted ? Color.accentColor.opacity(0.07) : Color.clear)
+                    )
 
-                if settings.usesBundledScripts,
-                   let bundlePath = Bundle.main.resourceURL?.appendingPathComponent("Scripts").abbreviatingWithTildeInPath {
-                    Text(bundlePath)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                HStack(spacing: 6) {
-                    TextField("Vault Path", text: $vaultPathText)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit { applyVaultPathText() }
-                    Button { showVaultPicker = true } label: {
-                        Image(systemName: "folder")
+                VStack(spacing: 10) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 28, weight: .light))
+                        .foregroundStyle(isDropTargeted ? Color.accentColor : Color.secondary)
+                    Text("Drop a script .zip here to install")
+                        .font(.callout)
+                        .foregroundStyle(isDropTargeted ? Color.accentColor : Color.secondary)
+                    Button("Choose File…") {
+                        let panel = NSOpenPanel()
+                        panel.allowedContentTypes = [.zip]
+                        panel.allowsMultipleSelection = false
+                        panel.message = "Choose a script .zip to install"
+                        if panel.runModal() == .OK, let url = panel.url {
+                            installer.load(zipURL: url, existingScripts: scriptManager.scripts)
+                        }
                     }
-                    .buttonStyle(.borderless)
-                    .help("Choose folder")
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(installer.phase != .idle)
                 }
-            } header: {
-                Text("Scripts Vault")
-            } footer: {
-                Text("Vault scripts override bundle scripts with the same ID.")
+                .padding(24)
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 20)
+            .frame(maxWidth: .infinity)
+            .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+                guard installer.phase == .idle else { return false }
+                providers.first?.loadItem(forTypeIdentifier: "public.file-url", options: nil) { item, _ in
+                    guard let data = item as? Data,
+                          let url = URL(dataRepresentation: data, relativeTo: nil),
+                          url.pathExtension.lowercased() == "zip"
+                    else { return }
+                    DispatchQueue.main.async {
+                        installer.load(zipURL: url, existingScripts: scriptManager.scripts)
+                    }
+                }
+                return true
             }
         }
-        .formStyle(.grouped)
         .navigationTitle("Scripts Vault")
         .onAppear {
             vaultPathText = settings.vaultPath?.abbreviatingWithTildeInPath ?? "~/.ask/scripts"
@@ -506,6 +664,10 @@ private struct ScriptDetailView: View {
                             crashBanner(error)
                         }
 
+                        if !script.stderrLog.isEmpty {
+                            stderrLogSection
+                        }
+
                         if liveBlocks.isEmpty {
                             ContentUnavailableView(
                                 "No Active Blocks",
@@ -679,7 +841,9 @@ private struct ScriptDetailView: View {
                 Divider()
                     .opacity(0.3)
                 dependenciesSection
-                    .padding(16)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .padding(.bottom, 44) // leave room for bottom overlay controls
             }
 
             Spacer(minLength: 0)
@@ -1507,7 +1671,7 @@ private struct ScriptDetailView: View {
             HStack {
                 Label("Setup", systemImage: "wrench.and.screwdriver")
                     .font(.caption).fontWeight(.semibold)
-                    .foregroundStyle(brandForegroundTertiary)
+                    .foregroundStyle(.tertiary)
                     .textCase(.uppercase)
                     .tracking(0.5)
                 Spacer()
@@ -1545,11 +1709,11 @@ private struct ScriptDetailView: View {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(check.label)
                                     .font(.caption).fontWeight(.medium)
-                                    .foregroundStyle(brandForegroundPrimary)
+                                    .foregroundStyle(.primary)
                                 if let msg = check.message {
                                     Text(msg)
                                         .font(.caption2)
-                                        .foregroundStyle(brandForegroundTertiary)
+                                        .foregroundStyle(.tertiary)
                                 }
                             }
                         }
@@ -1595,7 +1759,7 @@ private struct ScriptDetailView: View {
             }
         }
         .padding()
-        .background(Color(.windowBackgroundColor).opacity(0.6))
+        .background(Color.secondary.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(
             RoundedRectangle(cornerRadius: 10)
@@ -1666,7 +1830,7 @@ private struct ScriptDetailView: View {
     // MARK: Dependencies
 
     private var dependenciesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Dependencies")
                 .font(.caption)
                 .fontWeight(.semibold)
@@ -1674,41 +1838,46 @@ private struct ScriptDetailView: View {
                 .textCase(.uppercase)
                 .tracking(0.5)
 
-            ForEach(script.requires, id: \.id) { dep in
-                let isMissing = script.missingDeps.contains { $0.id == dep.id }
-                HStack(spacing: 8) {
-                    Image(systemName: isMissing ? "xmark.circle.fill" : "checkmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(isMissing ? .red : .green)
+            let columns = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 4) {
+                ForEach(script.requires, id: \.id) { dep in
+                    let isMissing = script.missingDeps.contains { $0.id == dep.id }
+                    HStack(spacing: 6) {
+                        Image(systemName: isMissing ? "xmark.circle.fill" : "checkmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(isMissing ? .red : .green)
 
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(dep.name)
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .foregroundStyle(brandForegroundPrimary)
-                        if isMissing, let install = dep.install {
-                            Text(install)
-                                .font(.caption2)
-                                .foregroundStyle(brandForegroundTertiary)
-                                .fontDesign(.monospaced)
-                        } else if !isMissing {
-                            Text("Installed")
-                                .font(.caption2)
-                                .foregroundStyle(brandForegroundTertiary)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(dep.name)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .foregroundStyle(brandForegroundPrimary)
+                                .lineLimit(1)
+                            if isMissing, let install = dep.install {
+                                Text(install)
+                                    .font(.system(size: 9, design: .monospaced))
+                                    .foregroundStyle(brandForegroundTertiary)
+                                    .lineLimit(1)
+                            } else {
+                                Text(isMissing ? "Missing" : "Installed")
+                                    .font(.caption2)
+                                    .foregroundStyle(brandForegroundTertiary)
+                            }
                         }
+                        Spacer(minLength: 0)
                     }
-
-                    Spacer()
-
-                    if isMissing {
-                        Button("Retry") {
-                            scriptManager.retryDependencies(id: script.id)
-                        }
-                        .font(.caption2)
-                        .buttonStyle(.bordered)
-                        .controlSize(.mini)
-                    }
+                    .padding(.vertical, 2)
                 }
+            }
+
+            // Retry button — shown once if any are missing
+            if script.missingDeps.contains(where: { _ in true }) {
+                Button("Retry") {
+                    scriptManager.retryDependencies(id: script.id)
+                }
+                .font(.caption2)
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
             }
         }
     }
@@ -1818,6 +1987,41 @@ private struct ScriptDetailView: View {
     }
 
     // MARK: Crash banner
+
+    @ViewBuilder
+    private var stderrLogSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label("Script Log", systemImage: "terminal")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.tertiary)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+                Spacer()
+                Text("\(script.stderrLog.count) lines")
+                    .font(.caption2)
+                    .foregroundStyle(.quaternary)
+            }
+
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(Array(script.stderrLog.enumerated()), id: \.offset) { _, line in
+                        Text(line)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .lineLimit(nil)
+                    }
+                }
+                .padding(8)
+            }
+            .frame(height: 140)
+            .background(Color.black.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
 
     private func crashBanner(_ error: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
@@ -2796,6 +3000,267 @@ private extension String {
 private extension URL {
     var abbreviatingWithTildeInPath: String {
         path.abbreviatingWithTildeInPath()
+    }
+}
+
+// MARK: - Drop highlight overlay
+
+private struct DropHighlightOverlay: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.accentColor.opacity(0.06))
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.accentColor, lineWidth: 2)
+            VStack(spacing: 6) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(Color.accentColor)
+                Text("Drop to Install")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+    }
+}
+
+// MARK: - Script Install Sheet
+
+private struct ScriptInstallSheet: View {
+    @Bindable var installer: ScriptInstaller
+    let scriptManager: ScriptManager
+    let vaultURL: URL
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(installer.errorMessage != nil ? "Cannot Install" : installTitle)
+                        .font(.headline)
+                    if installer.errorMessage == nil {
+                        Text("\(installer.pending.count) script\(installer.pending.count == 1 ? "" : "s") ready to install")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                Button {
+                    installer.cancel()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding()
+
+            Divider()
+
+            if let error = installer.errorMessage {
+                // Error state
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                                .font(.title3)
+                            Text(error)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding()
+                        .background(Color.orange.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .padding()
+                }
+            } else {
+                // Script list
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(installer.pending) { script in
+                            scriptRow(script)
+                        }
+
+                        if !installer.skipped.isEmpty {
+                            DisclosureGroup {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    ForEach(installer.skipped) { skipped in
+                                        HStack(alignment: .top, spacing: 8) {
+                                            Image(systemName: "exclamationmark.circle.fill")
+                                                .font(.caption)
+                                                .foregroundStyle(.orange)
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(skipped.folderName)
+                                                    .font(.caption)
+                                                    .fontWeight(.medium)
+                                                Text(skipped.reason)
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                        }
+                                    }
+                                }
+                                .padding(.top, 4)
+                            } label: {
+                                Text("\(installer.skipped.count) script\(installer.skipped.count == 1 ? "" : "s") will be skipped")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .padding()
+                }
+
+                Divider()
+
+                // Actions
+                HStack {
+                    Button("Cancel") {
+                        installer.cancel()
+                    }
+                    .buttonStyle(.bordered)
+                    Spacer()
+                    Button(installButtonLabel) {
+                        installer.install(to: vaultURL, scriptManager: scriptManager)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(installer.phase != .ready)
+                }
+                .padding()
+            }
+        }
+        .frame(minWidth: 440, minHeight: 300)
+    }
+
+    private var installTitle: String {
+        let kinds = installer.pending.map(\.installKind)
+        let allUpdates = kinds.allSatisfy { $0 == .update || $0 == .reinstall }
+        let allNew = kinds.allSatisfy { $0 == .fresh }
+        if installer.pending.count == 1 {
+            switch installer.pending[0].installKind {
+            case .fresh:     return "Install Script"
+            case .update:    return "Update Script"
+            case .downgrade: return "Downgrade Script"
+            case .reinstall: return "Reinstall Script"
+            }
+        }
+        return allUpdates ? "Update Scripts" : allNew ? "Install Scripts" : "Install & Update Scripts"
+    }
+
+    private var installButtonLabel: String {
+        let hasDowngrade = installer.pending.contains { $0.installKind == .downgrade }
+        let allUpdates = installer.pending.allSatisfy { $0.installKind == .update || $0.installKind == .reinstall }
+        if hasDowngrade { return "Downgrade" }
+        return allUpdates ? "Update" : "Install"
+    }
+
+    private func scriptRow(_ script: ScriptInstaller.PendingScript) -> some View {
+        let hasWarnings = !script.warnings.isEmpty
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                // Icon
+                Image(systemName: script.icon ?? "terminal.fill")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, height: 32)
+                    .background(Color.secondary.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(script.name)
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+
+                        kindBadge(for: script)
+                    }
+                    if !script.description.isEmpty {
+                        Text(script.description)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    Text(script.id)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer()
+            }
+
+            // Warnings
+            if hasWarnings {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(script.warnings, id: \.self) { warning in
+                        HStack(alignment: .top, spacing: 5) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.orange)
+                                .padding(.top, 1)
+                            Text(warning)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .padding(6)
+                .background(Color.orange.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private func kindBadge(for script: ScriptInstaller.PendingScript) -> some View {
+        switch script.installKind {
+        case .fresh:
+            badge("New", color: .green)
+        case .update:
+            HStack(spacing: 3) {
+                if let old = script.existingVersion {
+                    Text(old).foregroundStyle(.tertiary)
+                    Image(systemName: "arrow.right").font(.system(size: 8)).foregroundStyle(.tertiary)
+                }
+                Text("Update")
+            }
+            .font(.caption2)
+            .foregroundStyle(.blue)
+            .padding(.horizontal, 5).padding(.vertical, 2)
+            .background(Color.blue.opacity(0.1))
+            .clipShape(Capsule())
+        case .downgrade:
+            HStack(spacing: 3) {
+                if let old = script.existingVersion {
+                    Text(old).foregroundStyle(.tertiary)
+                    Image(systemName: "arrow.down").font(.system(size: 8)).foregroundStyle(.orange)
+                }
+                Text("Downgrade")
+            }
+            .font(.caption2)
+            .foregroundStyle(.orange)
+            .padding(.horizontal, 5).padding(.vertical, 2)
+            .background(Color.orange.opacity(0.1))
+            .clipShape(Capsule())
+        case .reinstall:
+            badge("Already Installed", color: .secondary)
+        }
+    }
+
+    private func badge(_ label: String, color: Color) -> some View {
+        Text(label)
+            .font(.caption2)
+            .foregroundStyle(color)
+            .padding(.horizontal, 5).padding(.vertical, 2)
+            .background(color.opacity(0.1))
+            .clipShape(Capsule())
     }
 }
 

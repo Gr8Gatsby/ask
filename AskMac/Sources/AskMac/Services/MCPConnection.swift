@@ -31,6 +31,8 @@ final class MCPConnection: @unchecked Sendable {
     var systemProxy: ((String, [String: Any]) async -> [String: Any]?)?
     /// Additional tools from system scripts, appended to tools/list responses.
     var systemTools: [[String: Any]] = []
+    /// Called for each line written to stderr (live, from the stderr-reading task).
+    var onStderrLine: ((String) -> Void)?
 
     private let entryURL: URL
     private let blockService: BlockService
@@ -48,6 +50,10 @@ final class MCPConnection: @unchecked Sendable {
     // process exit from the main actor in ScriptManager.handleCrash. The race is
     // benign — worst case is a slightly stale error message.
     nonisolated(unsafe) private var stderrLines: [String] = []
+
+    // Set to true after the first malformed (non-JSON) line is seen; prevents
+    // emitting duplicate warning blocks for the same script run.
+    nonisolated(unsafe) private var hasWarnedMalformedJSON = false
 
     var lastStderrSummary: String {
         stderrLines.last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
@@ -73,6 +79,8 @@ final class MCPConnection: @unchecked Sendable {
     // MARK: - Lifecycle
 
     func start() {
+        hasWarnedMalformedJSON = false
+        stderrLines = []
         let inPipe = Pipe()
         let outPipe = Pipe()
 
@@ -123,6 +131,7 @@ final class MCPConnection: @unchecked Sendable {
                 guard !Task.isCancelled else { break }
                 self.stderrLines.append(line)
                 if self.stderrLines.count > 50 { self.stderrLines.removeFirst() }
+                self.onStderrLine?(line)
                 print("[MCPConnection:\(self.scriptID)] \(line)")
             }
         }
@@ -174,10 +183,38 @@ final class MCPConnection: @unchecked Sendable {
     // MARK: - Inbound (script → daemon)
 
     private func handleLine(_ line: String) async {
-        guard !line.isEmpty,
-              let data = line.data(using: .utf8),
+        guard !line.isEmpty else { return }
+
+        // Silently ignore whitespace-only lines (e.g. blank separators from scripts).
+        guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+
+        guard let data = line.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return }
+        else {
+            // Non-JSON output from the script — warn once per run so the developer
+            // knows a line was dropped rather than silently losing it.
+            if !hasWarnedMalformedJSON {
+                hasWarnedMalformedJSON = true
+                let truncated = line.count > 500 ? String(line.prefix(500)) + "…" : line
+                print("[MCPConnection:\(scriptID)] Non-JSON line dropped: \(truncated)")
+                Task {
+                    let payload: [String: Any] = [
+                        "title": "\(scriptID): output error",
+                        "body": "Script emitted non-JSON output (check logs):\n\(truncated)"
+                    ]
+                    if let d = try? JSONSerialization.data(withJSONObject: payload),
+                       let js = String(data: d, encoding: .utf8) {
+                        try? await blockService.emitBlock(
+                            blockID: "\(scriptID)-malformed-json",
+                            blockType: "alert",
+                            payload: js,
+                            expiresAt: Date().addingTimeInterval(3600)
+                        )
+                    }
+                }
+            }
+            return
+        }
 
         let method = json["method"] as? String ?? ""
         let id = json["id"]
