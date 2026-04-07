@@ -592,7 +592,7 @@ private struct ScriptSidebarRow: View {
                 }
             }
 
-            if !script.isBundled {
+            if !script.isBundled && !script.isSystem {
                 Divider()
                 Button(role: .destructive) {
                     showUninstallConfirm = true

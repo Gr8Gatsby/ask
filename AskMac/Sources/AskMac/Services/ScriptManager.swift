@@ -377,6 +377,12 @@ final class ScriptManager: @unchecked Sendable {
     }
 
     func uninstallScript(id: String) {
+        // System scripts cannot be deleted — users can only disable them
+        guard scripts.first(where: { $0.id == id })?.isSystem != true else {
+            print("[ScriptManager] Refusing to uninstall system script: \(id)")
+            return
+        }
+
         // Stop all connections
         connections[id]?.stop()
         connections.removeValue(forKey: id)
