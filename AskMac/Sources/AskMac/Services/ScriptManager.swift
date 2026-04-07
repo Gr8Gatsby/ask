@@ -1,4 +1,5 @@
 import AppKit
+import CoreServices
 #if canImport(AskMacCore)
 import AskMacCore
 #endif
@@ -82,13 +83,15 @@ struct ScriptManifest: Codable {
     let tools: [ScriptTool]?
     let setup: String?              // relative path to setup script (e.g. "setup.py")
     let config: [ScriptConfigItem]? // configuration values the script needs
+    let timeoutSeconds: Int?        // feed script max runtime in seconds (default 300)
 
     var isFeed: Bool   { type == "feed" }
     var isSystem: Bool { type == "system" }
 
     enum CodingKeys: String, CodingKey {
         case id, name, version, description, entry, icon, type, schedule, requires, tools, setup, config
-        case iconFile = "icon_file"
+        case iconFile       = "icon_file"
+        case timeoutSeconds = "timeout_seconds"
     }
 }
 
@@ -121,6 +124,8 @@ struct ManagedScript: Identifiable {
     var configItems: [ScriptConfigItem] = []  // declared config from manifest
     var setupChecks: [SetupCheck] = []        // last --check results
     var setupCheckRunning: Bool = false        // true while --check is in flight
+    var stderrLog: [String] = []              // last 50 lines of stderr from most recent run
+    var isBundled: Bool = false               // true if the script lives in the app bundle
 
     var hasSetup: Bool { setupScript != nil || !configItems.isEmpty }
     var needsSetup: Bool {
@@ -153,7 +158,7 @@ struct ManagedScript: Identifiable {
 /// Discovers scripts under ~/.ask/scripts/*/manifest.json, launches each one
 /// as a subprocess via MCPConnection, and auto-restarts on crash.
 @Observable
-final class ScriptManager {
+final class ScriptManager: @unchecked Sendable {
     private let cloudKit: CloudKitService
     private let machineID: String
     private let settings: AppSettings
@@ -172,6 +177,26 @@ final class ScriptManager {
     private let actionHistory: ActionHistoryService
     private let feedScheduler: FeedScheduler
     private let terminalMonitor = TerminalMonitorService()
+
+    // Vault file watcher
+    private var vaultWatcher: VaultWatcher?
+    private var reloadDebounceWork: DispatchWorkItem?
+
+    // Install lock: reload() defers while an install is in progress
+    private var installLockCount = 0
+    private var pendingReload = false
+
+    // In-flight dep-check guard: prevents double-launch when reload() fires twice
+    // rapidly (e.g. endInstall + stale file-watcher debounce both calling reload()).
+    private var launchingScripts: Set<String> = []
+
+    // Circuit breaker: tracks recent crash timestamps per script
+    private var crashHistory: [String: [Date]] = [:]
+    private static let circuitBreakerLimit   = 5
+    private static let circuitBreakerWindow: TimeInterval = 300  // 5 minutes
+
+    // Feed timeout tasks: cancelled when feed exits cleanly
+    private var feedTimeoutTasks: [String: Task<Void, Never>] = [:]
 
     init(cloudKit: CloudKitService, machineID: String, settings: AppSettings, actionHistory: ActionHistoryService) {
         self.cloudKit = cloudKit
@@ -198,6 +223,7 @@ final class ScriptManager {
     func start() {
         discoverAndLaunch()
         purgeBlocksForDisabledScripts()
+        startVaultWatcher()
     }
 
     /// Deletes CloudKit blocks for any scripts that are currently disabled.
@@ -219,17 +245,26 @@ final class ScriptManager {
     }
 
     func stop() {
+        vaultWatcher = nil
+        reloadDebounceWork?.cancel()
         for (_, conn) in connections { conn.stop() }
         connections = [:]
         for (_, conn) in systemConnections { conn.stop() }
         systemConnections = [:]
         feedScheduler.cancelAll()
+        feedTimeoutTasks.values.forEach { $0.cancel() }
+        feedTimeoutTasks = [:]
+        launchingScripts = []
     }
 
     /// Rescans the scripts directory, picks up newly discovered scripts, and restarts
     /// all already-tracked enabled scripts (tile scripts restart; feed scripts get an
     /// immediate run if not currently running).
     func reload() {
+        guard installLockCount == 0 else {
+            pendingReload = true
+            return
+        }
         let fm = FileManager.default
         // Collect all script directories from all sources; later sources override earlier ones.
         var allDirs: [(dir: URL, manifestURL: URL)] = []
@@ -239,6 +274,8 @@ final class ScriptManager {
             for dir in subdirs {
                 var isDir: ObjCBool = false
                 guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
+                // Skip rollback backup directories (created by ScriptInstaller on update)
+                guard !dir.lastPathComponent.hasSuffix(".previous") else { continue }
                 let manifestURL = dir.appendingPathComponent("manifest.json")
                 guard let data = try? Data(contentsOf: manifestURL),
                       let manifest = try? JSONDecoder().decode(ScriptManifest.self, from: data)
@@ -339,6 +376,57 @@ final class ScriptManager {
         }
     }
 
+    func uninstallScript(id: String) {
+        // System scripts cannot be deleted — users can only disable them
+        guard scripts.first(where: { $0.id == id })?.isSystem != true else {
+            print("[ScriptManager] Refusing to uninstall system script: \(id)")
+            return
+        }
+
+        // Stop all connections
+        connections[id]?.stop()
+        connections.removeValue(forKey: id)
+        systemConnections[id]?.stop()
+        systemConnections.removeValue(forKey: id)
+
+        // Cancel feed scheduler + timeout tasks
+        feedScheduler.cancel(scriptID: id)
+        feedTimeoutTasks[id]?.cancel()
+        feedTimeoutTasks.removeValue(forKey: id)
+
+        // Clear all runtime state
+        launchingScripts.remove(id)
+        crashHistory.removeValue(forKey: id)
+        restartDelays.removeValue(forKey: id)
+        activeBlocks.removeValue(forKey: id)
+
+        // Remove from disabled-scripts list (cleanup, the script is gone)
+        settings.setScriptEnabled(id, enabled: true)
+
+        // Clear CloudKit blocks
+        Task {
+            let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: id)
+            try? await blockService.clearAllBlocks()
+        }
+
+        // Capture directory before removing from cache
+        let isBundled = scripts.first(where: { $0.id == id })?.isBundled ?? true
+        let scriptDir = manifests[id]?.dir
+
+        // Remove from cache and UI
+        manifests.removeValue(forKey: id)
+        scripts.removeAll { $0.id == id }
+
+        // Move vault folder to Trash (bundled scripts are never trashed)
+        guard !isBundled, let dir = scriptDir else { return }
+        do {
+            try FileManager.default.trashItem(at: dir, resultingItemURL: nil)
+            print("[ScriptManager] Moved script \(id) to trash: \(dir.path)")
+        } catch {
+            print("[ScriptManager] Failed to move script \(id) to trash: \(error)")
+        }
+    }
+
     /// Deliver a user response to a block directly from the Mac UI.
     func respondToBlock(scriptID: String, blockID: String, value: String) {
         connections[scriptID]?.deliverResponse(blockID: blockID, value: value)
@@ -346,12 +434,16 @@ final class ScriptManager {
     }
 
     func enableScript(id: String) {
+        launchingScripts.remove(id)  // Clear stale guard from any previous failed launch
         let name = scripts.first(where: { $0.id == id })?.name ?? id
         settings.setScriptEnabled(id, enabled: true)
         if let idx = scripts.firstIndex(where: { $0.id == id }) {
             scripts[idx].isEnabled = true
         }
         actionHistory.recordScriptToggle(scriptName: name, enabled: true)
+        // Reset circuit-breaker state so the script gets a clean slate
+        crashHistory.removeValue(forKey: id)
+        restartDelays.removeValue(forKey: id)
         if let cached = manifests[id] {
             if cached.manifest.isFeed {
                 feedScheduler.schedule(manifest: cached.manifest, scriptDir: cached.dir, settings: settings) { [weak self] m, d in
@@ -374,6 +466,27 @@ final class ScriptManager {
         }
     }
 
+    // MARK: - Install lock
+
+    /// Call before starting an install to block file-watcher reloads mid-install.
+    func beginInstall() {
+        installLockCount += 1
+    }
+
+    /// Call after install completes (success or failure). Flushes any deferred reload.
+    func endInstall() {
+        installLockCount = max(0, installLockCount - 1)
+        if installLockCount == 0 {
+            // Cancel any file-watcher debounce that fired during the install.
+            // Without this, the stale work item calls reload() ~0.5s after we do,
+            // causing double-launch of every newly installed script.
+            reloadDebounceWork?.cancel()
+            reloadDebounceWork = nil
+            pendingReload = false
+            reload()
+        }
+    }
+
     // MARK: - Private
 
     private func discoverAndLaunch() {
@@ -386,6 +499,8 @@ final class ScriptManager {
             for dir in subdirs {
                 var isDir: ObjCBool = false
                 guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
+                // Skip rollback backup directories (created by ScriptInstaller on update)
+                guard !dir.lastPathComponent.hasSuffix(".previous") else { continue }
                 let manifestURL = dir.appendingPathComponent("manifest.json")
                 guard let data = try? Data(contentsOf: manifestURL),
                       let manifest = try? JSONDecoder().decode(ScriptManifest.self, from: data)
@@ -438,6 +553,15 @@ final class ScriptManager {
     }
 
     private func launch(manifest: ScriptManifest, scriptDir: URL) {
+        // Defense in depth: stop any orphaned connection before launching a new one.
+        // Normally launchWithDepCheck's guard prevents double-launch, but if something
+        // slips through we don't want two processes running for the same script.
+        if let orphan = connections[manifest.id] {
+            orphan.stop()
+            connections.removeValue(forKey: manifest.id)
+            activeBlocks.removeValue(forKey: manifest.id)
+        }
+
         let entryURL = scriptDir.appendingPathComponent(manifest.entry)
         let fm = FileManager.default
 
@@ -507,6 +631,15 @@ final class ScriptManager {
         conn.onTerminate = { [weak self] in
             DispatchQueue.main.async {
                 self?.handleCrash(manifest: manifest, scriptDir: scriptDir)
+            }
+        }
+
+        // Forward stderr lines to the script's stderrLog for live display in Settings UI.
+        conn.onStderrLine = { [weak self] line in
+            Task { @MainActor [weak self] in
+                guard let self, let idx = self.scripts.firstIndex(where: { $0.id == manifest.id }) else { return }
+                self.scripts[idx].stderrLog.append(line)
+                if self.scripts[idx].stderrLog.count > 50 { self.scripts[idx].stderrLog.removeFirst() }
             }
         }
 
@@ -590,6 +723,15 @@ final class ScriptManager {
             }
         }
 
+        // Forward stderr lines to the script's stderrLog for live display in Settings UI.
+        conn.onStderrLine = { [weak self] line in
+            Task { @MainActor [weak self] in
+                guard let self, let idx = self.scripts.firstIndex(where: { $0.id == manifest.id }) else { return }
+                self.scripts[idx].stderrLog.append(line)
+                if self.scripts[idx].stderrLog.count > 50 { self.scripts[idx].stderrLog.removeFirst() }
+            }
+        }
+
         activeBlocks.removeValue(forKey: manifest.id)
         conn.onBlockEmitted = { [weak self] block in
             Task { @MainActor [weak self] in
@@ -618,11 +760,27 @@ final class ScriptManager {
         connections[manifest.id] = conn
         upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .running, isEnabled: true)
         conn.start()
-        print("[ScriptManager] \(manifest.id): feed run started")
+
+        // Feed execution timeout: kill the run if it exceeds the configured limit.
+        let timeoutSecs = Double(manifest.timeoutSeconds ?? 300)
+        let timeoutTask = Task { @MainActor [weak self, weak conn] in
+            try? await Task.sleep(for: .seconds(timeoutSecs))
+            guard !Task.isCancelled else { return }
+            guard let self, let conn, self.connections[manifest.id] === conn else { return }
+            print("[ScriptManager] \(manifest.id): feed run timed out after \(Int(timeoutSecs))s — terminating")
+            conn.stop()
+            // onTerminate will fire → handleFeedExit with non-zero exit
+        }
+        feedTimeoutTasks[manifest.id] = timeoutTask
+
+        print("[ScriptManager] \(manifest.id): feed run started (timeout=\(Int(timeoutSecs))s)")
     }
 
     private func handleFeedExit(manifest: ScriptManifest, scriptDir: URL, conn: MCPConnection?) {
         guard !settings.disabledScripts.contains(manifest.id) else { return }
+
+        // Cancel any pending timeout for this feed run
+        feedTimeoutTasks.removeValue(forKey: manifest.id)?.cancel()
 
         let exitCode = conn?.exitCode ?? 0
         let bySignal = conn?.exitedBySignal ?? false
@@ -683,6 +841,20 @@ final class ScriptManager {
             scriptVersion: manifest.version
         )
 
+        // Circuit breaker: record this crash and check if we've hit the limit
+        let now = Date()
+        var history = crashHistory[manifest.id] ?? []
+        history.append(now)
+        history = history.filter { now.timeIntervalSince($0) < Self.circuitBreakerWindow }
+        crashHistory[manifest.id] = history
+
+        if history.count >= Self.circuitBreakerLimit {
+            crashHistory.removeValue(forKey: manifest.id)
+            print("[ScriptManager] \(manifest.id): circuit breaker tripped (\(history.count) crashes in \(Int(Self.circuitBreakerWindow))s)")
+            tripCircuitBreaker(manifest: manifest)
+            return
+        }
+
         let delay = restartDelays[manifest.id] ?? 1.0
         restartDelays[manifest.id] = min(delay * 2, 30.0)
 
@@ -714,10 +886,41 @@ final class ScriptManager {
         }
     }
 
+    private func tripCircuitBreaker(manifest: ScriptManifest) {
+        settings.setScriptEnabled(manifest.id, enabled: false)
+        if let idx = scripts.firstIndex(where: { $0.id == manifest.id }) {
+            scripts[idx].isEnabled = false
+            scripts[idx].status = .stopped
+            scripts[idx].lastError = "Auto-disabled: crashed \(Self.circuitBreakerLimit) times in \(Int(Self.circuitBreakerWindow / 60)) minutes"
+        }
+        let iconData  = manifests[manifest.id]?.icon.flatMap { ScriptManager.iconPNGBase64($0) }
+        let svgString = manifests[manifest.id]?.svgString
+        Task {
+            let bs = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id,
+                                  scriptName: manifest.name, scriptIcon: manifest.icon,
+                                  scriptIconData: iconData, scriptIconSVG: svgString)
+            let payload: [String: Any] = [
+                "title": "\(manifest.name) auto-disabled",
+                "body": "Script crashed \(Self.circuitBreakerLimit) times in \(Int(Self.circuitBreakerWindow / 60)) minutes and was disabled. Re-enable it in Settings."
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: payload),
+               let json = String(data: data, encoding: .utf8) {
+                try? await bs.emitBlock(blockID: "\(manifest.id)-circuit-breaker", blockType: "alert",
+                                        payload: json, expiresAt: Date().addingTimeInterval(86400))
+            }
+        }
+    }
+
     // MARK: - Dependency checking
 
     private func launchWithDepCheck(manifest: ScriptManifest, scriptDir: URL) {
+        guard !launchingScripts.contains(manifest.id) else {
+            print("[ScriptManager] \(manifest.id): launch already in-flight, skipping duplicate")
+            return
+        }
+        launchingScripts.insert(manifest.id)
         Task { @MainActor in
+            defer { self.launchingScripts.remove(manifest.id) }
             let failed = await checkDependencies(manifest)
             guard !self.settings.disabledScripts.contains(manifest.id) else { return }
             if !failed.isEmpty {
@@ -730,7 +933,13 @@ final class ScriptManager {
     }
 
     private func launchFeedRunWithDepCheck(manifest: ScriptManifest, scriptDir: URL) {
+        guard !launchingScripts.contains(manifest.id) else {
+            print("[ScriptManager] \(manifest.id): feed launch already in-flight, skipping duplicate")
+            return
+        }
+        launchingScripts.insert(manifest.id)
         Task { @MainActor in
+            defer { self.launchingScripts.remove(manifest.id) }
             let failed = await checkDependencies(manifest)
             guard !self.settings.disabledScripts.contains(manifest.id) else { return }
             if !failed.isEmpty {
@@ -745,7 +954,13 @@ final class ScriptManager {
     // MARK: - System script lifecycle
 
     private func launchSystemWithDepCheck(manifest: ScriptManifest, scriptDir: URL) {
+        guard !launchingScripts.contains(manifest.id) else {
+            print("[ScriptManager] \(manifest.id): system launch already in-flight, skipping duplicate")
+            return
+        }
+        launchingScripts.insert(manifest.id)
         Task { @MainActor in
+            defer { self.launchingScripts.remove(manifest.id) }
             let failed = await checkDependencies(manifest)
             if !failed.isEmpty {
                 print("[ScriptManager] \(manifest.id): system script missing deps — \(failed.map(\.name).joined(separator: ", "))")
@@ -978,6 +1193,11 @@ final class ScriptManager {
         } else {
             let svgString = manifests[id]?.svgString
             let dir = manifests[id]?.dir
+            let bundledScriptsPath = Bundle.main.resourceURL?.appendingPathComponent("Scripts").path
+            let isBundled: Bool = {
+                guard let bundledPath = bundledScriptsPath, let d = dir else { return false }
+                return d.path.hasPrefix(bundledPath)
+            }()
             scripts.append(ManagedScript(
                 id: id, name: name, version: manifest?.version,
                 description: manifest?.description, icon: icon, iconImage: iconImage,
@@ -987,7 +1207,8 @@ final class ScriptManager {
                 entry: manifest?.entry,
                 manifestPath: dir.map { $0.appendingPathComponent("manifest.json") },
                 setupScript: manifest?.setup,
-                configItems: manifest?.config ?? []
+                configItems: manifest?.config ?? [],
+                isBundled: isBundled
             ))
         }
     }
@@ -1022,18 +1243,23 @@ final class ScriptManager {
                 if let idx = self.scripts.firstIndex(where: { $0.id == id }) {
                     self.scripts[idx].setupChecks = checks
                     self.scripts[idx].setupCheckRunning = false
-                    // Reflect needsSetup in the status badge without disrupting running state
-                    if self.scripts[idx].needsSetup
-                        && self.scripts[idx].status == .running
-                        || self.scripts[idx].status == .stopped {
-                        self.scripts[idx].status = .needsSetup
+                    let currentStatus = self.scripts[idx].status
+                    if self.scripts[idx].needsSetup {
+                        // Surface the problem in the status badge without disrupting an active run
+                        if currentStatus == .running || currentStatus == .stopped {
+                            self.scripts[idx].status = .needsSetup
+                        }
+                    } else if currentStatus == .needsSetup {
+                        // Checks now pass — restore to the actual runtime state
+                        let isActive = self.connections[id] != nil
+                        self.scripts[idx].status = isActive ? .running : .stopped
                     }
                 }
             }
         }
     }
 
-    private static func executeSetupCheck(
+    private nonisolated static func executeSetupCheck(
         setupURL: URL, scriptID: String,
         configItems: [ScriptConfigItem], vaultRoot: String
     ) async -> [SetupCheck] {
@@ -1061,10 +1287,36 @@ final class ScriptManager {
 
                 do {
                     try process.run()
+                    // 30-second timeout for setup --check
+                    let timeoutTask = Task {
+                        try? await Task.sleep(for: .seconds(30))
+                        if process.isRunning { process.terminate() }
+                    }
                     process.waitUntilExit()
+                    timeoutTask.cancel()
                     let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-                    if let json = try? JSONDecoder().decode(SetupCheckOutput.self, from: data) {
-                        continuation.resume(returning: json.checks)
+                    // Decode into local nonisolated mirror types to avoid using an actor-isolated Decodable conformance.
+                    struct RawSetupCheckOutput: Decodable { let checks: [RawSetupCheck] }
+                    struct RawSetupCheck: Decodable {
+                        let id: String
+                        let label: String
+                        let ok: Bool
+                        let message: String?
+                        let fixable: Bool?
+                        let needs_terminal: Bool?
+                    }
+                    if let raw = try? JSONDecoder().decode(RawSetupCheckOutput.self, from: data) {
+                        let mapped: [SetupCheck] = raw.checks.map { r in
+                            SetupCheck(
+                                id: r.id,
+                                label: r.label,
+                                ok: r.ok,
+                                message: r.message,
+                                fixable: r.fixable,
+                                needsTerminal: r.needs_terminal
+                            )
+                        }
+                        continuation.resume(returning: mapped)
                     } else {
                         continuation.resume(returning: [])
                     }
@@ -1086,14 +1338,20 @@ final class ScriptManager {
         let vaultRoot = entry.dir.deletingLastPathComponent().path
         let scriptID = id
 
+        // Pre-capture keychain values on current actor before entering Task.detached.
+        var configEnv: [String: String] = [:]
+        for item in configItems {
+            if let val = KeychainService.shared.get(scriptID: scriptID, key: item.key) {
+                configEnv["ASK_CONFIG_\(item.key.uppercased())"] = val
+            }
+        }
+
         return AsyncStream { continuation in
             Task.detached(priority: .userInitiated) {
                 var env = ProcessInfo.processInfo.environment
                 env["PYTHONPATH"] = vaultRoot + (env["PYTHONPATH"].map { ":\($0)" } ?? "")
-                for item in configItems {
-                    if let val = KeychainService.shared.get(scriptID: scriptID, key: item.key) {
-                        env["ASK_CONFIG_\(item.key.uppercased())"] = val
-                    }
+                for (key, val) in configEnv {
+                    env[key] = val
                 }
 
                 let process = Process()
@@ -1116,7 +1374,16 @@ final class ScriptManager {
 
                 do {
                     try process.run()
+                    // 5-minute timeout for setup --install
+                    let timeoutTask = Task {
+                        try? await Task.sleep(for: .seconds(300))
+                        if process.isRunning {
+                            process.terminate()
+                            continuation.yield("⚠️ Setup timed out after 5 minutes")
+                        }
+                    }
                     process.waitUntilExit()
+                    timeoutTask.cancel()
                 } catch {
                     continuation.yield("Error: \(error.localizedDescription)")
                 }
@@ -1135,13 +1402,83 @@ final class ScriptManager {
         let appleScript = "tell application \"Terminal\" to do script \"\(cmd)\""
         NSAppleScript(source: appleScript)?.executeAndReturnError(nil)
     }
+
+    // MARK: - Vault file watcher
+
+    private func startVaultWatcher() {
+        var paths: [String] = []
+        if settings.usesBundledScripts,
+           let bundled = Bundle.main.resourceURL?.appendingPathComponent("Scripts") {
+            paths.append(bundled.path)
+        }
+        if let vault = settings.vaultPath {
+            paths.append(vault.path)
+        }
+        guard !paths.isEmpty else { return }
+        vaultWatcher = VaultWatcher(paths: paths) { [weak self] in
+            DispatchQueue.main.async { self?.scheduleVaultReload() }
+        }
+        print("[ScriptManager] Vault watcher started: \(paths.joined(separator: ", "))")
+    }
+
+    @MainActor
+    private func scheduleVaultReload() {
+        reloadDebounceWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            if self.installLockCount > 0 {
+                self.pendingReload = true
+            } else {
+                self.reload()
+            }
+        }
+        reloadDebounceWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+}
+
+// MARK: - VaultWatcher
+
+/// Watches a set of paths (recursively) for file system changes using FSEventStream.
+/// The `onChange` callback is called on an unspecified queue; callers must dispatch
+/// to the appropriate thread themselves.
+private final class VaultWatcher {
+    private var stream: FSEventStreamRef?
+    private let onChange: () -> Void
+
+    init(paths: [String], onChange: @escaping () -> Void) {
+        self.onChange = onChange
+        var ctx = FSEventStreamContext(version: 0, info: nil, retain: nil, release: nil, copyDescription: nil)
+        ctx.info = Unmanaged.passUnretained(self).toOpaque()
+
+        let cb: FSEventStreamCallback = { _, info, _, _, _, _ in
+            guard let info else { return }
+            Unmanaged<VaultWatcher>.fromOpaque(info).takeUnretainedValue().onChange()
+        }
+
+        stream = FSEventStreamCreate(
+            nil, cb, &ctx,
+            paths as CFArray,
+            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
+            0.3,  // 300 ms latency — coalesces rapid saves
+            FSEventStreamCreateFlags(kFSEventStreamCreateFlagUseCFTypes)
+        )
+        if let s = stream {
+            FSEventStreamSetDispatchQueue(s, .main)
+            FSEventStreamStart(s)
+        }
+    }
+
+    deinit {
+        if let s = stream {
+            FSEventStreamStop(s)
+            FSEventStreamInvalidate(s)
+            FSEventStreamRelease(s)
+        }
+    }
 }
 
 // MARK: - Helpers
-
-private struct SetupCheckOutput: Decodable {
-    let checks: [SetupCheck]
-}
 
 private extension String {
     /// Single-quote escapes for use in shell commands.

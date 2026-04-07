@@ -203,11 +203,19 @@ APP_PATH="$BUILD_DIR/export/AskMac.app"
 echo "==> Bundling scripts into app…"
 BUNDLE_SCRIPTS="$APP_PATH/Contents/Resources/Scripts"
 mkdir -p "$BUNDLE_SCRIPTS"
+# Scripts listed here ship as installable zips rather than being bundled into the app.
+# Users install them via Settings → Install Script (.zip).
+UNBUNDLED_SCRIPTS=("brew-monitor")
 # Copy ask_sdk.py so bundled scripts can import it without a deployed vault
 [[ -f "$SCRIPTS_SRC/ask_sdk.py" ]] && cp "$SCRIPTS_SRC/ask_sdk.py" "$BUNDLE_SCRIPTS/ask_sdk.py"
 for script_dir in "$SCRIPTS_SRC"/*/; do
     [[ -f "$script_dir/manifest.json" ]] || continue
-    dest="$BUNDLE_SCRIPTS/$(basename "$script_dir")"
+    script_name="$(basename "$script_dir")"
+    if printf '%s\n' "${UNBUNDLED_SCRIPTS[@]}" | grep -qx "$script_name"; then
+        echo "    Skipping (unbundled): $script_name"
+        continue
+    fi
+    dest="$BUNDLE_SCRIPTS/$script_name"
     rsync -a --exclude='.build' --exclude='*.xcodeproj' "$script_dir" "$dest/"
 done
 

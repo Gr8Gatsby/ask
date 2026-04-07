@@ -68,7 +68,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinhill.askmac
-        MARKETING_VERSION: "0.7.7"
+        MARKETING_VERSION: "0.8.0"
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: "Developer ID Application: Kevin Hill (B5J28L8ARB)"
@@ -85,8 +85,15 @@ targets:
     platform: macOS
     sources:
       - path: Tests/AskMacTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/AskMac.app/Contents/MacOS/AskMac
+        BUNDLE_LOADER: $(TEST_HOST)
     dependencies:
       - target: AskMacCore
+      - target: AskMac
+        embed: false
 
 schemes:
   AskMac:
@@ -94,5 +101,8 @@ schemes:
       targets:
         AskMac: all
         AskMacTests: [test]
+    test:
+      targets:
+        - AskMacTests
     archive:
       config: Release

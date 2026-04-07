@@ -32,6 +32,7 @@ struct BlockPreviewView: View {
             case "agent_session": AgentSessionPreview(payload: payload, onRespond: onRespond)
             case "start_session": StartSessionPreview(payload: payload, onRespond: onRespond)
             case "feed_item":     FeedItemPreview(payload: payload)
+            case "diagnostics":   DiagnosticsPreview(payload: payload, onRespond: onRespond)
             case "tile":          EmptyView() // drives home-screen tile only
             default:              EmptyView()
             }
@@ -919,5 +920,136 @@ private struct FeedItemPreview: View {
             Spacer()
         }
         .blockCard()
+    }
+}
+
+// MARK: - Diagnostics
+
+private struct DiagnosticsPreview: View {
+    let payload: [String: Any]
+    var onRespond: ((String) -> Void)? = nil
+
+    @State private var collectingLogs = false
+
+    private var version: String { payload["version"] as? String ?? "?" }
+    private var hooksOk: Bool { payload["hooks_ok"] as? Bool ?? false }
+    private var socketOk: Bool { payload["socket_ok"] as? Bool ?? false }
+    private var logLines: [String] { payload["log_lines"] as? [String] ?? [] }
+    private var hooks: [[String: Any]] { payload["hooks"] as? [[String: Any]] ?? [] }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Header
+            HStack {
+                ClaudeBrandHeader(label: "Diagnostics")
+                Spacer()
+                Text("v\(version)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fontDesign(.monospaced)
+            }
+
+            Divider()
+
+            // Status row
+            HStack(spacing: 16) {
+                statusIndicator(ok: hooksOk, label: "Hooks")
+                statusIndicator(ok: socketOk, label: "Socket")
+                Spacer()
+            }
+
+            // Hooks detail
+            if !hooks.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(hooks.enumerated()), id: \.offset) { _, hook in
+                        let event = hook["event"] as? String ?? ""
+                        let path = hook["path"] as? String ?? ""
+                        let ok = hook["ok"] as? Bool ?? false
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(ok ? Color.green : Color.red)
+                                .frame(width: 6, height: 6)
+                            Text(event)
+                                .font(.caption2)
+                                .fontWeight(.medium)
+                                .foregroundStyle(.primary)
+                            Text(path)
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                }
+                .padding(.horizontal, 2)
+            }
+
+            // Recent log lines
+            if !logLines.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Recent Logs")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .textCase(.uppercase)
+                        .tracking(0.4)
+                    ScrollView(.vertical) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            ForEach(Array(logLines.enumerated()), id: \.offset) { _, line in
+                                Text(line)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 80)
+                    .padding(6)
+                    .background(Color.black.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                }
+            }
+
+            // Actions
+            HStack(spacing: 8) {
+                Button {
+                    onRespond?("refresh")
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+
+                Button {
+                    collectingLogs = true
+                    onRespond?("collect_logs")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        collectingLogs = false
+                    }
+                } label: {
+                    if collectingLogs {
+                        Label("Collecting…", systemImage: "archivebox")
+                            .font(.caption)
+                    } else {
+                        Label("Collect Logs", systemImage: "archivebox")
+                            .font(.caption)
+                    }
+                }
+                .buttonStyle(.borderless)
+                .disabled(collectingLogs)
+            }
+        }
+        .blockCard()
+    }
+
+    private func statusIndicator(ok: Bool, label: String) -> some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(ok ? Color.green : Color.red)
+                .frame(width: 8, height: 8)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 }

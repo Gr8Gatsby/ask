@@ -44,6 +44,7 @@ struct MenuBarView: View {
                 Button {
                     openWindow(id: "scripts")
                     dismiss()
+                    activateAskWindow()
                 } label: {
                     Text("Open Ask")
                         .font(.subheadline)
@@ -147,6 +148,7 @@ struct MenuBarView: View {
                     Button {
                         openWindow(id: "scripts")
                         dismiss()
+                        activateAskWindow()
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "pin.fill")
@@ -161,6 +163,17 @@ struct MenuBarView: View {
                     .padding(.top, 4)
                 }
             }
+        }
+    }
+
+    /// Ensures the Ask window is the frontmost, key window after openWindow() is called.
+    /// openWindow() alone doesn't raise the window when it's already open but behind others.
+    private func activateAskWindow() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            NSApplication.shared.windows
+                .first { $0.title == "Ask" }?
+                .makeKeyAndOrderFront(nil)
         }
     }
 
