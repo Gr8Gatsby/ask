@@ -6,11 +6,6 @@
 
     <choices-outline>
         <line choice="app"/>
-        <line choice="brew-monitor"/>
-        <line choice="claudecode-controller"/>
-        <line choice="codex-2"/>
-        <line choice="github"/>
-        <line choice="ollama"/>
     </choices-outline>
 
     <!-- Required: the app itself -->
@@ -22,64 +17,8 @@
         <pkg-ref id="com.kevinhill.askmac.app"/>
     </choice>
 
-    <!-- Optional scripts — all unchecked by default -->
-    <choice id="brew-monitor"
-            title="Homebrew Monitor"
-            description="Checks for outdated Homebrew packages and lets you upgrade from iPhone. Requires Homebrew."
-            start_selected="false">
-        <pkg-ref id="com.kevinhill.askmac.script.brew-monitor"/>
-    </choice>
-
-    <choice id="claudecode-controller"
-            title="Claude Code Controller"
-            description="Claude Code session supervisor — routes tool-use permissions and notifications to iPhone."
-            start_selected="false">
-        <pkg-ref id="com.kevinhill.askmac.script.claudecode-controller"/>
-    </choice>
-
-    <choice id="codex-2"
-            title="Codex Controller"
-            description="Codex CLI session supervisor — routes tool-use permissions and notifications to iPhone."
-            start_selected="false">
-        <pkg-ref id="com.kevinhill.askmac.script.codex-2"/>
-    </choice>
-
-    <choice id="github"
-            title="Git Repos"
-            description="Monitor local git repositories and push, pull, or commit changes from iPhone."
-            start_selected="false">
-        <pkg-ref id="com.kevinhill.askmac.script.github"/>
-    </choice>
-
-    <choice id="ollama"
-            title="Ollama"
-            description="Chat with locally installed Ollama models and manage Ollama updates. Requires Ollama."
-            start_selected="false">
-        <pkg-ref id="com.kevinhill.askmac.script.ollama"/>
-    </choice>
-
     <!-- Package references — versions substituted at build time -->
     <pkg-ref id="com.kevinhill.askmac.app"
              version="ASKMAC_VERSION"
              onConclusion="none">AskMac-app.pkg</pkg-ref>
-
-    <pkg-ref id="com.kevinhill.askmac.script.brew-monitor"
-             version="BREW_MONITOR_VERSION"
-             onConclusion="none">script-brew-monitor.pkg</pkg-ref>
-
-    <pkg-ref id="com.kevinhill.askmac.script.claudecode-controller"
-             version="CLAUDECODE_VERSION"
-             onConclusion="none">script-claudecode-controller.pkg</pkg-ref>
-
-    <pkg-ref id="com.kevinhill.askmac.script.codex-2"
-             version="CODEX_VERSION"
-             onConclusion="none">script-codex-2.pkg</pkg-ref>
-
-    <pkg-ref id="com.kevinhill.askmac.script.github"
-             version="GITHUB_VERSION"
-             onConclusion="none">script-github.pkg</pkg-ref>
-
-    <pkg-ref id="com.kevinhill.askmac.script.ollama"
-             version="OLLAMA_VERSION"
-             onConclusion="none">script-ollama.pkg</pkg-ref>
 </installer-gui-script>
