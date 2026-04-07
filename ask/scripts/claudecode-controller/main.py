@@ -444,7 +444,9 @@ class MCPClient:
         payload = {'repos': repos}
         self._response_callbacks[block_id] = lambda v: self._on_start_session_reply(v)
         try:
-            await self.emit_block(block_id, 'start_session', payload)
+            # TTL slightly longer than the heartbeat interval (300s) so the button
+            # stays visible even if one heartbeat fails, but cleans up if the script stops.
+            await self.emit_block(block_id, 'start_session', payload, ttl=620)
         except Exception as e:
             print(f'[claudecode-controller] start_session block emit failed: {e}', file=sys.stderr)
 
@@ -1542,7 +1544,11 @@ end tell
                 print(f'[claudecode-controller] session_start TTY found: {session_id[:8]} -> {tty}', file=sys.stderr)
                 break
             await asyncio.sleep(1)
-        await self._emit_session_block(session_id)
+        # Only emit if we found routing info. If we didn't, don't call _emit_session_block —
+        # it would clear the block (no tty guard). PostToolUse will emit when it fires.
+        session = self._sessions.get(session_id, {})
+        if session.get('tty') or session.get('tmux_target'):
+            await self._emit_session_block(session_id)
 
     async def _handle_pre_compact(self, msg):
         """PreCompact hook — surface compaction as live session activity."""
