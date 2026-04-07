@@ -163,8 +163,10 @@ struct MacScriptsView: View {
 private struct ScriptsTabView: View {
     @Environment(ScriptManager.self) private var scriptManager
     @Environment(AppSettings.self) private var settings
+    @Environment(ScriptCatalogService.self) private var catalog
     @State private var selectedScriptID: String?
     @State private var showVault = false
+    @State private var showCatalog = false
     @State private var installer = ScriptInstaller()
     @State private var isDropTargeted = false
     @State private var showSuccessBanner = false
@@ -299,6 +301,31 @@ private struct ScriptsTabView: View {
                         Divider().frame(height: 20)
 
                         Button {
+                            showCatalog = true
+                            showVault = false
+                            selectedScriptID = nil
+                        } label: {
+                            HStack(spacing: 4) {
+                                Label("Browse", systemImage: "arrow.down.circle")
+                                    .font(.callout)
+                                if !catalog.availableUpdates.isEmpty {
+                                    Circle()
+                                        .fill(Color.accentColor)
+                                        .frame(width: 6, height: 6)
+                                }
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(showCatalog ? Color.accentColor.opacity(0.12) : Color.clear)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(showCatalog ? Color.accentColor : Color.secondary)
+                        .help("Browse and install scripts from the Ask catalog")
+
+                        Divider().frame(height: 20)
+
+                        Button {
                             let panel = NSOpenPanel()
                             panel.allowedContentTypes = [.zip]
                             panel.allowsMultipleSelection = false
@@ -326,13 +353,17 @@ private struct ScriptsTabView: View {
                                    vaultURL: settings.vaultPath ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ask/scripts"))
             }
         } detail: {
-            if showVault {
+            if showCatalog {
+                ScriptCatalogView(installer: installer)
+                    .environment(scriptManager)
+            } else if showVault {
                 ScriptsVaultView(installer: installer, scriptManager: scriptManager)
             } else if let id = selectedScriptID,
                       let script = scriptManager.scripts.first(where: { $0.id == id }) {
-                ScriptDetailView(script: script, scriptManager: scriptManager) {
-                                selectedScriptID = nil
-                            }
+                ScriptDetailView(script: script, scriptManager: scriptManager,
+                                 installer: installer) {
+                    selectedScriptID = nil
+                }
             } else {
                 ContentUnavailableView(
                     "Select a Script",
@@ -340,6 +371,12 @@ private struct ScriptsTabView: View {
                     description: Text("Choose a script from the sidebar to view its active blocks.")
                 )
             }
+        }
+        .onAppear {
+            catalog.fetch(installedScripts: scriptManager.scripts)
+        }
+        .onChange(of: scriptManager.scripts.map(\.id)) { _, _ in
+            catalog.recomputeUpdates(installedScripts: scriptManager.scripts)
         }
     }
 }
@@ -484,6 +521,7 @@ private struct ScriptSidebarRow: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(AppSettings.self) private var settings
+    @Environment(ScriptCatalogService.self) private var catalog
     @State private var showUninstallConfirm = false
 
     var body: some View {
@@ -505,11 +543,11 @@ private struct ScriptSidebarRow: View {
 
                 HStack(spacing: 4) {
                     Circle()
-                        .fill(statusColor)
+                        .fill(catalog.availableUpdates[script.id] != nil ? Color.accentColor : statusColor)
                         .frame(width: 6, height: 6)
-                    Text(statusLabel)
+                    Text(catalog.availableUpdates[script.id] != nil ? "Update available" : statusLabel)
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(catalog.availableUpdates[script.id] != nil ? Color.accentColor : .secondary)
                 }
             }
 
@@ -617,9 +655,15 @@ private enum CardColorSchemePreview: String, CaseIterable {
 private struct ScriptDetailView: View {
     let script: ManagedScript
     let scriptManager: ScriptManager
+    var installer: ScriptInstaller = ScriptInstaller()
     var onUninstall: () -> Void = {}
 
     @Environment(AppSettings.self) private var settings
+    @Environment(ScriptCatalogService.self) private var catalog
+
+    // Update state
+    @State private var isDownloadingUpdate = false
+    @State private var updateError: String?
 
     @State private var showUninstallConfirm = false
     @State private var cardFlipped = false
@@ -663,6 +707,11 @@ private struct ScriptDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 scriptCard
+
+                // Update banner — shown when a newer catalog version is available
+                if let update = catalog.availableUpdates[script.id] {
+                    updateBanner(entry: update)
+                }
 
                 // Setup section — shown when script declares setup or config
                 if script.hasSetup {
@@ -2061,6 +2110,83 @@ private struct ScriptDetailView: View {
         }
     }
 
+    // MARK: - Update banner
+
+    @ViewBuilder
+    private func updateBanner(entry: CatalogEntry) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .foregroundStyle(Color.accentColor)
+                    .font(.caption)
+                Text("Update Available")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Color.accentColor)
+                Spacer()
+                Text("\(script.version ?? "?") → \(entry.version)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let log = entry.changelog, !log.isEmpty {
+                Text(log)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let err = updateError {
+                Text(err)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
+
+            Button {
+                installUpdate(entry: entry)
+            } label: {
+                if isDownloadingUpdate {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text("Downloading…")
+                    }
+                } else {
+                    Text("Install Update")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(isDownloadingUpdate || installer.phase != .idle)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.accentColor.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.accentColor.opacity(0.2), lineWidth: 1)
+        )
+    }
+
+    private func installUpdate(entry: CatalogEntry) {
+        isDownloadingUpdate = true
+        updateError = nil
+        Task {
+            do {
+                let zipURL = try await catalog.downloadZip(for: entry)
+                await MainActor.run {
+                    isDownloadingUpdate = false
+                    installer.load(zipURL: zipURL, existingScripts: scriptManager.scripts)
+                }
+            } catch {
+                await MainActor.run {
+                    isDownloadingUpdate = false
+                    updateError = "Download failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
     private func crashBanner(_ error: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
@@ -2082,6 +2208,223 @@ private struct ScriptDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.red.opacity(0.07))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+// MARK: - Script catalog browser
+
+private struct ScriptCatalogView: View {
+    @Bindable var installer: ScriptInstaller
+    @Environment(ScriptCatalogService.self) private var catalog
+    @Environment(ScriptManager.self) private var scriptManager
+    @Environment(AppSettings.self) private var settings
+
+    @State private var searchText = ""
+    @State private var downloadingID: String?
+    @State private var downloadErrors: [String: String] = [:]
+
+    private var filteredEntries: [CatalogEntry] {
+        let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return catalog.allEntries }
+        return catalog.allEntries.filter {
+            $0.name.lowercased().contains(q) ||
+            $0.description.lowercased().contains(q) ||
+            $0.id.lowercased().contains(q)
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Search bar
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                    .font(.body)
+                TextField("Search scripts…", text: $searchText)
+                    .textFieldStyle(.plain)
+                if !searchText.isEmpty {
+                    Button { searchText = "" } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.bar)
+
+            Divider()
+
+            if catalog.isFetching && catalog.allEntries.isEmpty {
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("Loading catalog…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if catalog.allEntries.isEmpty {
+                ContentUnavailableView(
+                    "Catalog Unavailable",
+                    systemImage: "wifi.slash",
+                    description: Text("Could not load the script catalog.\nCheck your internet connection and try again.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if filteredEntries.isEmpty {
+                ContentUnavailableView.search(text: searchText)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(filteredEntries) { entry in
+                            CatalogEntryRow(
+                                entry: entry,
+                                installer: installer,
+                                isInstalled: scriptManager.scripts.contains { $0.id == entry.id },
+                                hasUpdate: catalog.availableUpdates[entry.id] != nil,
+                                isDownloading: downloadingID == entry.id,
+                                downloadError: downloadErrors[entry.id]
+                            ) {
+                                startInstall(entry: entry)
+                            }
+                            Divider().padding(.leading, 52)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .navigationTitle("Browse Scripts")
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    catalog.fetch(installedScripts: scriptManager.scripts, force: true)
+                } label: {
+                    if catalog.isFetching {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                }
+                .disabled(catalog.isFetching)
+                .help("Refresh catalog")
+            }
+        }
+        .sheet(isPresented: $installer.showSheet) {
+            ScriptInstallSheet(
+                installer: installer,
+                scriptManager: scriptManager,
+                vaultURL: settings.vaultPath ?? FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent(".ask/scripts")
+            )
+        }
+    }
+
+    private func startInstall(entry: CatalogEntry) {
+        downloadingID = entry.id
+        downloadErrors.removeValue(forKey: entry.id)
+        Task {
+            do {
+                let zipURL = try await catalog.downloadZip(for: entry)
+                await MainActor.run {
+                    downloadingID = nil
+                    installer.load(zipURL: zipURL, existingScripts: scriptManager.scripts)
+                }
+            } catch {
+                await MainActor.run {
+                    downloadingID = nil
+                    downloadErrors[entry.id] = error.localizedDescription
+                }
+            }
+        }
+    }
+}
+
+private struct CatalogEntryRow: View {
+    let entry: CatalogEntry
+    let installer: ScriptInstaller
+    let isInstalled: Bool
+    let hasUpdate: Bool
+    let isDownloading: Bool
+    let downloadError: String?
+    let onInstall: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Icon
+            Image(systemName: entry.icon ?? "puzzlepiece.extension")
+                .font(.title2)
+                .frame(width: 36, height: 36)
+                .background(Color.secondary.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(entry.name)
+                        .font(.body)
+                        .fontWeight(.medium)
+                    typeBadge
+                }
+                Text(entry.description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                if let err = downloadError {
+                    Text(err)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer()
+
+            // Action button
+            Group {
+                if isDownloading {
+                    ProgressView().controlSize(.small)
+                        .frame(width: 64)
+                } else if hasUpdate {
+                    Button("Update", action: onInstall)
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                } else if isInstalled {
+                    Text("Installed")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.secondary.opacity(0.1))
+                        .clipShape(Capsule())
+                } else {
+                    Button("Install", action: onInstall)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(installer.phase != .idle)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private var typeBadge: some View {
+        let (label, color): (String, Color) = {
+            switch entry.type {
+            case "feed":   return ("Feed",   .purple)
+            case "system": return ("System", .gray)
+            default:       return ("Tile",   .blue)
+            }
+        }()
+        return Text(label)
+            .font(.caption2)
+            .fontWeight(.medium)
+            .foregroundStyle(color)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.12))
+            .clipShape(Capsule())
     }
 }
 

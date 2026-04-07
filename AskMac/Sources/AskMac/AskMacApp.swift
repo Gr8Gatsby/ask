@@ -13,6 +13,7 @@ struct AskMacApp: App {
     @State private var scriptManager: ScriptManager
     @State private var responsePoller: ResponsePoller
     @State private var scriptUpdater = ScriptUpdateService()
+    @State private var scriptCatalog = ScriptCatalogService()
 
     init() {
         let s = settings
@@ -49,8 +50,12 @@ struct AskMacApp: App {
                 .environment(scriptManager)
                 .environment(actionHistory)
                 .environment(scriptUpdater)
+                .environment(scriptCatalog)
                 .environment(updater)
-                .onAppear { scriptUpdater.checkForUpdates() }
+                .onAppear {
+                    scriptUpdater.checkForUpdates()
+                    scriptCatalog.fetch(installedScripts: scriptManager.scripts)
+                }
         } label: {
             MenuBarLabel(hasActiveScripts: scriptManager.scripts.contains { $0.status == .running })
         }
@@ -74,6 +79,7 @@ struct AskMacApp: App {
                 .environment(cloudKit)
                 .environment(messageWatcher)
                 .environment(updater)
+                .environment(scriptCatalog)
         }
         .defaultSize(width: 720, height: 520)
         .defaultPosition(.center)
@@ -100,9 +106,13 @@ struct AskMacApp: App {
 struct MenuBarLabel: View {
     let hasActiveScripts: Bool
 
+    private var isDevBuild: Bool {
+        let exe = CommandLine.arguments.first ?? ""
+        return exe.contains("DerivedData") || exe.contains("/.build/")
+    }
+
     var body: some View {
-        Image(systemName: "icloud.fill")
+        Image(systemName: isDevBuild ? "icloud" : "icloud.fill")
             .symbolEffect(.pulse, isActive: hasActiveScripts)
-            .foregroundStyle(Color.accentColor)
     }
 }
