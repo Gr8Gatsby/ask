@@ -25,6 +25,40 @@ private struct CopyButton: View {
     }
 }
 
+// MARK: - Quick tooltip
+
+private struct QuickTooltipLabel: ViewModifier {
+    let text: String
+    @State private var hovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { hovering = $0 }
+            .overlay(alignment: .top) {
+                if hovering {
+                    Text(text)
+                        .font(.caption2)
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 4)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
+                        .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+                        .offset(y: -30)
+                        .fixedSize()
+                        .allowsHitTesting(false)
+                        .transition(.opacity.animation(.easeInOut(duration: 0.1)))
+                        .zIndex(100)
+                }
+            }
+    }
+}
+
+private extension View {
+    func quickTooltip(_ text: String) -> some View {
+        modifier(QuickTooltipLabel(text: text))
+    }
+}
+
 // MARK: - SVG dark-mode helper
 
 /// Rewrites dark/black fill and stroke values to white so an SVG icon
@@ -283,48 +317,53 @@ private struct ScriptsTabView: View {
                     }
                     Divider()
                     HStack(spacing: 0) {
+                        // Vault button
                         Button {
                             showVault = true
+                            showCatalog = false
                             selectedScriptID = nil
                         } label: {
-                            Label("Scripts Vault", systemImage: "lock")
-                                .font(.callout)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 16)
+                            Image(systemName: "lock")
+                                .font(.body)
+                                .frame(maxWidth: .infinity)
                                 .padding(.vertical, 10)
                                 .background(showVault ? Color.accentColor.opacity(0.12) : Color.clear)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(showVault ? Color.accentColor : Color.secondary)
+                        .quickTooltip("Local Script Vault")
 
                         Divider().frame(height: 20)
 
+                        // Catalog button
                         Button {
                             showCatalog = true
                             showVault = false
                             selectedScriptID = nil
                         } label: {
-                            HStack(spacing: 4) {
-                                Label("Browse", systemImage: "arrow.down.circle")
-                                    .font(.callout)
+                            ZStack(alignment: .topTrailing) {
+                                Image(systemName: "books.vertical")
+                                    .font(.body)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                                    .background(showCatalog ? Color.accentColor.opacity(0.12) : Color.clear)
+                                    .contentShape(Rectangle())
                                 if !catalog.availableUpdates.isEmpty {
                                     Circle()
                                         .fill(Color.accentColor)
-                                        .frame(width: 6, height: 6)
+                                        .frame(width: 7, height: 7)
+                                        .offset(x: -6, y: 4)
                                 }
                             }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(showCatalog ? Color.accentColor.opacity(0.12) : Color.clear)
-                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(showCatalog ? Color.accentColor : Color.secondary)
-                        .help("Browse and install scripts from the Ask catalog")
+                        .quickTooltip("Catalog")
 
                         Divider().frame(height: 20)
 
+                        // Upload button
                         Button {
                             let panel = NSOpenPanel()
                             panel.allowedContentTypes = [.zip]
@@ -334,15 +373,15 @@ private struct ScriptsTabView: View {
                                 installer.load(zipURL: url, existingScripts: scriptManager.scripts)
                             }
                         } label: {
-                            Label("Upload", systemImage: "square.and.arrow.up")
-                                .font(.callout)
-                                .padding(.horizontal, 14)
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.body)
+                                .frame(maxWidth: .infinity)
                                 .padding(.vertical, 10)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
-                        .help("Install a script from a .zip file")
+                        .quickTooltip("Add local script (.zip)")
                         .disabled(installer.phase != .idle)
                     }
                 }
@@ -713,11 +752,6 @@ private struct ScriptDetailView: View {
                     updateBanner(entry: update)
                 }
 
-                // Setup section — shown when script declares setup or config
-                if script.hasSetup {
-                    setupSection
-                }
-
                 // Toggle bar — only for non-system scripts that declare tools
                 if !script.tools.isEmpty && !script.isSystem {
                     Picker("", selection: $showTools) {
@@ -851,7 +885,7 @@ private struct ScriptDetailView: View {
                     .transition(.opacity)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 210, maxHeight: 210)
+        .frame(maxWidth: .infinity, minHeight: 210)
         .animation(.easeInOut(duration: 0.2), value: cardFlipped)
     }
 
@@ -922,6 +956,13 @@ private struct ScriptDetailView: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 10)
                     .padding(.bottom, 44) // leave room for bottom overlay controls
+            }
+
+            if script.hasSetup {
+                Divider()
+                    .opacity(0.3)
+                setupInCard
+                    .padding(.bottom, 54)  // leave room for the bottom overlay controls (Light/Dark/toggle)
             }
 
             Spacer(minLength: 0)
@@ -1751,6 +1792,103 @@ private struct ScriptDetailView: View {
 
     // MARK: - Setup
 
+    private var setupInCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Header row
+            HStack {
+                Label("Setup", systemImage: "wrench.and.screwdriver")
+                    .font(.caption).fontWeight(.semibold)
+                    .foregroundStyle(.tertiary)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+                Spacer()
+                if script.setupCheckRunning {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button {
+                        scriptManager.runSetupCheck(id: script.id)
+                    } label: {
+                        Label("Re-check", systemImage: "arrow.clockwise")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                }
+            }
+
+            // Config form
+            if !script.configItems.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(script.configItems) { item in
+                        configRow(item)
+                    }
+                }
+            }
+
+            // Check results
+            if !script.setupChecks.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(script.setupChecks) { check in
+                        HStack(spacing: 8) {
+                            Image(systemName: check.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(check.ok ? Color.green : Color.red)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(check.label)
+                                    .font(.caption).fontWeight(.medium)
+                                    .foregroundStyle(.primary)
+                                if let msg = check.message {
+                                    Text(msg)
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Run Setup button
+            if script.setupScript != nil {
+                let failedChecks = script.setupChecks.filter { !$0.ok }
+                let needsTerminal = failedChecks.contains { $0.needsTerminal == true }
+
+                Button {
+                    if needsTerminal {
+                        scriptManager.setupInstallInTerminal(id: script.id)
+                    } else {
+                        setupOutputLines = []
+                        showSetupSheet = true
+                        Task {
+                            setupRunning = true
+                            for await line in scriptManager.setupInstallStream(id: script.id) {
+                                setupOutputLines.append(line)
+                            }
+                            setupRunning = false
+                            scriptManager.runSetupCheck(id: script.id)
+                        }
+                    }
+                } label: {
+                    Label(needsTerminal ? "Open Terminal to Setup" : "Run Setup",
+                          systemImage: needsTerminal ? "terminal" : "wrench.and.screwdriver")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .tint(script.needsSetup ? .orange : .accentColor)
+                .sheet(isPresented: $showSetupSheet) {
+                    SetupOutputSheet(
+                        scriptName: script.name,
+                        lines: $setupOutputLines,
+                        running: $setupRunning
+                    )
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+    }
+
     @ViewBuilder
     private var setupSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -2222,6 +2360,7 @@ private struct ScriptCatalogView: View {
     @State private var searchText = ""
     @State private var downloadingID: String?
     @State private var downloadErrors: [String: String] = [:]
+    @State private var showInstalled = false
 
     private var filteredEntries: [CatalogEntry] {
         let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
@@ -2276,19 +2415,64 @@ private struct ScriptCatalogView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(filteredEntries) { entry in
+                    LazyVStack(spacing: 0, pinnedViews: []) {
+                        // Available: scripts with updates or not yet installed
+                        let available = filteredEntries.filter { entry in
+                            catalog.availableUpdates[entry.id] != nil ||
+                            !scriptManager.scripts.contains(where: { $0.id == entry.id })
+                        }
+                        let installed = filteredEntries.filter { entry in
+                            catalog.availableUpdates[entry.id] == nil &&
+                            scriptManager.scripts.contains(where: { $0.id == entry.id })
+                        }
+
+                        ForEach(available) { entry in
+                            let installedScript = scriptManager.scripts.first(where: { $0.id == entry.id })
                             CatalogEntryRow(
                                 entry: entry,
                                 installer: installer,
-                                isInstalled: scriptManager.scripts.contains { $0.id == entry.id },
+                                isInstalled: installedScript != nil,
                                 hasUpdate: catalog.availableUpdates[entry.id] != nil,
                                 isDownloading: downloadingID == entry.id,
-                                downloadError: downloadErrors[entry.id]
+                                downloadError: downloadErrors[entry.id],
+                                installedScript: installedScript
                             ) {
                                 startInstall(entry: entry)
                             }
                             Divider().padding(.leading, 52)
+                        }
+
+                        if !installed.isEmpty {
+                            DisclosureGroup(isExpanded: $showInstalled) {
+                                ForEach(installed) { entry in
+                                    let installedScript = scriptManager.scripts.first(where: { $0.id == entry.id })
+                                    CatalogEntryRow(
+                                        entry: entry,
+                                        installer: installer,
+                                        isInstalled: true,
+                                        hasUpdate: false,
+                                        isDownloading: false,
+                                        downloadError: nil,
+                                        installedScript: installedScript
+                                    ) {
+                                        startInstall(entry: entry)
+                                    }
+                                    Divider().padding(.leading, 52)
+                                }
+                            } label: {
+                                HStack {
+                                    Text("Installed")
+                                        .font(.caption)
+                                        .fontWeight(.semibold)
+                                        .foregroundStyle(.secondary)
+                                    Text("(\(installed.count))")
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                            }
                         }
                     }
                     .padding(.vertical, 4)
@@ -2348,28 +2532,42 @@ private struct CatalogEntryRow: View {
     let hasUpdate: Bool
     let isDownloading: Bool
     let downloadError: String?
+    let installedScript: ManagedScript?
     let onInstall: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
             // Icon
-            Image(systemName: entry.icon ?? "puzzlepiece.extension")
-                .font(.title2)
-                .frame(width: 36, height: 36)
-                .background(Color.secondary.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+            Group {
+                if let img = installedScript?.iconImage {
+                    Image(nsImage: img)
+                        .resizable()
+                        .scaledToFit()
+                        .grayscale(isInstalled && !hasUpdate ? 0.6 : 0)
+                        .opacity(isInstalled && !hasUpdate ? 0.5 : 1)
+                } else {
+                    Image(systemName: "shippingbox")
+                        .font(.title2)
+                        .foregroundStyle(isInstalled && !hasUpdate ? Color.secondary.opacity(0.4) : .secondary)
+                }
+            }
+            .frame(width: 36, height: 36)
+            .background(Color.secondary.opacity(isInstalled && !hasUpdate ? 0.06 : 0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(entry.name)
                         .font(.body)
                         .fontWeight(.medium)
+                        .opacity(isInstalled && !hasUpdate ? 0.4 : 1)
                     typeBadge
                 }
                 Text(entry.description)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+                    .opacity(isInstalled && !hasUpdate ? 0.4 : 1)
                 if let err = downloadError {
                     Text(err)
                         .font(.caption2)
