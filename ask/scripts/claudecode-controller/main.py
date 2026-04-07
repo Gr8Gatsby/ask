@@ -716,18 +716,26 @@ class MCPClient:
                     print(f'[claudecode-controller] discovered claude process pid={pid} cwd={cwd}', file=sys.stderr)
 
     @staticmethod
+    def _is_pid_alive(pid: int) -> bool:
+        """Return True if the process with this PID still exists."""
+        try:
+            os.kill(pid, 0)
+            return True
+        except (ProcessLookupError, ValueError):
+            return False
+        except PermissionError:
+            return True  # process exists but we can't signal it
+
+    @staticmethod
     def _pid_session_alive(session_id: str) -> bool:
         """Return True if the process behind a pid-{n} session still exists."""
         if not session_id.startswith('pid-'):
             return True
         try:
             pid = int(session_id[4:])
-            os.kill(pid, 0)  # signal 0 = existence check, no-op if alive
-            return True
-        except (ValueError, ProcessLookupError):
+            return MCPClient._is_pid_alive(pid)
+        except ValueError:
             return False
-        except PermissionError:
-            return True  # process exists but we can't signal it
 
     def _prune_dead_pid_sessions(self):
         """Remove pid-* sessions whose process is no longer running."""
@@ -793,26 +801,51 @@ class MCPClient:
             pass
         return None
 
-    def _register_session(self, session_id: str, cwd: str):
-        """Register a session if new; return True if it was new."""
+    def _register_session(self, session_id: str, cwd: str, claude_pid: int = None):
+        """Register a session if new; return True if it was new.
+
+        claude_pid — the PID of the claude process that owns this session.
+        When provided, it is used to verify liveness and evict stale sessions
+        in the same CWD whose process is no longer running.
+        """
         if session_id in self._sessions:
+            # Already known — update pid if we now have a better one
+            if claude_pid and not self._sessions[session_id].get('claude_pid'):
+                self._sessions[session_id]['claude_pid'] = claude_pid
             return False
         project = self._project_label(cwd, session_id)
         entry = {'cwd': cwd, 'project': project, 'last_seen': time.time()}
+        if claude_pid:
+            entry['claude_pid'] = claude_pid
         # If this session was launched via tmux, attach the window target for reply routing
         tmux_target = self._pending_tmux_targets.pop(cwd, None)
         if tmux_target:
             entry['tmux_target'] = tmux_target
-        # When a hook-confirmed session registers, clear any pid-* placeholder for the same cwd
+        # When a hook-confirmed session registers, evict any sessions for the same CWD
+        # whose process is no longer running (pid-* placeholders and stale real sessions).
         if not session_id.startswith('pid-'):
             for sid in list(self._sessions.keys()):
-                if sid.startswith('pid-') and self._sessions[sid].get('cwd') == cwd:
-                    # Migrate tmux_target from pid placeholder so reply routing is preserved
-                    if not entry.get('tmux_target') and self._sessions[sid].get('tmux_target'):
-                        entry['tmux_target'] = self._sessions[sid]['tmux_target']
+                old_info = self._sessions.get(sid, {})
+                if old_info.get('cwd') != cwd:
+                    continue
+                # Determine if the old session's process is dead
+                is_dead = False
+                if sid.startswith('pid-'):
+                    is_dead = not self._pid_session_alive(sid)
+                else:
+                    old_pid = old_info.get('claude_pid')
+                    if old_pid is not None:
+                        is_dead = not self._is_pid_alive(old_pid)
+                    # No PID info — cannot confirm dead, leave it alone
+                if is_dead:
+                    # Migrate tmux_target so routing is preserved if we took over
+                    if not entry.get('tmux_target') and old_info.get('tmux_target'):
+                        entry['tmux_target'] = old_info['tmux_target']
                     self._sessions.pop(sid)
+                    self._working_sessions.discard(sid)
                     self._recently_launched_cwds.discard(cwd)
                     asyncio.create_task(self.clear_block(self._session_block_id(sid)))
+                    print(f'[claudecode-controller] evicted dead session {sid[:8]} ({cwd})', file=sys.stderr)
         self._sessions[session_id] = entry
         self._save_sessions()
         return True
@@ -1105,27 +1138,50 @@ end tell
 
         session = self._sessions.get(session_id, {})
         cwd = session.get('cwd', '')
-        _log(f'[claudecode] route session={session_id} cwd={cwd!r}')
+        claude_pid = session.get('claude_pid')
+        _log(f'[claudecode] route session={session_id} cwd={cwd!r} pid={claude_pid}')
 
-        # Use the TTY captured at session registration time if available.
-        tty_short = session.get('tty')
-        _log(f'[claudecode] stored tty={tty_short!r}')
+        # Priority 1: PID-anchored TTY lookup — unambiguous even with multiple sessions.
+        # If we have the claude PID, verify it's alive and get its current TTY directly.
+        tty_short = None
+        if claude_pid:
+            if self._is_pid_alive(claude_pid):
+                try:
+                    import subprocess as _sp
+                    r = _sp.run(['ps', '-p', str(claude_pid), '-o', 'tty='],
+                                capture_output=True, text=True, timeout=2)
+                    t = r.stdout.strip()
+                    if t and t not in ('??', ''):
+                        tty_short = t
+                        _log(f'[claudecode] tty from pid {claude_pid}: {tty_short!r}')
+                except Exception:
+                    pass
+            else:
+                _log(f'[claudecode] claude_pid {claude_pid} is dead — will fall through')
 
-        # Fall back to list_terminal_sessions, then ps+lsof.
+        # Priority 2: stored TTY (set at session registration; may differ from live if
+        # the process moved to a new window, but usually correct)
+        if not tty_short:
+            tty_short = session.get('tty')
+            if tty_short:
+                _log(f'[claudecode] using stored tty={tty_short!r}')
+
+        # Priority 3: CWD-based fallbacks (ambiguous if multiple sessions share a CWD,
+        # but better than nothing when PID and stored TTY are unavailable)
         if not tty_short:
             try:
                 terminal_sessions = await self.list_terminal_sessions(filter='claude')
                 for s in terminal_sessions:
                     if s.get('cwd') == cwd:
                         tty_short = s.get('tty')
-                        _log(f'[claudecode] tty from list_terminal_sessions: {tty_short!r}')
+                        _log(f'[claudecode] tty from list_terminal_sessions (cwd match): {tty_short!r}')
                         break
             except Exception:
                 pass
 
         if not tty_short and cwd:
             tty_short = await self._find_tty_for_cwd(cwd, 'claude')
-            _log(f'[claudecode] tty from ps+lsof: {tty_short!r}')
+            _log(f'[claudecode] tty from ps+lsof (cwd match): {tty_short!r}')
 
         if tty_short:
             # Normalize TTY to full /dev/ path.
@@ -1513,14 +1569,30 @@ end tell
             self._sessions[session_id]['last_user_message'] = message
 
     def _handle_session_start_hook(self, msg):
-        """SessionStart hook — register the session early before any tool fires."""
+        """SessionStart hook — register the session early before any tool fires.
+
+        The hook now provides tty and claude_pid so routing can be anchored to
+        the process immediately, without waiting for the first PostToolUse."""
         session_id = msg.get('session_id', '')
         cwd = msg.get('cwd', '')
+        tty = msg.get('tty')           # Captured by session_start.py from the process tree
+        claude_pid = msg.get('claude_pid')  # PID of the claude process
         if not session_id:
             return
-        is_new = self._register_session(session_id, cwd)
+        is_new = self._register_session(session_id, cwd, claude_pid=claude_pid)
+        # Set TTY immediately if the hook provided it — no CWD-based search needed
+        if tty and session_id in self._sessions and not self._sessions[session_id].get('tty'):
+            self._sessions[session_id]['tty'] = tty
+            self._save_sessions()
+            print(f'[claudecode-controller] session_start tty={tty} pid={claude_pid} sid={session_id[:8]}', file=sys.stderr)
         if is_new:
-            asyncio.create_task(self._backfill_tty_and_emit(session_id, cwd))
+            session = self._sessions.get(session_id, {})
+            if session.get('tty') or session.get('tmux_target'):
+                # Routing info available immediately — emit block now
+                asyncio.create_task(self._emit_session_block(session_id))
+            else:
+                # No TTY yet (e.g. launched without a terminal) — backfill as fallback
+                asyncio.create_task(self._backfill_tty_and_emit(session_id, cwd))
         project = self._sessions.get(session_id, {}).get('project', 'Claude Code')
         asyncio.create_task(self.emit_block(str(uuid.uuid4()), 'session_event', {
             'event': 'started', 'project': project, 'cwd': cwd, 'ts': time.time()
