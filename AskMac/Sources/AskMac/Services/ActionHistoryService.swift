@@ -183,8 +183,18 @@ final class ActionHistoryService: @unchecked Sendable {
 
         let reason = exitedBySignal
             ? "killed by signal \(exitCode)"
-            : (exitCode == 0 ? "unexpected clean exit" : "exit code \(exitCode)")
-        let summary = "Crashed (\(reason))"
+            : (exitCode == 0 ? "exit 0" : "exit \(exitCode)")
+        let lastLine = stderrLines
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .last
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        let summary: String
+        if let msg = lastLine {
+            let truncated = msg.count > 80 ? String(msg.prefix(80)) + "…" : msg
+            summary = "Crashed (\(reason)): \(truncated)"
+        } else {
+            summary = "Crashed (\(reason))"
+        }
 
         record(HistoryEvent(
             id: UUID().uuidString,

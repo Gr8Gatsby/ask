@@ -468,6 +468,7 @@ private struct HistoryDetailView: View {
             }
         }
         .frame(width: 560, height: event.stderrTail != nil ? 520 : 300)
+        .onAppear { NSApplication.shared.activate(ignoringOtherApps: true) }
     }
 
     // MARK: Sections

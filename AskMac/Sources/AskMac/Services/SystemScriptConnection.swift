@@ -84,6 +84,7 @@ final class SystemScriptConnection: @unchecked Sendable {
     }
 
     func stop() {
+        onTerminate = nil  // intentional stop — do not trigger crash handler
         readTask?.cancel()
         stderrTask?.cancel()
         process?.terminate()
@@ -114,7 +115,7 @@ final class SystemScriptConnection: @unchecked Sendable {
 
     // MARK: - Response handling
 
-    private func handleLine(_ line: String) {
+    private nonisolated func handleLine(_ line: String) {
         guard !line.isEmpty,
               let data = line.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -171,7 +172,11 @@ final class SystemScriptConnection: @unchecked Sendable {
               let data = try? JSONSerialization.data(withJSONObject: obj),
               let line = String(data: data, encoding: .utf8)
         else { return }
-        pipe.fileHandleForWriting.write(Data((line + "\n").utf8))
+        do {
+            try pipe.fileHandleForWriting.write(contentsOf: Data((line + "\n").utf8))
+        } catch {
+            // Script process has exited; termination callback will handle cleanup.
+        }
     }
 
     /// Reads newline-delimited text from a pipe file descriptor using DispatchSource.

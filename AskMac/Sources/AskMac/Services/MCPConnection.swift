@@ -32,7 +32,8 @@ final class MCPConnection: @unchecked Sendable {
     /// Additional tools from system scripts, appended to tools/list responses.
     var systemTools: [[String: Any]] = []
     /// Called for each line written to stderr (live, from the stderr-reading task).
-    var onStderrLine: ((String) -> Void)?
+    /// nonisolated(unsafe): set from the main actor, called from the detached stderr task.
+    nonisolated(unsafe) var onStderrLine: (@Sendable (String) -> Void)?
 
     private let entryURL: URL
     private let blockService: BlockService
@@ -138,6 +139,7 @@ final class MCPConnection: @unchecked Sendable {
     }
 
     func stop() {
+        onTerminate = nil  // intentional stop — do not trigger crash handler
         readTask?.cancel()
         stderrTask?.cancel()
         process?.terminate()
@@ -388,7 +390,11 @@ final class MCPConnection: @unchecked Sendable {
               let line = String(data: data, encoding: .utf8)
         else { return }
         let bytes = Data((line + "\n").utf8)
-        pipe.fileHandleForWriting.write(bytes)
+        do {
+            try pipe.fileHandleForWriting.write(contentsOf: bytes)
+        } catch {
+            // Script process has exited; the termination callback will handle cleanup.
+        }
     }
 
     // MARK: - Payload serialisation
