@@ -91,7 +91,7 @@ class MCPClient:
                     'tty': tty,
                     'tmux_target': tmux_target,
                 }
-            })
+            }, timeout=4.0)
             _log(f'[claudecode] tm_register {session_id[:8]} tty={tty!r} tmux={tmux_target!r}')
         except Exception as e:
             _log(f'[claudecode] tm_register failed: {e}')
@@ -102,7 +102,7 @@ class MCPClient:
             await self._rpc('tools/call', {
                 'name': 'unregister_session',
                 'arguments': {'session_id': session_id}
-            })
+            }, timeout=4.0)
         except Exception as e:
             _log(f'[claudecode] tm_unregister failed: {e}')
 
@@ -118,7 +118,7 @@ class MCPClient:
         sys.stdout.write(json.dumps(obj, ensure_ascii=False) + '\n')
         sys.stdout.flush()
 
-    async def _rpc(self, method, params=None):
+    async def _rpc(self, method, params=None, timeout: float = 10.0):
         rpc_id = self._id()
         fut = asyncio.get_running_loop().create_future()
         self._pending_calls[rpc_id] = fut
@@ -126,7 +126,11 @@ class MCPClient:
         if params:
             msg['params'] = params
         self._write(msg)
-        return await asyncio.wait_for(fut, timeout=10.0)
+        try:
+            return await asyncio.wait_for(fut, timeout=timeout)
+        except asyncio.TimeoutError:
+            self._pending_calls.pop(rpc_id, None)
+            raise
 
     async def initialize(self):
         await self._rpc('initialize', {
@@ -154,9 +158,14 @@ class MCPClient:
                     info['tty'] = tty
                     backfilled = True
                     print(f'[claudecode-controller] startup TTY backfill: {session_id} -> {tty}', file=sys.stderr)
-                    asyncio.create_task(self._tm_register(session_id))
         if backfilled:
             self._save_sessions()
+        # Re-register ALL sessions that have routing info with terminal-manager.
+        # Sessions loaded from disk already have a stored TTY but terminal-manager
+        # loses its registry on restart, so we must re-register unconditionally.
+        for session_id, info in list(self._sessions.items()):
+            if info.get('tty') or info.get('tmux_target'):
+                asyncio.create_task(self._tm_register(session_id))
         self._write_status()
         for session_id, info in list(self._sessions.items()):
             asyncio.create_task(
@@ -783,6 +792,7 @@ class MCPClient:
         for sid in dead:
             self._sessions.pop(sid, None)
             self._working_sessions.discard(sid)
+            asyncio.create_task(self._tm_unregister(sid))
             print(f'[claudecode-controller] pruned dead pid session {sid}', file=sys.stderr)
         return dead
 
@@ -803,6 +813,7 @@ class MCPClient:
                 self._sessions.pop(session_id, None)
                 self._working_sessions.discard(session_id)
                 dead.append(session_id)
+                asyncio.create_task(self._tm_unregister(session_id))
                 print(f'[claudecode-controller] pruned dead session {session_id[:8]} ({cwd})', file=sys.stderr)
         if dead:
             self._save_sessions()
@@ -885,6 +896,7 @@ class MCPClient:
                     self._working_sessions.discard(sid)
                     self._recently_launched_cwds.discard(cwd)
                     asyncio.create_task(self.clear_block(self._session_block_id(sid)))
+                    asyncio.create_task(self._tm_unregister(sid))
                     print(f'[claudecode-controller] evicted dead session {sid[:8]} ({cwd})', file=sys.stderr)
         self._sessions[session_id] = entry
         self._save_sessions()
@@ -1163,7 +1175,7 @@ end tell
             result = await self._rpc('tools/call', {
                 'name': 'send_text',
                 'arguments': {'session_id': session_id, 'text': text}
-            })
+            }, timeout=3.0)
             if isinstance(result, dict) and result.get('ok'):
                 _log(f'[claudecode] routed via terminal-manager send_text: {session_id[:8]}')
                 if tmux_target:
@@ -1250,6 +1262,20 @@ end tell
         if not tty_short and cwd:
             tty_short = await self._find_tty_for_cwd(cwd, 'claude')
             _log(f'[claudecode] tty from ps+lsof (cwd match): {tty_short!r}')
+
+        if not tty_short:
+            # No TTY found — Claude is not running or terminal is closed.
+            # Notify iOS so the user knows the message wasn't delivered.
+            session = self._sessions.get(session_id, {})
+            project = session.get('project', 'Claude Code')
+            _log(f'[claudecode] no TTY found for {session_id[:8]} — notifying delivery failure')
+            asyncio.create_task(self.emit_block(
+                str(uuid.uuid4()), 'notification', {
+                    'title': f'Message not delivered',
+                    'body': f'{project} — Claude is not running or the terminal is closed.',
+                    'icon': 'exclamationmark.bubble',
+                }, ttl=300))
+            return
 
         if tty_short:
             # Normalize TTY to full /dev/ path.
