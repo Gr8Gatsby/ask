@@ -57,12 +57,19 @@ private struct TooltipWindowContent: View {
     var body: some View {
         Text(text)
             .font(.caption2)
-            .foregroundStyle(.primary)
+            .foregroundStyle(Color(NSColor.labelColor))
             .padding(.horizontal, 7)
             .padding(.vertical, 4)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
-            .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
-            .padding(6) // keep shadow from clipping
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(Color(NSColor.windowBackgroundColor))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5)
+                            .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+                    )
+                    .shadow(color: .black.opacity(0.15), radius: 3, y: 1)
+            )
+            .padding(5) // keep shadow from clipping
             .fixedSize()
     }
 }
