@@ -1147,9 +1147,32 @@ end tell
 
     async def _route_to_terminal(self, session_id: str, text: str):
         """Route text to the terminal running this session.
-        Uses tmux send-keys for tmux-launched sessions; clipboard+osascript otherwise."""
+
+        Priority:
+          1. terminal-manager send_text (handles both TTY and tmux uniformly)
+          2. direct tmux send-keys fallback (for tmux sessions if terminal-manager fails)
+          3. pbcopy + osascript fallback (for TTY sessions)
+
+        For tmux sessions _capture_tmux_response is always scheduled so iOS
+        receives Claude's reply regardless of which transport sent the text."""
         session = self._sessions.get(session_id, {})
         tmux_target = session.get('tmux_target')
+
+        # Primary path: terminal-manager send_text
+        try:
+            result = await self._rpc('tools/call', {
+                'name': 'send_text',
+                'arguments': {'session_id': session_id, 'text': text}
+            })
+            if isinstance(result, dict) and result.get('ok'):
+                _log(f'[claudecode] routed via terminal-manager send_text: {session_id[:8]}')
+                if tmux_target:
+                    asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
+                return
+        except Exception as e:
+            _log(f'[claudecode] send_text failed, falling back: {e}')
+
+        # Fallback for tmux sessions: direct send-keys
         if tmux_target:
             try:
                 p1 = await asyncio.create_subprocess_exec(
@@ -1163,22 +1186,11 @@ end tell
                 )
                 await p2.communicate()
             except Exception as e:
-                print(f'[claudecode-controller] tmux send-keys failed: {e}', file=sys.stderr)
+                print(f'[claudecode-controller] tmux send-keys fallback failed: {e}', file=sys.stderr)
             asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
             return
 
-        # Try terminal-manager send_text first — it uses the registered TTY/tmux target.
-        # This is the primary routing path; pbcopy+osascript is a fallback.
-        try:
-            result = await self._rpc('tools/call', {
-                'name': 'send_text',
-                'arguments': {'session_id': session_id, 'text': text}
-            })
-            if isinstance(result, dict) and result.get('ok'):
-                _log(f'[claudecode] routed via terminal-manager send_text: {session_id[:8]}')
-                return
-        except Exception as e:
-            _log(f'[claudecode] send_text failed, falling back to osascript: {e}')
+        # Fallback for TTY sessions: pbcopy + osascript
 
         try:
             pbcopy = await asyncio.create_subprocess_exec(
@@ -1643,16 +1655,18 @@ end tell
             self._sessions[session_id]['tty'] = tty
             self._save_sessions()
             print(f'[claudecode-controller] session_start tty={tty} pid={claude_pid} sid={session_id[:8]}', file=sys.stderr)
-            asyncio.create_task(self._tm_register(session_id))
         if is_new:
             session = self._sessions.get(session_id, {})
             if session.get('tty') or session.get('tmux_target'):
-                # Routing info available immediately — emit block and register
+                # Routing info available — register with terminal-manager and emit block
                 asyncio.create_task(self._tm_register(session_id))
                 asyncio.create_task(self._emit_session_block(session_id))
             else:
                 # No TTY yet (e.g. launched without a terminal) — backfill as fallback
                 asyncio.create_task(self._backfill_tty_and_emit(session_id, cwd))
+        elif tty and session_id in self._sessions:
+            # Existing session just got its TTY — update registration
+            asyncio.create_task(self._tm_register(session_id))
         project = self._sessions.get(session_id, {}).get('project', 'Claude Code')
         asyncio.create_task(self.emit_block(str(uuid.uuid4()), 'session_event', {
             'event': 'started', 'project': project, 'cwd': cwd, 'ts': time.time()
