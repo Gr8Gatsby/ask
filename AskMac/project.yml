@@ -85,6 +85,9 @@ targets:
     platform: macOS
     sources:
       - path: Tests/AskMacTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - target: AskMacCore
 
@@ -94,5 +97,8 @@ schemes:
       targets:
         AskMac: all
         AskMacTests: [test]
+    test:
+      targets:
+        - AskMacTests
     archive:
       config: Release

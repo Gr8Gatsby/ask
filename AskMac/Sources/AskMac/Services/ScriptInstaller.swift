@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import AskMacCore
 
 // MARK: - ScriptInstaller
 
@@ -224,7 +225,7 @@ final class ScriptInstaller {
         let existingVersion = existing?.version
 
         if existing != nil {
-            let comparison = compareVersions(version, existingVersion ?? "")
+            let comparison = VersionComparison.compare(version, existingVersion ?? "")
             switch comparison {
             case .orderedDescending:  installKind = .update
             case .orderedSame:        installKind = .reinstall
@@ -256,24 +257,6 @@ final class ScriptInstaller {
             existingVersion: existingVersion,
             warnings: warnings
         ))
-    }
-
-    // MARK: - Version comparison
-
-    /// Compare two version strings (semver-style). Compares numeric components left to right.
-    private func compareVersions(_ a: String, _ b: String) -> ComparisonResult {
-        let aParts = a.split(separator: ".").compactMap { Int($0) }
-        let bParts = b.split(separator: ".").compactMap { Int($0) }
-        let length = max(aParts.count, bParts.count)
-        for i in 0..<length {
-            let av = i < aParts.count ? aParts[i] : 0
-            let bv = i < bParts.count ? bParts[i] : 0
-            if av < bv { return .orderedAscending }
-            if av > bv { return .orderedDescending }
-        }
-        // Fall back to string comparison for non-numeric versions (e.g. "1.0.0-beta")
-        if aParts.isEmpty || bParts.isEmpty { return a.compare(b) }
-        return .orderedSame
     }
 
     // MARK: - Installation

@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import AskMacCore
 
 // MARK: - Models
 
@@ -93,25 +94,11 @@ final class ScriptCatalogService {
         for entry in allEntries {
             guard let installed = installedScripts.first(where: { $0.id == entry.id }),
                   let installedVersion = installed.version else { continue }
-            if compareVersions(entry.version, installedVersion) == .orderedDescending {
+            if VersionComparison.compare(entry.version, installedVersion) == .orderedDescending {
                 updates[entry.id] = entry
             }
         }
         availableUpdates = updates
     }
 
-    // MARK: - Version comparison
-
-    private func compareVersions(_ a: String, _ b: String) -> ComparisonResult {
-        let aParts = a.split(separator: ".").compactMap { Int($0) }
-        let bParts = b.split(separator: ".").compactMap { Int($0) }
-        let length = max(aParts.count, bParts.count)
-        for i in 0..<length {
-            let av = i < aParts.count ? aParts[i] : 0
-            let bv = i < bParts.count ? bParts[i] : 0
-            if av < bv { return .orderedAscending }
-            if av > bv { return .orderedDescending }
-        }
-        return .orderedSame
-    }
 }
