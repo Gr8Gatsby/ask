@@ -1,6 +1,11 @@
 import Testing
 import Foundation
-@testable import AskMac
+@testable import AskMacCore
+
+private struct StubScript: InstalledScript {
+    let id: String
+    let version: String?
+}
 
 // MARK: - CatalogEntry JSON decoding
 
@@ -118,18 +123,8 @@ struct ScriptCatalogServiceRecomputeTests {
         )
     }
 
-    private func managedScript(id: String, version: String) -> ManagedScript {
-        ManagedScript(
-            id: id,
-            name: id,
-            version: version,
-            description: nil,
-            icon: nil,
-            iconImage: nil,
-            svgString: nil,
-            status: .running,
-            isEnabled: true
-        )
+    private func managedScript(id: String, version: String) -> StubScript {
+        StubScript(id: id, version: version)
     }
 
     @Test func noUpdatesWhenCatalogEmpty() {

@@ -97,7 +97,7 @@ struct ScriptManifest: Codable {
 
 // MARK: - UI model
 
-struct ManagedScript: Identifiable {
+struct ManagedScript: Identifiable, InstalledScript {
     let id: String          // manifest.id
     let name: String
     let version: String?    // manifest.version

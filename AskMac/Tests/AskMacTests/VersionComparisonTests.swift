@@ -1,5 +1,5 @@
 import Testing
-@testable import AskMac
+@testable import AskMacCore
 
 @Suite("VersionComparison")
 struct VersionComparisonTests {
