@@ -45,6 +45,15 @@ final class ScriptCatalogService {
     private(set) var lastFetchError: String?
     private(set) var lastFetchDate: Date?
 
+    // MARK: - Init
+
+    init() {}
+
+    /// Testing initializer — seeds allEntries without a network fetch.
+    init(entries: [CatalogEntry]) {
+        allEntries = entries
+    }
+
     // MARK: - Public API
 
     /// Fetch the catalog and compute available updates against the provided installed scripts.

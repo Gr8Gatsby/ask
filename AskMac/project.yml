@@ -88,8 +88,12 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/AskMac.app/Contents/MacOS/AskMac
+        BUNDLE_LOADER: $(TEST_HOST)
     dependencies:
       - target: AskMacCore
+      - target: AskMac
+        embed: false
 
 schemes:
   AskMac:
