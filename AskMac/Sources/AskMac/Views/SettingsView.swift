@@ -25,40 +25,6 @@ private struct CopyButton: View {
     }
 }
 
-// MARK: - Quick tooltip
-
-private struct QuickTooltipLabel: ViewModifier {
-    let text: String
-    @State private var hovering = false
-
-    func body(content: Content) -> some View {
-        content
-            .onHover { hovering = $0 }
-            .overlay(alignment: .top) {
-                if hovering {
-                    Text(text)
-                        .font(.caption2)
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 4)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
-                        .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
-                        .offset(y: -30)
-                        .fixedSize()
-                        .allowsHitTesting(false)
-                        .transition(.opacity.animation(.easeInOut(duration: 0.1)))
-                        .zIndex(100)
-                }
-            }
-    }
-}
-
-private extension View {
-    func quickTooltip(_ text: String) -> some View {
-        modifier(QuickTooltipLabel(text: text))
-    }
-}
-
 // MARK: - SVG dark-mode helper
 
 /// Rewrites dark/black fill and stroke values to white so an SVG icon
