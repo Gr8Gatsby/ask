@@ -62,6 +62,8 @@ class MCPClient:
         self._tmux_monitors: dict = {}
         # CWDs the user explicitly launched via Start Session — pid-* sessions only surface for these
         self._recently_launched_cwds: set = set()
+        # per-session locks so concurrent iOS replies are serialized (prevents clipboard races)
+        self._route_locks: dict = {}
         # Tile state
         self._active_confirmations = 0
         self._tile_body: Optional[str] = None
@@ -1022,7 +1024,23 @@ class MCPClient:
         tty_short = session.get('tty', '')
         _log(f'[claudecode] close_session {session_id} tty={tty_short!r}')
 
-        if tty_short:
+        # Try terminal-manager first — handles both TTY (Terminal.app) and tmux uniformly.
+        # Must send before unregistering so the session is still known to terminal-manager.
+        ctrl_c_sent = False
+        try:
+            for _ in range(2):
+                r = await self._rpc('tools/call', {
+                    'name': 'send_key',
+                    'arguments': {'session_id': session_id, 'key': 'ctrl_c'}
+                }, timeout=3.0)
+                if isinstance(r, dict) and r.get('ok'):
+                    ctrl_c_sent = True
+                await asyncio.sleep(0.3)
+        except Exception as e:
+            _log(f'[claudecode] close_session send_key failed: {e}')
+
+        # Fallback: bespoke osascript for Terminal.app TTY sessions
+        if not ctrl_c_sent and tty_short:
             if tty_short.startswith('/dev/'):
                 full_tty = tty_short
             elif tty_short.startswith('ttys') or tty_short.startswith('ttyp'):
@@ -1065,7 +1083,7 @@ end tell
                 if err and err.strip():
                     _log(f'[claudecode] close_session osascript error: {err.decode().strip()}')
             except Exception as e:
-                _log(f'[claudecode] close_session failed: {e}')
+                _log(f'[claudecode] close_session osascript failed: {e}')
 
         # Remove from tracked sessions and clear the iOS block
         asyncio.create_task(self._tm_unregister(session_id))
@@ -1167,6 +1185,13 @@ end tell
 
         For tmux sessions _capture_tmux_response is always scheduled so iOS
         receives Claude's reply regardless of which transport sent the text."""
+        # Serialize per session — prevents clipboard race when two replies arrive quickly
+        lock = self._route_locks.setdefault(session_id, asyncio.Lock())
+        async with lock:
+            await self._route_to_terminal_locked(session_id, text)
+
+    async def _route_to_terminal_locked(self, session_id: str, text: str):
+        """Inner routing logic, always called under the per-session lock."""
         session = self._sessions.get(session_id, {})
         tmux_target = session.get('tmux_target')
 
@@ -1811,11 +1836,20 @@ async def _session_heartbeat(client):
             except Exception:
                 pass
         # Backfill TTY for sessions that don't have one yet
+        backfilled = False
         for session_id, info in list(client._sessions.items()):
             if not info.get('tty') and info.get('cwd'):
                 tty = await client._find_tty_for_cwd(info['cwd'], 'claude')
                 if tty:
                     info['tty'] = tty
+                    backfilled = True
+        if backfilled:
+            client._save_sessions()
+        # Re-register all sessions with terminal-manager each cycle.
+        # This recovers gracefully if terminal-manager restarted since the last heartbeat.
+        for session_id, info in list(client._sessions.items()):
+            if info.get('tty') or info.get('tmux_target'):
+                asyncio.create_task(client._tm_register(session_id))
         client._write_status()
         for session_id in list(client._sessions.keys()):
             try:
