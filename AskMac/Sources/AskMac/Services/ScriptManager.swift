@@ -419,11 +419,39 @@ final class ScriptManager: @unchecked Sendable {
 
         // Move vault folder to Trash (bundled scripts are never trashed)
         guard !isBundled, let dir = scriptDir else { return }
-        do {
-            try FileManager.default.trashItem(at: dir, resultingItemURL: nil)
-            print("[ScriptManager] Moved script \(id) to trash: \(dir.path)")
-        } catch {
-            print("[ScriptManager] Failed to move script \(id) to trash: \(error)")
+
+        // Run setup --uninstall before trashing so the script can clean up any
+        // system state it registered (e.g. hooks in ~/.claude/settings.json).
+        let setupPath = dir.appendingPathComponent("setup.py")
+        if FileManager.default.fileExists(atPath: setupPath.path) {
+            Task {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+                proc.arguments = [setupPath.path, "--uninstall"]
+                var env = ProcessInfo.processInfo.environment
+                let vaultRoot = dir.deletingLastPathComponent().path
+                let existing = env["PYTHONPATH"].map { ":\($0)" } ?? ""
+                env["PYTHONPATH"] = "\(vaultRoot):\(dir.path)\(existing)"
+                proc.environment = env
+                proc.standardOutput = Pipe()
+                proc.standardError = Pipe()
+                try? proc.run()
+                proc.waitUntilExit()
+
+                do {
+                    try FileManager.default.trashItem(at: dir, resultingItemURL: nil)
+                    print("[ScriptManager] Moved script \(id) to trash: \(dir.path)")
+                } catch {
+                    print("[ScriptManager] Failed to move script \(id) to trash: \(error)")
+                }
+            }
+        } else {
+            do {
+                try FileManager.default.trashItem(at: dir, resultingItemURL: nil)
+                print("[ScriptManager] Moved script \(id) to trash: \(dir.path)")
+            } catch {
+                print("[ScriptManager] Failed to move script \(id) to trash: \(error)")
+            }
         }
     }
 
@@ -467,6 +495,21 @@ final class ScriptManager: @unchecked Sendable {
     }
 
     // MARK: - Install lock
+
+    /// Stop a running script's connection before its files are replaced on disk.
+    /// Does NOT modify the scripts list, settings, or CloudKit state — the script
+    /// will be cleanly restarted by reload() after endInstall() completes.
+    func stopScriptForUpdate(id: String) {
+        connections[id]?.stop()
+        connections.removeValue(forKey: id)
+        systemConnections[id]?.stop()
+        systemConnections.removeValue(forKey: id)
+        feedScheduler.cancel(scriptID: id)
+        feedTimeoutTasks[id]?.cancel()
+        feedTimeoutTasks.removeValue(forKey: id)
+        launchingScripts.remove(id)
+        restartDelays.removeValue(forKey: id)
+    }
 
     /// Call before starting an install to block file-watcher reloads mid-install.
     func beginInstall() {

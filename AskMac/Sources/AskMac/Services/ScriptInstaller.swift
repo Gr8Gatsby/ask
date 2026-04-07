@@ -280,6 +280,19 @@ final class ScriptInstaller {
 
             do {
                 if fm.fileExists(atPath: destDir.path) {
+                    // Stop the running script before touching its files.
+                    // Without this, the process crashes when its directory is moved
+                    // out from under it. reload() after endInstall() restarts it cleanly.
+                    scriptManager.stopScriptForUpdate(id: script.id)
+
+                    // Run the old version's setup --uninstall before replacing files.
+                    // This lets the previous setup clean up any system state it registered
+                    // (e.g. hooks in ~/.claude/settings.json).
+                    let oldSetupPath = destDir.appendingPathComponent("setup.py")
+                    if fm.fileExists(atPath: oldSetupPath.path) {
+                        await runSetup(scriptPath: oldSetupPath, scriptDir: destDir, argument: "--uninstall")
+                    }
+
                     // Preserve the previous version so it can be rolled back.
                     // Only one generation is kept: {id}.previous
                     let backupDir = vaultURL.appendingPathComponent("\(script.id).previous")
@@ -298,24 +311,7 @@ final class ScriptInstaller {
             let setupPath = destDir.appendingPathComponent("setup.py")
             if fm.fileExists(atPath: setupPath.path) {
                 installProgressLabel = "Running setup for \(script.name)…"
-                await Task.detached(priority: .userInitiated) {
-                    let proc = Process()
-                    proc.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-                    proc.arguments = [setupPath.path, "--install"]
-                    var env = ProcessInfo.processInfo.environment
-                    env["PYTHONPATH"] = destDir.path
-                    proc.environment = env
-                    proc.standardOutput = Pipe()
-                    proc.standardError = Pipe()
-                    try? proc.run()
-                    // 5-minute timeout for setup --install
-                    let timeoutTask = Task {
-                        try? await Task.sleep(for: .seconds(300))
-                        if proc.isRunning { proc.terminate() }
-                    }
-                    proc.waitUntilExit()
-                    timeoutTask.cancel()
-                }.value
+                await runSetup(scriptPath: setupPath, scriptDir: destDir, argument: "--install")
             }
         }
 
@@ -331,6 +327,31 @@ final class ScriptInstaller {
     }
 
     // MARK: - Helpers
+
+    /// Run `setup.py --install` or `setup.py --uninstall` with a 5-minute timeout.
+    private func runSetup(scriptPath: URL, scriptDir: URL, argument: String) async {
+        await Task.detached(priority: .userInitiated) {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            proc.arguments = [scriptPath.path, argument]
+            var env = ProcessInfo.processInfo.environment
+            // Include the vault root (parent of scriptDir) so that ask_sdk.py — which
+            // lives at vault root — is importable alongside the script's own directory.
+            let vaultRoot = scriptDir.deletingLastPathComponent().path
+            let existing = env["PYTHONPATH"].map { ":\($0)" } ?? ""
+            env["PYTHONPATH"] = "\(vaultRoot):\(scriptDir.path)\(existing)"
+            proc.environment = env
+            proc.standardOutput = Pipe()
+            proc.standardError = Pipe()
+            try? proc.run()
+            let timeoutTask = Task {
+                try? await Task.sleep(for: .seconds(300))
+                if proc.isRunning { proc.terminate() }
+            }
+            proc.waitUntilExit()
+            timeoutTask.cancel()
+        }.value
+    }
 
     private func cleanup() {
         if let tmp = tempDir {

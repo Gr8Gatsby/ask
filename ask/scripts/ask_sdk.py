@@ -183,12 +183,12 @@ def check_json_key(id: str, label: str, path: str, *keys) -> bool:
 
 # ── Entry point helper ─────────────────────────────────────────────────────────
 
-def main(check_fn, install_fn):
+def main(check_fn, install_fn, uninstall_fn=None):
     """
-    Wire up --check / --install dispatch. Call at the bottom of setup.py:
+    Wire up --check / --install / --uninstall dispatch. Call at the bottom of setup.py:
 
         if __name__ == "__main__":
-            ask_sdk.main(check_fn=run_checks, install_fn=run_install)
+            ask_sdk.main(check_fn=run_checks, install_fn=run_install, uninstall_fn=run_uninstall)
     """
     mode = sys.argv[1] if len(sys.argv) > 1 else "--check"
     if mode == "--check":
@@ -196,6 +196,10 @@ def main(check_fn, install_fn):
         emit_checks()
     elif mode == "--install":
         install_fn()
+    elif mode == "--uninstall":
+        if uninstall_fn is not None:
+            uninstall_fn()
+        # If no uninstall_fn provided, exit cleanly — nothing to undo
     else:
         print(f"Unknown mode: {mode}", file=sys.stderr)
         sys.exit(1)

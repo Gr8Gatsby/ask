@@ -1,0 +1,72 @@
+{
+  "id": "claudecode-controller",
+  "name": "Claude Code",
+  "version": "2.17.0",
+  "setup": "setup.py",
+  "description": "Claude Code session supervisor \u2014 routes permissions and notifications to iPhone",
+  "entry": "main.py",
+  "icon": "sparkles",
+  "icon_file": "icon.svg",
+  "tools": [
+    {
+      "name": "reply",
+      "description": "Send a message to an active Claude Code session",
+      "params": [
+        {
+          "name": "message",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "session_id",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "start_session",
+      "description": "Launch a new Claude Code session in a repository",
+      "params": [
+        {
+          "name": "path",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "approve",
+      "description": "Approve a pending permission request",
+      "params": [
+        {
+          "name": "block_id",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "deny",
+      "description": "Deny a pending permission request",
+      "params": [
+        {
+          "name": "block_id",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "stop_session",
+      "description": "Interrupt the currently running Claude Code session",
+      "params": [
+        {
+          "name": "session_id",
+          "type": "string",
+          "required": true
+        }
+      ]
+    }
+  ]
+}
