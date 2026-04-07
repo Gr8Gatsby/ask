@@ -177,7 +177,9 @@ enum MachineStatus: String {
 struct AskMachine: Identifiable {
     let id: String          // machineID
     let name: String
-    let lastHeartbeat: Date
+    /// Effective last-seen time — max of the CloudKit heartbeat and the most recent block createdAt.
+    /// Mutable so HomeView can update it when blocks arrive without a matching heartbeat.
+    var lastHeartbeat: Date
     let status: MachineStatus
     let activeJobID: String?
 

@@ -166,6 +166,26 @@ struct HomeView: View {
         machines.first { $0.id == machineID }?.connectionStatus == .offline
     }
 
+    /// Updates machine lastHeartbeat using block createdAt timestamps.
+    /// Scripts can run without AskMac.app running (e.g. via launchd), so recent blocks
+    /// prove the machine is active even if the Machine record's heartbeat is stale.
+    private func refreshMachineHeartbeats(from blocks: [RKBlock]) {
+        var latestByMachine: [String: Date] = [:]
+        for block in blocks {
+            let current = latestByMachine[block.machineID]
+            if current == nil || block.createdAt > current! {
+                latestByMachine[block.machineID] = block.createdAt
+            }
+        }
+        for i in 0..<machines.count {
+            let id = machines[i].id
+            if let latestBlock = latestByMachine[id],
+               latestBlock > machines[i].lastHeartbeat {
+                machines[i].lastHeartbeat = latestBlock
+            }
+        }
+    }
+
     private var scriptGroups: [ScriptGroup] {
         let grouped = Dictionary(grouping: blocks, by: { $0.scriptID })
         let sorted = grouped.keys.sorted { a, b in
@@ -520,6 +540,10 @@ struct HomeView: View {
             }
         }
 
+        // Use block createdAt as a fallback heartbeat — scripts can run without the Mac app,
+        // so recent blocks prove machine activity even when the Machine record is stale.
+        refreshMachineHeartbeats(from: allFetched)
+
         let filtered = allFetched
             .filter { !$0.isFeedBlock || $0.requiresResponse }
             .filter { $0.blockType != .alert }
@@ -615,6 +639,8 @@ struct HomeView: View {
                         actionInbox.replace(machineID: machineID, blocks: machineBlocks)
                     }
                 }
+
+                refreshMachineHeartbeats(from: allFetched)
 
                 let filtered = allFetched
                     .filter { !$0.isFeedBlock || $0.requiresResponse }
