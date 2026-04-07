@@ -2408,7 +2408,13 @@ private struct ScriptCatalogView: View {
                             Divider().padding(.leading, 52)
                         }
 
-                        if !installed.isEmpty {
+                        // Local scripts: in vault but not in the catalog at all
+                        let localScripts = scriptManager.scripts.filter { s in
+                            !catalog.allEntries.contains(where: { $0.id == s.id })
+                        }
+
+                        let totalInstalled = installed.count + localScripts.count
+                        if totalInstalled > 0 {
                             DisclosureGroup(isExpanded: $showInstalled) {
                                 ForEach(installed) { entry in
                                     let installedScript = scriptManager.scripts.first(where: { $0.id == entry.id })
@@ -2419,10 +2425,15 @@ private struct ScriptCatalogView: View {
                                         hasUpdate: false,
                                         isDownloading: false,
                                         downloadError: nil,
-                                        installedScript: installedScript
+                                        installedScript: installedScript,
+                                        isLocal: false
                                     ) {
                                         startInstall(entry: entry)
                                     }
+                                    Divider().padding(.leading, 52)
+                                }
+                                ForEach(localScripts) { script in
+                                    LocalScriptRow(script: script)
                                     Divider().padding(.leading, 52)
                                 }
                             } label: {
@@ -2431,14 +2442,14 @@ private struct ScriptCatalogView: View {
                                         .font(.caption)
                                         .fontWeight(.semibold)
                                         .foregroundStyle(.secondary)
-                                    Text("(\(installed.count))")
+                                    Text("(\(totalInstalled))")
                                         .font(.caption2)
                                         .foregroundStyle(.tertiary)
                                     Spacer()
                                 }
-                                .padding(.horizontal, 16)
                                 .padding(.vertical, 8)
                             }
+                            .padding(.leading, 16)
                         }
                     }
                     .padding(.vertical, 4)
@@ -2491,6 +2502,57 @@ private struct ScriptCatalogView: View {
     }
 }
 
+private struct LocalScriptRow: View {
+    let script: ManagedScript
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Group {
+                if let img = script.iconImage {
+                    Image(nsImage: img)
+                        .resizable()
+                        .scaledToFit()
+                        .grayscale(0.6)
+                        .opacity(0.5)
+                } else {
+                    Image(systemName: script.icon ?? "shippingbox")
+                        .font(.title2)
+                        .foregroundStyle(Color.secondary.opacity(0.4))
+                }
+            }
+            .frame(width: 36, height: 36)
+            .background(Color.secondary.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(script.name)
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .opacity(0.4)
+                if let desc = script.description {
+                    Text(desc)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .opacity(0.4)
+                }
+            }
+
+            Spacer()
+
+            Text("Local")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.secondary.opacity(0.1))
+                .clipShape(Capsule())
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+}
+
 private struct CatalogEntryRow: View {
     let entry: CatalogEntry
     let installer: ScriptInstaller
@@ -2499,6 +2561,7 @@ private struct CatalogEntryRow: View {
     let isDownloading: Bool
     let downloadError: String?
     let installedScript: ManagedScript?
+    var isLocal: Bool = false
     let onInstall: () -> Void
 
     var body: some View {

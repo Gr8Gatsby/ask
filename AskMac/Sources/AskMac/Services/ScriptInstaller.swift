@@ -21,6 +21,8 @@ final class ScriptInstaller {
         let version: String
         let description: String
         let icon: String?
+        let iconImage: NSImage?      // loaded from icon_file / icon.svg in the zip
+        let svgString: String?       // raw SVG markup for dark-mode colour inversion
         let scriptType: String?
         let sourceDir: URL
         let installKind: InstallKind
@@ -204,6 +206,18 @@ final class ScriptInstaller {
             }
         }
 
+        // Icon file — same logic as ScriptManager (path-traversal checked)
+        let iconCandidate = manifest["icon_file"] as? String ?? "icon.svg"
+        let iconURL = dir.appendingPathComponent(iconCandidate)
+        let resolvedIcon = iconURL.resolvingSymlinksInPath()
+        let resolvedDir  = dir.resolvingSymlinksInPath()
+        let iconInBounds = resolvedIcon.path.hasPrefix(resolvedDir.path + "/")
+                        || resolvedIcon.path == resolvedDir.path
+        let iconImage: NSImage? = iconInBounds ? NSImage(contentsOf: iconURL) : nil
+        let svgString: String? = iconInBounds && iconURL.pathExtension.lowercased() == "svg"
+            ? try? String(contentsOf: iconURL, encoding: .utf8)
+            : nil
+
         // Determine install kind by comparing with existing vault
         let existing = existingScripts.first { $0.id == id }
         let installKind: InstallKind
@@ -234,6 +248,8 @@ final class ScriptInstaller {
             version: version,
             description: manifest["description"] as? String ?? "",
             icon: manifest["icon"] as? String,
+            iconImage: iconImage,
+            svgString: svgString,
             scriptType: scriptType,
             sourceDir: dir,
             installKind: installKind,
@@ -282,7 +298,13 @@ final class ScriptInstaller {
 
             do {
                 if fm.fileExists(atPath: destDir.path) {
-                    try fm.removeItem(at: destDir)
+                    // Preserve the previous version so it can be rolled back.
+                    // Only one generation is kept: {id}.previous
+                    let backupDir = vaultURL.appendingPathComponent("\(script.id).previous")
+                    if fm.fileExists(atPath: backupDir.path) {
+                        try? fm.removeItem(at: backupDir)
+                    }
+                    try fm.moveItem(at: destDir, to: backupDir)
                 }
                 try fm.copyItem(at: script.sourceDir, to: destDir)
             } catch {

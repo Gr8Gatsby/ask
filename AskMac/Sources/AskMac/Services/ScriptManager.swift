@@ -274,6 +274,8 @@ final class ScriptManager: @unchecked Sendable {
             for dir in subdirs {
                 var isDir: ObjCBool = false
                 guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
+                // Skip rollback backup directories (created by ScriptInstaller on update)
+                guard !dir.lastPathComponent.hasSuffix(".previous") else { continue }
                 let manifestURL = dir.appendingPathComponent("manifest.json")
                 guard let data = try? Data(contentsOf: manifestURL),
                       let manifest = try? JSONDecoder().decode(ScriptManifest.self, from: data)
@@ -491,6 +493,8 @@ final class ScriptManager: @unchecked Sendable {
             for dir in subdirs {
                 var isDir: ObjCBool = false
                 guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
+                // Skip rollback backup directories (created by ScriptInstaller on update)
+                guard !dir.lastPathComponent.hasSuffix(".previous") else { continue }
                 let manifestURL = dir.appendingPathComponent("manifest.json")
                 guard let data = try? Data(contentsOf: manifestURL),
                       let manifest = try? JSONDecoder().decode(ScriptManifest.self, from: data)
