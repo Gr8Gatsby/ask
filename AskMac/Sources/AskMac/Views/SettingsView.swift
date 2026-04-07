@@ -685,25 +685,23 @@ private struct ScriptDetailView: View {
                     scriptToolsPanel
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
-                    VStack(alignment: .leading, spacing: 12) {
-                        if script.status == .crashed, let error = script.lastError {
-                            crashBanner(error)
-                        }
+                    if script.status == .crashed, let error = script.lastError {
+                        crashBanner(error)
+                    }
 
-                        if !script.stderrLog.isEmpty {
-                            stderrLogSection
-                        }
-
-                        if liveBlocks.isEmpty {
-                            ContentUnavailableView(
-                                "No Active Blocks",
-                                systemImage: "rectangle.stack",
-                                description: Text("This script hasn't emitted any blocks yet.")
-                            )
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, 8)
-                        } else {
-                            VStack(alignment: .leading, spacing: 8) {
+                    // Two-column: live blocks on the left, script log on the right
+                    HStack(alignment: .top, spacing: 16) {
+                        // Left — live block preview
+                        VStack(alignment: .leading, spacing: 8) {
+                            if liveBlocks.isEmpty {
+                                ContentUnavailableView(
+                                    "No Active Blocks",
+                                    systemImage: "rectangle.stack",
+                                    description: Text("This script hasn't emitted any blocks yet.")
+                                )
+                                .frame(maxWidth: .infinity)
+                                .padding(.top, 8)
+                            } else {
                                 ForEach(liveBlocks) { block in
                                     BlockPreviewView(block: block) { value in
                                         scriptManager.respondToBlock(
@@ -715,21 +713,13 @@ private struct ScriptDetailView: View {
                                 }
                             }
                         }
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                if !script.isBundled {
-                    Divider()
-                        .padding(.top, 4)
-                    Button(role: .destructive) {
-                        showUninstallConfirm = true
-                    } label: {
-                        Label("Move to Trash", systemImage: "trash")
+                        .frame(maxWidth: .infinity)
+
+                        // Right — script log
+                        stderrLogSection
                             .frame(maxWidth: .infinity)
                     }
-                    .controlSize(.large)
-                    .buttonStyle(.bordered)
-                    .tint(.red)
+                    .frame(maxWidth: .infinity)
                 }
             }
             .padding(20)
@@ -2065,7 +2055,7 @@ private struct ScriptDetailView: View {
                 }
                 .padding(8)
             }
-            .frame(height: 140)
+            .frame(minHeight: 200)
             .background(Color.black.opacity(0.06))
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
@@ -2544,6 +2534,7 @@ private struct FeedEventDetailSheet: View {
             }
         }
         .frame(width: 500, height: hasStderr || hasPayload ? 540 : 280)
+        .onAppear { NSApplication.shared.activate(ignoringOtherApps: true) }
     }
 
     @ViewBuilder
@@ -2616,6 +2607,7 @@ private struct SetupOutputSheet: View {
             }
         }
         .frame(width: 520, height: 360)
+        .onAppear { NSApplication.shared.activate(ignoringOtherApps: true) }
     }
 
     private func lineColor(_ line: String) -> Color {
@@ -3183,6 +3175,7 @@ private struct ScriptInstallSheet: View {
             }
         }
         .frame(minWidth: 440, minHeight: 300)
+        .onAppear { NSApplication.shared.activate(ignoringOtherApps: true) }
     }
 
     private var installTitle: String {
