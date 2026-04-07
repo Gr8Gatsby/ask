@@ -669,6 +669,7 @@ private struct ScriptDetailView: View {
     // Update state
     @State private var isDownloadingUpdate = false
     @State private var updateError: String?
+    @State private var showUpdatePopover = false
 
     @State private var showUninstallConfirm = false
     @State private var cardFlipped = false
@@ -712,11 +713,6 @@ private struct ScriptDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 scriptCard
-
-                // Update banner — shown when a newer catalog version is available
-                if let update = catalog.availableUpdates[script.id] {
-                    updateBanner(entry: update)
-                }
 
                 // Toggle bar — only for non-system scripts that declare tools
                 if !script.tools.isEmpty && !script.isSystem {
@@ -859,8 +855,36 @@ private struct ScriptDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             // Header: icon + name/info
             HStack(alignment: .top, spacing: 14) {
-                scriptIcon
-                    .frame(width: 48, height: 48)
+                VStack(alignment: .center, spacing: 6) {
+                    scriptIcon
+                        .frame(width: 48, height: 48)
+
+                    if let update = catalog.availableUpdates[script.id] {
+                        Button {
+                            showUpdatePopover = true
+                        } label: {
+                            Text("Update")
+                                .font(.caption2)
+                                .fontWeight(.semibold)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.mini)
+                        .popover(isPresented: $showUpdatePopover, arrowEdge: .bottom) {
+                            updatePopoverView(entry: update)
+                        }
+                    } else if script.needsSetup {
+                        Button {
+                            runSetup()
+                        } label: {
+                            Text("Setup")
+                                .font(.caption2)
+                                .fontWeight(.semibold)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.mini)
+                        .tint(.orange)
+                    }
+                }
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
@@ -1149,6 +1173,27 @@ private struct ScriptDetailView: View {
                             .foregroundStyle(brandForegroundTertiary)
                             .frame(maxWidth: .infinity, alignment: .center)
                             .padding(.vertical, 8)
+                    }
+
+                    // Run Setup — always visible here; tinted orange when setup is needed
+                    if script.setupScript != nil {
+                        Divider()
+                            .background(brandForegroundSecondary.opacity(0.2))
+                        Button {
+                            runSetup()
+                        } label: {
+                            Label("Run Setup", systemImage: "wrench.and.screwdriver")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .tint(script.needsSetup ? .orange : .accentColor)
+                        .sheet(isPresented: $showSetupSheet) {
+                            SetupOutputSheet(
+                                scriptName: script.name,
+                                lines: $setupOutputLines,
+                                running: $setupRunning
+                            )
+                        }
                     }
 
                     ForEach(script.requires, id: \.id) { dep in
@@ -1814,42 +1859,6 @@ private struct ScriptDetailView: View {
                 }
             }
 
-            // Run Setup button
-            if script.setupScript != nil {
-                let failedChecks = script.setupChecks.filter { !$0.ok }
-                let needsTerminal = failedChecks.contains { $0.needsTerminal == true }
-
-                Button {
-                    if needsTerminal {
-                        scriptManager.setupInstallInTerminal(id: script.id)
-                    } else {
-                        setupOutputLines = []
-                        showSetupSheet = true
-                        Task {
-                            setupRunning = true
-                            for await line in scriptManager.setupInstallStream(id: script.id) {
-                                setupOutputLines.append(line)
-                            }
-                            setupRunning = false
-                            scriptManager.runSetupCheck(id: script.id)
-                        }
-                    }
-                } label: {
-                    Label(needsTerminal ? "Open Terminal to Setup" : "Run Setup",
-                          systemImage: needsTerminal ? "terminal" : "wrench.and.screwdriver")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-                .tint(script.needsSetup ? .orange : .accentColor)
-                .sheet(isPresented: $showSetupSheet) {
-                    SetupOutputSheet(
-                        scriptName: script.name,
-                        lines: $setupOutputLines,
-                        running: $setupRunning
-                    )
-                }
-            }
         }
         .padding(.horizontal, 16)
         .padding(.top, 12)
@@ -2214,62 +2223,86 @@ private struct ScriptDetailView: View {
         }
     }
 
-    // MARK: - Update banner
+    // MARK: - Update popover
 
     @ViewBuilder
-    private func updateBanner(entry: CatalogEntry) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private func updatePopoverView(entry: CatalogEntry) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 6) {
                 Image(systemName: "arrow.down.circle.fill")
                     .foregroundStyle(Color.accentColor)
-                    .font(.caption)
                 Text("Update Available")
-                    .font(.caption)
+                    .font(.headline)
                     .fontWeight(.semibold)
-                    .foregroundStyle(Color.accentColor)
                 Spacer()
                 Text("\(script.version ?? "?") → \(entry.version)")
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             if let log = entry.changelog, !log.isEmpty {
                 Text(log)
-                    .font(.caption2)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             if let err = updateError {
                 Text(err)
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(.red)
             }
 
-            Button {
-                installUpdate(entry: entry)
-            } label: {
-                if isDownloadingUpdate {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.mini)
-                        Text("Downloading…")
-                    }
-                } else {
-                    Text("Install Update")
+            HStack {
+                Button("Cancel") {
+                    showUpdatePopover = false
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+
+                Spacer()
+
+                Button {
+                    showUpdatePopover = false
+                    installUpdate(entry: entry)
+                } label: {
+                    if isDownloadingUpdate {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.mini)
+                            Text("Downloading…")
+                        }
+                    } else {
+                        Text("Install Update")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .disabled(isDownloadingUpdate || installer.phase != .idle)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .disabled(isDownloadingUpdate || installer.phase != .idle)
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.accentColor.opacity(0.07))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.accentColor.opacity(0.2), lineWidth: 1)
-        )
+        .padding(16)
+        .frame(width: 320)
+    }
+
+    // MARK: - Setup helper
+
+    private func runSetup() {
+        let failedChecks = script.setupChecks.filter { !$0.ok }
+        let needsTerminal = failedChecks.contains { $0.needsTerminal == true }
+        if needsTerminal {
+            scriptManager.setupInstallInTerminal(id: script.id)
+        } else {
+            setupOutputLines = []
+            showSetupSheet = true
+            Task {
+                setupRunning = true
+                for await line in scriptManager.setupInstallStream(id: script.id) {
+                    setupOutputLines.append(line)
+                }
+                setupRunning = false
+                scriptManager.runSetupCheck(id: script.id)
+            }
+        }
     }
 
     private func installUpdate(entry: CatalogEntry) {
