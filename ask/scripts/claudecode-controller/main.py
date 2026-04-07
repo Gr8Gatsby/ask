@@ -68,6 +68,45 @@ class MCPClient:
         self._initialized = False  # True after MCP handshake completes
 
     # ------------------------------------------------------------------
+    # terminal-manager integration helpers
+    # ------------------------------------------------------------------
+
+    async def _tm_register(self, session_id: str):
+        """Register (or re-register) this session with terminal-manager.
+
+        terminal-manager becomes the single source of truth for routing:
+        it handles TTY-based (osascript) and tmux sessions uniformly.
+        Called whenever a TTY or tmux_target is first set for a session."""
+        session = self._sessions.get(session_id, {})
+        tty = session.get('tty', '')
+        tmux_target = session.get('tmux_target', '')
+        if not tty and not tmux_target:
+            return  # nothing to route to yet
+        try:
+            await self._rpc('tools/call', {
+                'name': 'register_session',
+                'arguments': {
+                    'session_id': session_id,
+                    'app_id': 'claudecode-controller',
+                    'tty': tty,
+                    'tmux_target': tmux_target,
+                }
+            })
+            _log(f'[claudecode] tm_register {session_id[:8]} tty={tty!r} tmux={tmux_target!r}')
+        except Exception as e:
+            _log(f'[claudecode] tm_register failed: {e}')
+
+    async def _tm_unregister(self, session_id: str):
+        """Remove this session from terminal-manager's registry."""
+        try:
+            await self._rpc('tools/call', {
+                'name': 'unregister_session',
+                'arguments': {'session_id': session_id}
+            })
+        except Exception as e:
+            _log(f'[claudecode] tm_unregister failed: {e}')
+
+    # ------------------------------------------------------------------
     # MCP outbound helpers
     # ------------------------------------------------------------------
 
@@ -115,6 +154,7 @@ class MCPClient:
                     info['tty'] = tty
                     backfilled = True
                     print(f'[claudecode-controller] startup TTY backfill: {session_id} -> {tty}', file=sys.stderr)
+                    asyncio.create_task(self._tm_register(session_id))
         if backfilled:
             self._save_sessions()
         self._write_status()
@@ -858,9 +898,10 @@ class MCPClient:
         if not session_id:
             return
         is_new = self._register_session(session_id, cwd)
-        if tty and session_id in self._sessions:
+        if tty and session_id in self._sessions and not self._sessions[session_id].get('tty'):
             self._sessions[session_id]['tty'] = tty
             self._save_sessions()  # persist TTY immediately so it survives restarts
+            asyncio.create_task(self._tm_register(session_id))
         self._working_sessions.add(session_id)
         if is_new:
             asyncio.create_task(self._emit_session_block(session_id))
@@ -885,6 +926,7 @@ class MCPClient:
             if task:
                 task.cancel()
         print(f'[claudecode-controller] session stopped: {session_id}', file=sys.stderr)
+        asyncio.create_task(self._tm_unregister(session_id))
         asyncio.create_task(self._emit_session_block(session_id, last_message=last_message))
         project = self._sessions.get(session_id, {}).get('project', 'Claude Code')
         asyncio.create_task(self.emit_block(str(uuid.uuid4()), 'session_event', {
@@ -1014,6 +1056,7 @@ end tell
                 _log(f'[claudecode] close_session failed: {e}')
 
         # Remove from tracked sessions and clear the iOS block
+        asyncio.create_task(self._tm_unregister(session_id))
         self._sessions.pop(session_id, None)
         self._working_sessions.discard(session_id)
         self._save_sessions()
@@ -1123,6 +1166,19 @@ end tell
                 print(f'[claudecode-controller] tmux send-keys failed: {e}', file=sys.stderr)
             asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
             return
+
+        # Try terminal-manager send_text first — it uses the registered TTY/tmux target.
+        # This is the primary routing path; pbcopy+osascript is a fallback.
+        try:
+            result = await self._rpc('tools/call', {
+                'name': 'send_text',
+                'arguments': {'session_id': session_id, 'text': text}
+            })
+            if isinstance(result, dict) and result.get('ok'):
+                _log(f'[claudecode] routed via terminal-manager send_text: {session_id[:8]}')
+                return
+        except Exception as e:
+            _log(f'[claudecode] send_text failed, falling back to osascript: {e}')
 
         try:
             pbcopy = await asyncio.create_subprocess_exec(
@@ -1438,6 +1494,7 @@ end tell
         if tty and session_id and session_id in self._sessions and not self._sessions[session_id].get('tty'):
             self._sessions[session_id]['tty'] = tty
             self._save_sessions()
+            asyncio.create_task(self._tm_register(session_id))
         # Update live tool activity so the session subtitle shows the pending tool
         if session_id and session_id in self._sessions:
             entry = {'tool': tool, 'preview': preview, 'ts': time.time()}
@@ -1475,6 +1532,7 @@ end tell
         if tty and session_id in self._sessions and not self._sessions[session_id].get('tty'):
             self._sessions[session_id]['tty'] = tty
             self._save_sessions()  # persist TTY immediately so it survives restarts
+            asyncio.create_task(self._tm_register(session_id))
         if is_new:
             asyncio.create_task(self._emit_session_block(session_id))
         else:
@@ -1585,10 +1643,12 @@ end tell
             self._sessions[session_id]['tty'] = tty
             self._save_sessions()
             print(f'[claudecode-controller] session_start tty={tty} pid={claude_pid} sid={session_id[:8]}', file=sys.stderr)
+            asyncio.create_task(self._tm_register(session_id))
         if is_new:
             session = self._sessions.get(session_id, {})
             if session.get('tty') or session.get('tmux_target'):
-                # Routing info available immediately — emit block now
+                # Routing info available immediately — emit block and register
+                asyncio.create_task(self._tm_register(session_id))
                 asyncio.create_task(self._emit_session_block(session_id))
             else:
                 # No TTY yet (e.g. launched without a terminal) — backfill as fallback
@@ -1614,6 +1674,7 @@ end tell
                 self._sessions[session_id]['tty'] = tty
                 self._save_sessions()
                 print(f'[claudecode-controller] session_start TTY found: {session_id[:8]} -> {tty}', file=sys.stderr)
+                asyncio.create_task(self._tm_register(session_id))
                 break
             await asyncio.sleep(1)
         # Only emit if we found routing info. If we didn't, don't call _emit_session_block —
