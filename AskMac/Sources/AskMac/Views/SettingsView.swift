@@ -184,8 +184,10 @@ private struct ScriptsTabView: View {
                         return a.name < b.name
                     }
                     ForEach(sorted) { script in
-                        ScriptSidebarRow(script: script, scriptManager: scriptManager)
-                            .tag(script.id)
+                        ScriptSidebarRow(script: script, scriptManager: scriptManager) {
+                            selectedScriptID = nil
+                        }
+                        .tag(script.id)
                     }
                 }
             }
@@ -478,9 +480,11 @@ private struct ScriptsVaultView: View {
 private struct ScriptSidebarRow: View {
     let script: ManagedScript
     let scriptManager: ScriptManager
+    var onUninstall: () -> Void = {}
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(AppSettings.self) private var settings
+    @State private var showUninstallConfirm = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -544,6 +548,24 @@ private struct ScriptSidebarRow: View {
                         .foregroundStyle(.secondary)
                 }
             }
+
+            if !script.isBundled {
+                Divider()
+                Button(role: .destructive) {
+                    showUninstallConfirm = true
+                } label: {
+                    Label("Move to Trash", systemImage: "trash")
+                }
+            }
+        }
+        .alert("Remove \(script.name)?", isPresented: $showUninstallConfirm) {
+            Button("Remove", role: .destructive) {
+                onUninstall()
+                scriptManager.uninstallScript(id: script.id)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will stop the script, clear its blocks from your iPhone, and move its files to the Trash.")
         }
     }
 
@@ -695,6 +717,19 @@ private struct ScriptDetailView: View {
                         }
                     }
                     .frame(maxWidth: .infinity)
+                }
+                if !script.isBundled {
+                    Divider()
+                        .padding(.top, 4)
+                    Button(role: .destructive) {
+                        showUninstallConfirm = true
+                    } label: {
+                        Label("Move to Trash", systemImage: "trash")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                    .buttonStyle(.bordered)
+                    .tint(.red)
                 }
             }
             .padding(20)
@@ -968,20 +1003,6 @@ private struct ScriptDetailView: View {
             .toggleStyle(.switch)
             .controlSize(.regular)
             .padding(14)
-        }
-        .overlay(alignment: .bottomLeading) {
-            if !script.isBundled {
-                Button {
-                    showUninstallConfirm = true
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.caption)
-                        .foregroundStyle(.red.opacity(0.7))
-                }
-                .buttonStyle(.borderless)
-                .help("Move to Trash")
-                .padding(14)
-            }
         }
         .alert("Remove \(script.name)?", isPresented: $showUninstallConfirm) {
             Button("Remove", role: .destructive) {
