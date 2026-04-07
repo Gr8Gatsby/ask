@@ -70,7 +70,7 @@ staple_with_retry() {
 # ── Version + channel ─────────────────────────────────────────────────────────
 VERSION="${1:-}"
 if [[ -z "$VERSION" ]]; then
-    VERSION=$(grep 'MARKETING_VERSION' "$ASKMAC_DIR/project.yml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+    VERSION=$(grep '^\s*MARKETING_VERSION:' "$ASKMAC_DIR/project.yml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
 fi
 BUILD_NUMBER="$(date +%s)"
 
