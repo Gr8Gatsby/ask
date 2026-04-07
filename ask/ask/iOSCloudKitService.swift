@@ -45,6 +45,26 @@ final class iOSCloudKitService {
         return AskMachine(record: record)
     }
 
+    /// Deletes a machine record and all of its RKBlocks from CloudKit.
+    /// The Mac will re-register itself within ~30 s if it is still running.
+    func deleteMachine(machineID: String) async {
+        // Delete machine record (best-effort)
+        let machineRecordID = CKRecord.ID(recordName: machineID)
+        _ = try? await database.deleteRecord(withID: machineRecordID)
+
+        // Batch-delete all RKBlocks owned by this machine
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.RKBlock.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.rkBlock, predicate: predicate)
+        if let (results, _) = try? await database.records(matching: query, resultsLimit: 200) {
+            let ids = results.compactMap { _, r in try? r.get().recordID }
+            if !ids.isEmpty {
+                _ = try? await database.modifyRecords(
+                    saving: [], deleting: ids, savePolicy: .allKeys, atomically: false
+                )
+            }
+        }
+    }
+
     // MARK: - Agents
 
     func fetchAgents(machineID: String) async throws -> [AskAgent] {

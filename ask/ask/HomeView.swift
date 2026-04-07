@@ -127,8 +127,11 @@ struct HomeView: View {
 
     @State private var hasLoaded = false
     @State private var fetchFailed = false
-    @State private var activeMachineID: String?
+    /// nil = show all machines; a machineID = filter to that machine only.
+    @State private var machineFilter: String?
     @State private var showSettings = false
+    /// Comma-separated machineIDs to exclude from the home screen (persisted).
+    @AppStorage("hiddenMachineIDs") private var hiddenMachineIDsRaw: String = ""
     @State private var selectedScriptID: String?
     @State private var pollTask: Task<Void, Never>?
     @State private var lastHeartbeatAt: Date = .distantPast
@@ -141,7 +144,6 @@ struct HomeView: View {
     @State private var showLoadingOverlay = true
     @State private var responseErrorMessage: String?
     @State private var queuedMessage: String?
-    @State private var deviceEnabled: Bool = true
     @State private var showQueueReview: Bool = false
     @State private var wasOffline: Bool = false
     @State private var selectedTab: HomeTab = .home
@@ -150,13 +152,18 @@ struct HomeView: View {
 
     enum HomeTab: Hashable { case home, feed }
 
-    private var macIsOffline: Bool {
-        activeMachine?.connectionStatus == .offline
+    private var hiddenMachineIDs: Set<String> {
+        Set(hiddenMachineIDsRaw.split(separator: ",").map(String.init))
     }
 
-    private var activeMachine: AskMachine? {
-        if let id = activeMachineID { return machines.first { $0.id == id } }
-        return machines.sorted { $0.lastHeartbeat > $1.lastHeartbeat }.first
+    /// Machines currently shown (not hidden).
+    private var visibleMachines: [AskMachine] {
+        machines.filter { !hiddenMachineIDs.contains($0.id) }
+    }
+
+    /// True if every visible machine is offline (used to decide whether to queue responses).
+    private func machineIsOffline(_ machineID: String) -> Bool {
+        machines.first { $0.id == machineID }?.connectionStatus == .offline
     }
 
     private var scriptGroups: [ScriptGroup] {
@@ -185,10 +192,8 @@ struct HomeView: View {
                     fetchFailedState
                 } else if machines.isEmpty {
                     emptyState
-                } else if !deviceEnabled {
-                    disabledState
                 } else if selectedTab == .feed {
-                    FeedView(machines: machines, activeMachineID: activeMachineID)
+                    FeedView(machines: visibleMachines, activeMachineID: machineFilter)
                 } else {
                     content
                 }
@@ -270,12 +275,7 @@ struct HomeView: View {
                     isWaiting: Date() < burstPollingUntil,
                     onRespond: { block, value in await respondToBlock(block, value: value) },
                     errorMessage: responseErrorMessage,
-                    machines: machines,
-                    activeMachine: activeMachine,
-                    onSelectMachine: { machineID in
-                        activeMachineID = machineID
-                        await load()
-                    }
+                    machines: machines
                 )
                 .task {
                     // Poll continuously while the detail view is open, so updates
@@ -405,18 +405,37 @@ struct HomeView: View {
     @ViewBuilder
     private var machineMenuButton: some View {
         Menu {
-            ForEach(machines) { machine in
+            Button {
+                machineFilter = nil
+                Task { await load() }
+            } label: {
+                if machineFilter == nil {
+                    Label("All Machines", systemImage: "checkmark")
+                } else {
+                    Text("All Machines")
+                }
+            }
+            Divider()
+            ForEach(visibleMachines) { machine in
                 Button {
-                    activeMachineID = machine.id
+                    machineFilter = machine.id
                     Task { await load() }
                 } label: {
-                    Label(machine.name, systemImage: machine.systemImage)
+                    if machineFilter == machine.id {
+                        Label(machine.name, systemImage: "checkmark")
+                    } else {
+                        Label(machine.name, systemImage: machine.systemImage)
+                    }
                 }
             }
         } label: {
-            let offline = activeMachine?.connectionStatus == .offline
-            Image(systemName: activeMachine?.systemImage ?? "desktopcomputer")
-                .foregroundStyle(offline ? .secondary : .primary)
+            if let id = machineFilter, let machine = machines.first(where: { $0.id == id }) {
+                Image(systemName: machine.systemImage)
+                    .foregroundStyle(machine.connectionStatus == .offline ? .secondary : .primary)
+            } else {
+                Image(systemName: "desktopcomputer")
+                    .foregroundStyle(.primary)
+            }
         }
     }
 
@@ -479,38 +498,49 @@ struct HomeView: View {
             fetchFailed = false
         } catch {
             print("[HomeView] Failed to fetch machines: \(error)")
-            fetchFailed = machines.isEmpty  // only flag as failed if we have nothing to show
+            fetchFailed = machines.isEmpty
         }
-        var blockFetchSucceeded = false
-        if let machine = activeMachine {
-            deviceEnabled = await cloudKit.checkDeviceEnabled(machineID: machine.id)
-            if deviceEnabled, let fresh = try? await cloudKit.fetchBlocks(machineID: machine.id) {
-                withAnimation(.easeOut(duration: 0.25)) {
-                    blocks = fresh.filter { !$0.isFeedBlock || $0.requiresResponse }
-                        .filter { $0.blockType != .alert }
-                        .filter { $0.blockType != .activityFeed }
-                        .filter { $0.blockType != .sessionEvent }
+
+        // Fetch blocks from all visible machines in parallel.
+        var allFetched: [RKBlock] = []
+        var anySucceeded = false
+        await withTaskGroup(of: (String, [RKBlock]).self) { group in
+            for machine in visibleMachines {
+                group.addTask {
+                    let enabled = await self.cloudKit.checkDeviceEnabled(machineID: machine.id)
+                    guard enabled else { return (machine.id, []) }
+                    let fetched = (try? await self.cloudKit.fetchBlocks(machineID: machine.id)) ?? []
+                    return (machine.id, fetched)
                 }
-                actionInbox.replace(machineID: machine.id, blocks: blocks)
-                blockFetchSucceeded = true
-            } else {
-                actionInbox.clear()
             }
-        } else {
-            actionInbox.clear()
+            for await (machineID, machineBlocks) in group {
+                if !machineBlocks.isEmpty { anySucceeded = true }
+                allFetched.append(contentsOf: machineBlocks)
+                actionInbox.replace(machineID: machineID, blocks: machineBlocks)
+            }
         }
+
+        let filtered = allFetched
+            .filter { !$0.isFeedBlock || $0.requiresResponse }
+            .filter { $0.blockType != .alert }
+            .filter { $0.blockType != .activityFeed }
+            .filter { $0.blockType != .sessionEvent }
+
+        // Apply optional machine filter
+        let display = machineFilter.map { id in filtered.filter { $0.machineID == id } } ?? filtered
+
+        withAnimation(.easeOut(duration: 0.25)) { blocks = display }
+
         if !machines.isEmpty && Date().timeIntervalSince(lastHeartbeatAt) > 1800 {
             await cloudKit.saveDeviceHeartbeat(machineIDs: machines.map { $0.id })
             lastHeartbeatAt = Date()
         }
         hasLoaded = true
-        // Reconcile the icon cache against the live script list on a successful fetch
-        // so removed scripts don't persist across launches. Fall back to a merge-update
-        // on failure so the cache is preserved when the backend is unreachable.
+
         let cacheGroups = scriptGroups.map {
             (id: $0.scriptID, name: $0.name, sfSymbol: $0.icon, iconData: $0.iconData)
         }
-        if blockFetchSucceeded {
+        if anySucceeded {
             iconCache.reconcile(to: cacheGroups)
         } else {
             iconCache.update(from: cacheGroups)
@@ -553,49 +583,55 @@ struct HomeView: View {
             // Prevents a blank UI during the Mac restart window while scripts re-emit.
             var consecutiveEmpty = 0
             while !Task.isCancelled {
-                let interval: Double
-                if Date() < burstPollingUntil {
-                    interval = 1.0   // just responded — fast burst
-                } else {
-                    interval = 3.0   // default — keep UI fresh
-                }
+                let interval: Double = Date() < burstPollingUntil ? 1.0 : 3.0
                 try? await Task.sleep(for: .seconds(interval))
                 guard !Task.isCancelled else { break }
+
                 if let fresh = try? await cloudKit.fetchMachines(), !fresh.isEmpty {
                     machines = fresh
                     fetchFailed = false
                 }
 
-                // Detect Mac coming back online — show queue review if needed.
-                let nowOffline = macIsOffline
+                // Detect any machine coming back online — show queue review if needed.
+                let nowOffline = visibleMachines.allSatisfy { $0.connectionStatus == .offline }
                 if wasOffline && !nowOffline && !offlineQueue.isEmpty {
                     showQueueReview = true
                 }
                 wasOffline = nowOffline
 
-                if let machine = activeMachine {
-                    let isEnabled = await cloudKit.checkDeviceEnabled(machineID: machine.id)
-                    if deviceEnabled != isEnabled { deviceEnabled = isEnabled }
-                    if isEnabled, let fresh = try? await cloudKit.fetchBlocks(machineID: machine.id) {
-                        let filtered = fresh.filter { !$0.isFeedBlock || $0.requiresResponse }
-                            .filter { $0.blockType != .alert }
-                            .filter { $0.blockType != .activityFeed }
-                        .filter { $0.blockType != .sessionEvent }
-                        if filtered.isEmpty {
-                            consecutiveEmpty += 1
-                            if consecutiveEmpty >= 2 {
-                                withAnimation(.easeOut(duration: 0.25)) { blocks = filtered }
-                            }
-                        } else {
-                            consecutiveEmpty = 0
-                            withAnimation(.easeOut(duration: 0.25)) { blocks = filtered }
+                // Fetch blocks from all visible machines in parallel.
+                var allFetched: [RKBlock] = []
+                await withTaskGroup(of: (String, [RKBlock]).self) { group in
+                    for machine in visibleMachines {
+                        group.addTask {
+                            let enabled = await self.cloudKit.checkDeviceEnabled(machineID: machine.id)
+                            guard enabled else { return (machine.id, []) }
+                            let fetched = (try? await self.cloudKit.fetchBlocks(machineID: machine.id)) ?? []
+                            return (machine.id, fetched)
                         }
-                        actionInbox.replace(machineID: machine.id, blocks: filtered)
-                    } else if !isEnabled {
-                        actionInbox.clear()
+                    }
+                    for await (machineID, machineBlocks) in group {
+                        allFetched.append(contentsOf: machineBlocks)
+                        actionInbox.replace(machineID: machineID, blocks: machineBlocks)
+                    }
+                }
+
+                let filtered = allFetched
+                    .filter { !$0.isFeedBlock || $0.requiresResponse }
+                    .filter { $0.blockType != .alert }
+                    .filter { $0.blockType != .activityFeed }
+                    .filter { $0.blockType != .sessionEvent }
+
+                let display = machineFilter.map { id in filtered.filter { $0.machineID == id } } ?? filtered
+
+                if display.isEmpty {
+                    consecutiveEmpty += 1
+                    if consecutiveEmpty >= 2 {
+                        withAnimation(.easeOut(duration: 0.25)) { blocks = display }
                     }
                 } else {
-                    actionInbox.clear()
+                    consecutiveEmpty = 0
+                    withAnimation(.easeOut(duration: 0.25)) { blocks = display }
                 }
             }
         }
@@ -604,8 +640,8 @@ struct HomeView: View {
     private func respondToBlock(_ block: RKBlock, value: String) async {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
 
-        // If Mac is offline, queue the response for later review.
-        if macIsOffline {
+        // If the block's machine is offline, queue the response for later review.
+        if machineIsOffline(block.machineID) {
             let name = block.scriptName ?? block.scriptID
             offlineQueue.enqueue(
                 machineID: block.machineID,
@@ -1286,9 +1322,41 @@ struct SettingsSheetView: View {
 
     @AppStorage("showBlockDebugInfo") private var showDebugInfo: Bool = false
     @AppStorage("useBrandColors") private var useBrandColors: Bool = true
+    @AppStorage("hiddenMachineIDs") private var hiddenMachineIDsRaw: String = ""
     @State private var machines: [AskMachine] = []
     @State private var showQueueReview = false
     @State private var feedSchedules: [String: String] = [:]
+    @State private var machineToDelete: AskMachine?
+    @State private var showDeleteConfirm = false
+    @State private var isDeleting = false
+
+    private var hiddenMachineIDs: Set<String> {
+        Set(hiddenMachineIDsRaw.split(separator: ",").map(String.init))
+    }
+
+    private func toggleHidden(_ machine: AskMachine) {
+        var ids = hiddenMachineIDs
+        if ids.contains(machine.id) { ids.remove(machine.id) } else { ids.insert(machine.id) }
+        hiddenMachineIDsRaw = ids.joined(separator: ",")
+    }
+
+    private func deleteMachine(_ machine: AskMachine) {
+        machineToDelete = machine
+        showDeleteConfirm = true
+    }
+
+    private func confirmDelete() async {
+        guard let machine = machineToDelete else { return }
+        isDeleting = true
+        await cloudKit.deleteMachine(machineID: machine.id)
+        machines.removeAll { $0.id == machine.id }
+        // Also remove from hidden list if present
+        var ids = hiddenMachineIDs
+        ids.remove(machine.id)
+        hiddenMachineIDsRaw = ids.joined(separator: ",")
+        isDeleting = false
+        machineToDelete = nil
+    }
 
     @Query(sort: \FeedHistoryEntry.createdAt, order: .reverse)
     private var feedHistory: [FeedHistoryEntry]
@@ -1315,15 +1383,42 @@ struct SettingsSheetView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("Machines") {
+                Section {
                     ForEach(machines) { machine in
                         NavigationLink {
                             MachineDetailView(machine: machine)
                                 .environment(cloudKit)
                         } label: {
-                            MachineRow(machine: machine)
+                            HStack {
+                                MachineRow(machine: machine)
+                                Spacer()
+                                if hiddenMachineIDs.contains(machine.id) {
+                                    Image(systemName: "eye.slash")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button(role: .destructive) {
+                                deleteMachine(machine)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                            Button {
+                                toggleHidden(machine)
+                            } label: {
+                                let isHidden = hiddenMachineIDs.contains(machine.id)
+                                Label(isHidden ? "Show" : "Hide",
+                                      systemImage: isHidden ? "eye" : "eye.slash")
+                            }
+                            .tint(.indigo)
                         }
                     }
+                } header: {
+                    Text("Machines")
+                } footer: {
+                    Text("Swipe left to hide a machine from the home screen, or delete its CloudKit records. A running Mac re-registers within 30 seconds.")
                 }
 
                 if let machine = machines.first {
@@ -1425,6 +1520,25 @@ struct SettingsSheetView: View {
             .sheet(isPresented: $showQueueReview) {
                 QueueReviewSheet(isPresented: $showQueueReview)
                     .environment(cloudKit)
+            }
+            .confirmationDialog(
+                "Delete \"\(machineToDelete?.name ?? "")\"?",
+                isPresented: $showDeleteConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Delete Machine & Blocks", role: .destructive) {
+                    Task { await confirmDelete() }
+                }
+                Button("Cancel", role: .cancel) { machineToDelete = nil }
+            } message: {
+                Text("This removes the machine record and all its blocks from iCloud. A running Mac re-registers within 30 seconds.")
+            }
+            .overlay {
+                if isDeleting {
+                    ProgressView("Deleting…")
+                        .padding(20)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                }
             }
         }
     }
