@@ -490,6 +490,26 @@ struct RKBlock: Identifiable {
         Data(payloadJSON.decodingSurrogatePairs.utf8)
     }
 
+    /// Memberwise initialiser used by unit tests and previews.
+    init(id: String, machineID: String, scriptID: String, scriptName: String?,
+         scriptIcon: String?, scriptIconData: String?, scriptIconSVG: String?,
+         blockType: RKBlockType, payloadJSON: String, createdAt: Date, expiresAt: Date?,
+         scriptType: String, showsInInbox: Bool) {
+        self.id = id
+        self.machineID = machineID
+        self.scriptID = scriptID
+        self.scriptName = scriptName
+        self.scriptIcon = scriptIcon
+        self.scriptIconData = scriptIconData
+        self.scriptIconSVG = scriptIconSVG
+        self.blockType = blockType
+        self.payloadJSON = payloadJSON
+        self.createdAt = createdAt
+        self.expiresAt = expiresAt
+        self.scriptType = scriptType
+        self.showsInInbox = showsInInbox
+    }
+
     init?(record: CKRecord) {
         guard
             let blockID = record[CKSchema.RKBlock.blockID] as? String,

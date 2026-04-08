@@ -119,10 +119,11 @@ struct ScriptGroup: Identifiable {
         Set(blocks.map { $0.machineID }).count
     }
 
-    /// The highest urgency among all actionable blocks in this group (with defaults applied).
+    /// The highest urgency among inbox blocks in this group (with defaults applied).
+    /// Uses showsInInbox rather than requiresResponse so idle agentSession blocks are excluded.
     var dominantUrgency: RKUrgency? {
         blocks
-            .filter { $0.requiresResponse }
+            .filter { $0.showsInInbox }
             .compactMap { $0.effectiveUrgency }
             .min(by: { $0.sortRank < $1.sortRank })
     }
@@ -213,25 +214,26 @@ struct HomeView: View {
         }.map { ScriptGroup(scriptID: $0, blocks: grouped[$0] ?? []) }
     }
 
-    /// Groups that have at least one block requiring a response.
-    /// Sorted by dominant urgency (urgent first), then oldest actionable block first within the same tier.
+    /// Groups that need user action: either an explicit inbox block (confirmation, prompt, quick_reply, etc.)
+    /// or a tile that set action_required: true. Uses showsInInbox rather than requiresResponse so that
+    /// idle agentSession blocks — which are requiresResponse but never showsInInbox — don't flood the queue.
     private var needsResponseGroups: [ScriptGroup] {
         scriptGroups
-            .filter { $0.blocks.contains(where: { $0.requiresResponse }) }
+            .filter { $0.blocks.contains(where: { $0.showsInInbox }) || $0.isActionRequired }
             .sorted { a, b in
                 let aRank = a.dominantUrgency?.sortRank ?? 3
                 let bRank = b.dominantUrgency?.sortRank ?? 3
                 if aRank != bRank { return aRank < bRank }
-                let aDate = a.blocks.filter(\.requiresResponse).map(\.createdAt).min() ?? .distantFuture
-                let bDate = b.blocks.filter(\.requiresResponse).map(\.createdAt).min() ?? .distantFuture
+                let aDate = a.blocks.filter(\.showsInInbox).map(\.createdAt).min() ?? .distantFuture
+                let bDate = b.blocks.filter(\.showsInInbox).map(\.createdAt).min() ?? .distantFuture
                 return aDate < bDate
             }
     }
 
-    /// Groups with no blocks requiring a response, sorted most-recently-active first.
+    /// Groups with no inbox blocks and no tile action_required — informational/status only.
     private var recentGroups: [ScriptGroup] {
         scriptGroups
-            .filter { !$0.blocks.contains(where: { $0.requiresResponse }) }
+            .filter { !$0.blocks.contains(where: { $0.showsInInbox }) && !$0.isActionRequired }
             .sorted {
                 ($0.blocks.map(\.createdAt).max() ?? .distantPast) >
                 ($1.blocks.map(\.createdAt).max() ?? .distantPast)
