@@ -806,18 +806,17 @@ class MCPClient:
                 pass
             if not cwd:
                 continue
-            # Skip if a live session already tracks this CWD
-            if any(info.get('cwd') == cwd
-                   for sid, info in self._sessions.items()
-                   if not sid.startswith('pid-') or self._pid_session_alive(sid)):
+            # Skip if a hook-confirmed session already owns this exact PID.
+            # Multiple claude processes in the same CWD are allowed (shown as separate sessions).
+            if any(info.get('claude_pid') == pid
+                   for info in self._sessions.values()):
                 continue
             if self._register_session(synthetic_id, cwd, claude_pid=pid):
                 self._sessions[synthetic_id]['tty'] = tty
-                # Surface on iOS — treat discovered sessions the same as launched ones
                 self._recently_launched_cwds.add(cwd)
                 self._save_sessions()
                 asyncio.create_task(self._tm_register(synthetic_id))
-                print(f'[claudecode-controller] discovered claude pid={pid} tty={tty} cwd={cwd}', file=sys.stderr)
+                _log(f'[claudecode] discovered claude pid={pid} tty={tty} cwd={cwd}')
 
     @staticmethod
     def _is_pid_alive(pid: int) -> bool:
