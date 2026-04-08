@@ -18,7 +18,7 @@ import re
 import subprocess
 import datetime
 
-sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)
+sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1, closefd=False)
 
 LOG_PATH = os.path.expanduser('~/.ask/logs/terminal-manager.log')
 

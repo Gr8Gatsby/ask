@@ -18,7 +18,7 @@ import uuid
 from typing import Optional
 
 # Force UTF-8 on stdout so emoji pass through cleanly to the Mac daemon
-sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)
+sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1, closefd=False)
 
 SOCKET_PATH    = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/sockets/claudecode-controller.sock'))
 BLOCK_TILE     = 'claudecode-controller-tile'

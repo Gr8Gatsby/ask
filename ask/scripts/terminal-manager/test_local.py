@@ -314,7 +314,18 @@ def main():
         })
         print(f'Switched → session={session_id}  {reg}')
 
-    print('Commands: r=detect_tui  R=read_output  ls=list  sw=switch terminal  k <key>=send_key  t <text>=send_text  raw <text>=send_raw  q=quit')
+    print('Commands:')
+    print('  r                — detect_tui')
+    print('  R                — read_output (last 30 lines)')
+    print('  ls               — list_sessions')
+    print('  sw               — switch terminal')
+    print('  k <key>          — send_key (up/down/enter/escape/ctrl_c/ctrl_u)')
+    print('  t <text>         — send_text (Ctrl+U, type, Enter)')
+    print('  raw <text>       — send_raw')
+    print('  inj <text>       — inject_tty (TIOCSTI, no clipboard/focus)')
+    print('  fw               — focus_window')
+    print('  w [timeout]      — wait_for_idle (default 30s)')
+    print('  q                — quit')
     print()
 
     while True:
@@ -378,8 +389,36 @@ def main():
             print(f'  → {pretty(result)}')
             print()
 
+        elif cmd.startswith('inj '):
+            text = cmd[4:]
+            result = client.call('inject_tty', {'session_id': session_id, 'text': text})
+            print(f'  → {pretty(result)}')
+            print()
+
+        elif cmd == 'fw':
+            result = client.call('focus_window', {'session_id': session_id})
+            print(f'  → {pretty(result)}')
+            print()
+
+        elif cmd.startswith('w'):
+            parts = cmd.split()
+            timeout = int(parts[1]) if len(parts) > 1 else 30
+            print(f'  Waiting up to {timeout}s for idle prompt...')
+            result = client.call('wait_for_idle', {
+                'session_id': session_id,
+                'timeout': timeout,
+                'poll_interval': 1,
+                'stable_count': 2,
+            })
+            if result.get('idle'):
+                print(f'  → Idle! Output ({len(result.get("output",""))} chars):')
+                print(result.get('output', ''))
+            else:
+                print('  → Timed out — session not idle')
+            print()
+
         else:
-            print('Unknown command. r / R / ls / k <key> / t <text> / raw <text> / q')
+            print('Unknown command. See command list above.')
 
     client.stop()
     print('Done.')
