@@ -203,7 +203,7 @@ class MCPClient:
         if filter:
             args['filter'] = filter
         try:
-            result = await self._rpc('tools/call', {'name': 'list_terminal_sessions', 'arguments': args})
+            result = await self._rpc('tools/call', {'name': 'list_sessions', 'arguments': args})
             return result.get('sessions', []) if isinstance(result, dict) else []
         except Exception as e:
             print(f'[claudecode-controller] list_terminal_sessions failed: {e}', file=sys.stderr)
@@ -809,23 +809,23 @@ class MCPClient:
         return dead
 
     async def _prune_dead_real_sessions(self):
-        """Remove hook-registered sessions whose CWD no longer has an active claude process.
-        Only prunes when list_terminal_sessions returns at least one result — if it returns
-        empty we can't tell 'no processes' from 'tool unavailable', so we skip pruning."""
-        active = await self.list_terminal_sessions(filter='claude')
+        """Remove hook-registered sessions that are no longer registered in terminal-manager.
+        Only prunes when list_sessions returns at least one result — if it returns empty we
+        can't tell 'no processes' from 'tool unavailable', so we skip pruning."""
+        active = await self.list_terminal_sessions()
         if not active:
             return []
-        active_cwds = {s.get('cwd') for s in active if s.get('cwd')}
+        active_ids = {s.get('session_id') for s in active if s.get('session_id')}
         dead = []
         for session_id, info in list(self._sessions.items()):
             if session_id.startswith('pid-'):
                 continue
-            cwd = info.get('cwd', '')
-            if cwd and cwd not in active_cwds:
+            if session_id not in active_ids:
                 self._sessions.pop(session_id, None)
                 self._working_sessions.discard(session_id)
                 dead.append(session_id)
                 asyncio.create_task(self._tm_unregister(session_id))
+                cwd = info.get('cwd', '')
                 print(f'[claudecode-controller] pruned dead session {session_id[:8]} ({cwd})', file=sys.stderr)
         if dead:
             self._save_sessions()
