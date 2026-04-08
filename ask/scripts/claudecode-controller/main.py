@@ -169,12 +169,12 @@ class MCPClient:
             if info.get('tty') or info.get('tmux_target'):
                 asyncio.create_task(self._tm_register(session_id))
         self._write_status()
+        # Await session block emits so that _update_tile() (called after initialize())
+        # sees the correct last_emitted counts and doesn't show "No sessions".
         for session_id, info in list(self._sessions.items()):
-            asyncio.create_task(
-                self._emit_session_block(session_id, last_message=info.get('last_message', ''), touch_last_seen=False)
-            )
-        asyncio.create_task(self._emit_start_session_block())
-        asyncio.create_task(self._emit_diagnostics_block())
+            await self._emit_session_block(session_id, last_message=info.get('last_message', ''), touch_last_seen=False)
+        await self._emit_start_session_block()
+        await self._emit_diagnostics_block()
 
     async def emit_block(self, block_id, block_type, payload, ttl=None, inbox=False):
         args = {'blockId': block_id, 'blockType': block_type, 'payload': payload}
