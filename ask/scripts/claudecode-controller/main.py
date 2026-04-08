@@ -764,17 +764,59 @@ class MCPClient:
             print(f'[claudecode-controller] session load failed: {e}', file=sys.stderr)
 
     async def _discover_active_processes(self):
-        """Scan for running 'claude' processes via the list_terminal_sessions MCP tool."""
+        """Scan for running 'claude' processes via ps/lsof and register untracked ones."""
         if os.environ.get('ASK_SKIP_DISCOVERY'):
             return
-        sessions = await self.list_terminal_sessions(filter='claude')
-        for s in sessions:
-            pid = s.get('pid')
-            cwd = s.get('cwd', '')
-            if pid and cwd:
-                synthetic_id = f'pid-{pid}'
-                if self._register_session(synthetic_id, cwd):
-                    print(f'[claudecode-controller] discovered claude process pid={pid} cwd={cwd}', file=sys.stderr)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'ps', '-eo', 'pid,tty,comm',
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+            )
+            stdout, _ = await proc.communicate()
+            candidates = []
+            for line in stdout.decode().splitlines()[1:]:
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                pid_str, tty, comm = parts[0], parts[1], ' '.join(parts[2:])
+                if 'claude' in comm.lower() and tty != '??':
+                    candidates.append((int(pid_str), tty))
+        except Exception as e:
+            print(f'[claudecode-controller] _discover_active_processes ps failed: {e}', file=sys.stderr)
+            return
+
+        for pid, tty in candidates:
+            synthetic_id = f'pid-{pid}'
+            if synthetic_id in self._sessions:
+                continue
+            # Get CWD via lsof
+            cwd = None
+            try:
+                lsof = await asyncio.create_subprocess_exec(
+                    'lsof', '-p', str(pid), '-a', '-d', 'cwd', '-Fn',
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+                )
+                out, _ = await lsof.communicate()
+                for lline in out.decode().splitlines():
+                    if lline.startswith('n'):
+                        cwd = lline[1:]
+                        break
+            except Exception:
+                pass
+            if not cwd:
+                continue
+            # Skip if a live session already tracks this CWD
+            if any(info.get('cwd') == cwd
+                   for sid, info in self._sessions.items()
+                   if not sid.startswith('pid-') or self._pid_session_alive(sid)):
+                continue
+            if self._register_session(synthetic_id, cwd, claude_pid=pid):
+                self._sessions[synthetic_id]['tty'] = tty
+                # Surface on iOS — treat discovered sessions the same as launched ones
+                self._recently_launched_cwds.add(cwd)
+                self._save_sessions()
+                asyncio.create_task(self._tm_register(synthetic_id))
+                print(f'[claudecode-controller] discovered claude pid={pid} tty={tty} cwd={cwd}', file=sys.stderr)
 
     @staticmethod
     def _is_pid_alive(pid: int) -> bool:
