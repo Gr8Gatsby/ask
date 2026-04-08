@@ -13,6 +13,10 @@ final class BlockService: @unchecked Sendable {
     private let scriptIconSVG: String?
     private let scriptType: String   // "tile" or "feed"
 
+    // Pending debounced write tasks keyed by blockID. Access is safe because
+    // each BlockService is owned by a single MCPConnection and calls are sequential.
+    private var pendingWrites: [String: Task<Void, Never>] = [:]
+
     init(cloudKit: CloudKitService, machineID: String, scriptID: String, scriptName: String = "", scriptIcon: String? = nil, scriptIconData: String? = nil, scriptIconSVG: String? = nil, scriptType: String = "tile") {
         self.cloudKit = cloudKit
         self.machineID = machineID
@@ -41,12 +45,31 @@ final class BlockService: @unchecked Sendable {
             requiresResponse: requiresResponse ? 1 : 0,
             showsInInbox: showsInInbox ? 1 : 0
         )
-        try await withRetry(label: "emitBlock(\(blockID))") {
-            try await self.cloudKit.saveBlock(record)
+
+        if requiresResponse {
+            // User is waiting — write immediately with retry
+            try await withRetry(label: "emitBlock(\(blockID))") {
+                try await self.cloudKit.saveBlock(record)
+            }
+        } else {
+            // Debounce: if the same blockID is updated again within 500ms, drop the earlier write
+            pendingWrites[blockID]?.cancel()
+            pendingWrites[blockID] = Task { [weak self] in
+                guard let self else { return }
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled else { return }
+                try? await self.withRetry(label: "emitBlock(\(blockID))") {
+                    try await self.cloudKit.saveBlock(record)
+                }
+                self.pendingWrites.removeValue(forKey: blockID)
+            }
         }
     }
 
     func clearBlock(blockID: String) async throws {
+        // Cancel any pending debounced write — the block is being cleared
+        pendingWrites[blockID]?.cancel()
+        pendingWrites.removeValue(forKey: blockID)
         try await withRetry(label: "clearBlock(\(blockID))") {
             try await self.cloudKit.clearBlock(blockID: blockID)
         }

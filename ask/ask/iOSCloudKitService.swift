@@ -206,7 +206,10 @@ final class iOSCloudKitService {
     }
 
     /// Upserts a typing indicator for the iPhone.
+    /// Callers cancel-and-replace the enclosing Task on each keystroke; sleeping here coalesces
+    /// rapid writes so CloudKit sees at most one update per 2 seconds of continuous typing.
     func updateTyping(machineID: String) async throws {
+        try await Task.sleep(for: .seconds(2))
         let recordName = "typing-\(machineID)-iphone"
         let recordID = CKRecord.ID(recordName: recordName)
         let record: CKRecord
@@ -375,24 +378,14 @@ final class iOSCloudKitService {
         let (results, _) = try await database.records(matching: query, resultsLimit: 50)
 
         let now = Date()
-        var toDelete: [CKRecord.ID] = []
         var blocks: [RKBlock] = []
 
-        for (recordID, result) in results {
+        for (_, result) in results {
             guard let record = try? result.get() else { continue }
-            guard let block = RKBlock(record: record) else {
-                toDelete.append(recordID)
-                continue
-            }
-            if let exp = block.expiresAt, exp < now {
-                toDelete.append(recordID)
-                continue
-            }
+            guard let block = RKBlock(record: record) else { continue }
+            // Skip expired blocks — Mac's HeartbeatService owns cleanup
+            if let exp = block.expiresAt, exp < now { continue }
             blocks.append(block)
-        }
-
-        if !toDelete.isEmpty {
-            _ = try? await database.modifyRecords(saving: [], deleting: toDelete, savePolicy: .allKeys, atomically: false)
         }
 
         let feedItems = blocks.filter { $0.blockType == .feedItem }

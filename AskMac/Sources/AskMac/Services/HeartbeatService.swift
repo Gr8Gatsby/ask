@@ -53,7 +53,7 @@ final class HeartbeatService {
         do {
             try await cloudKit.saveMachine(makeMachineRecord(status: .idle))
             // Machine record written — mark alive immediately.
-            // Device refresh is non-critical; failures must not block the heartbeat.
+            // Device refresh and cleanup are non-critical; failures must not block the heartbeat.
             lastHeartbeat = Date()
             error = nil
         } catch {
@@ -61,6 +61,7 @@ final class HeartbeatService {
             return
         }
         await refreshDevices()
+        await cloudKit.deleteExpiredBlocks(machineID: settings.machineID)
     }
 
     func setDeviceEnabled(_ device: DeviceRecord, enabled: Bool) {

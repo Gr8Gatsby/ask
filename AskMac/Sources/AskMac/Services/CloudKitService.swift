@@ -159,7 +159,10 @@ final class CloudKitService {
     }
 
     /// Upserts a typing indicator for this device. Record name is deterministic for upsert.
+    /// Callers cancel-and-replace the enclosing Task on each keystroke; sleeping here coalesces
+    /// rapid writes so CloudKit sees at most one update per 2 seconds of continuous typing.
     func updateTyping(machineID: String, fromDevice: String) async throws {
+        try await Task.sleep(for: .seconds(2))
         let recordName = "typing-\(machineID)-\(fromDevice)"
         let record = existingRecord(named: recordName, type: CKSchema.RecordType.typing)
         record[CKSchema.Typing.machineID] = machineID
@@ -280,6 +283,25 @@ final class CloudKitService {
         let record = block.toCKRecord()
         let saved = try await save(record)
         cachedRecords[block.blockID] = saved
+    }
+
+    /// Deletes all expired RKBlock records for a machine. Called by HeartbeatService on each cycle.
+    func deleteExpiredBlocks(machineID: String) async {
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.RKBlock.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.rkBlock, predicate: predicate)
+        guard let (results, _) = try? await database.records(matching: query, resultsLimit: 200) else { return }
+        let now = Date()
+        let expiredIDs = results.compactMap { recordID, result -> CKRecord.ID? in
+            guard let record = try? result.get(),
+                  let expiresAt = record[CKSchema.RKBlock.expiresAt] as? Date,
+                  expiresAt < now
+            else { return nil }
+            return recordID
+        }
+        guard !expiredIDs.isEmpty else { return }
+        _ = try? await database.modifyRecords(saving: [], deleting: expiredIDs, savePolicy: .allKeys, atomically: false)
+        expiredIDs.forEach { cachedRecords.removeValue(forKey: $0.recordName) }
+        logger.info("deleteExpiredBlocks — removed \(expiredIDs.count) expired blocks for \(machineID)")
     }
 
     /// Deletes all RKBlock records for a given script. Called on script reconnect for a clean slate.
