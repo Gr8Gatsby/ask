@@ -1486,7 +1486,7 @@ end tell
                 response = await self._handle_blocking(
                     writer,
                     self._build_permission_block(msg),
-                    default='Deny',
+                    default='',   # empty = fall through to Claude Code's built-in prompt
                 )
                 if not writer.is_closing():
                     writer.write(json.dumps(response, ensure_ascii=False).encode())
@@ -1575,7 +1575,7 @@ end tell
                     return
 
         response_task = asyncio.create_task(
-            self.wait_for_block_response(block_id, timeout=None)
+            self.wait_for_block_response(block_id, timeout=300)
         )
         disconnect_task = asyncio.create_task(wait_writer_closed())
 
