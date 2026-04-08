@@ -691,16 +691,15 @@ class MCPClient:
             pass
 
     @staticmethod
-    def _project_label(cwd: str, session_id: str) -> str:
-        """Human-readable label: last 2 path parts + short session ID.
-        pid-* sessions show the full pid (e.g. pid-2605) to avoid ambiguity."""
+    def _project_label(cwd: str, session_id: str, tty: str = '') -> str:
+        """Human-readable label: last 2 path parts + TTY (or short session ID fallback)."""
         if cwd:
             parts = cwd.rstrip('/').split('/')
             path_label = '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
         else:
             path_label = 'Claude Code'
-        short = session_id if session_id.startswith('pid-') else session_id[:6]
-        return f'{path_label} [{short}]'
+        identifier = tty if tty else (session_id if session_id.startswith('pid-') else session_id[:6])
+        return f'{path_label} [{identifier}]'
 
     def _save_sessions(self):
         """Persist _sessions to disk so restarts can re-emit known sessions.
@@ -1021,10 +1020,10 @@ class MCPClient:
             # Can't route replies without a TTY or tmux target — don't surface this session on iOS
             asyncio.create_task(self.clear_block(self._session_block_id(session_id)))
             return
-        project = session.get('project', 'Claude Code')
         cwd = session.get('cwd', '')
         block_id = self._session_block_id(session_id)
         tty = session.get('tty', '')
+        project = self._project_label(cwd, session_id, tty)
         payload: dict = {
             'session_id': session_id,
             'project': project,
