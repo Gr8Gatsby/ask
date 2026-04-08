@@ -302,6 +302,7 @@ class MCPClient:
             elif msg_type == 'chat_message':
                 session_id = data.get('sessionId', '')
                 text = data.get('text', '')
+                _log(f'[claudecode] chat_message received session={session_id[:8] if session_id else "?"} len={len(text)}')
                 if session_id and text:
                     asyncio.create_task(self._on_session_reply(session_id, text))
 

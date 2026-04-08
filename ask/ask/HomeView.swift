@@ -51,6 +51,7 @@ struct AgentSessionNavValue: Hashable {
     let blockID: String
     let sessionID: String
     let project: String
+    let machineID: String
 }
 
 // MARK: - Script group model
@@ -1344,7 +1345,7 @@ struct ScriptDetailView: View {
                                 let confs = sessionConfirmations(for: payload.sessionId)
                                     .filter { !respondedConfirmationIDs.contains($0.id) }
                                 let confCount = confs.count
-                                NavigationLink(value: AgentSessionNavValue(blockID: block.id, sessionID: payload.sessionId, project: payload.project)) {
+                                NavigationLink(value: AgentSessionNavValue(blockID: block.id, sessionID: payload.sessionId, project: payload.project, machineID: block.machineID)) {
                                     SessionRowView(
                                         payload: payload,
                                         confirmationCount: confCount
@@ -1427,7 +1428,7 @@ struct ScriptDetailView: View {
                     livePayload: livePayload,
                     allBlocks: allBlocks,
                     scriptID: scriptID,
-                    machineID: activeMachine?.id ?? "",
+                    machineID: nav.machineID,
                     onRespond: onRespond
                 )
             }
