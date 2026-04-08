@@ -36,6 +36,9 @@ struct SessionRowView: View {
                             Text("\(payload.agentName ?? "Agent") is working…")
                                 .foregroundStyle(.secondary)
                         }
+                    } else if let tty = payload.tty, !tty.isEmpty {
+                        Text(tty)
+                            .foregroundStyle(.tertiary)
                     } else {
                         Text("Session started")
                             .foregroundStyle(.tertiary)

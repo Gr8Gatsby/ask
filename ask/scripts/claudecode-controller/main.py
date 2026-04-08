@@ -1024,6 +1024,7 @@ class MCPClient:
         project = session.get('project', 'Claude Code')
         cwd = session.get('cwd', '')
         block_id = self._session_block_id(session_id)
+        tty = session.get('tty', '')
         payload: dict = {
             'session_id': session_id,
             'project': project,
@@ -1032,6 +1033,8 @@ class MCPClient:
             'brand_color': '#D97757',
             'placeholder': 'Reply to Claude…',
         }
+        if tty:
+            payload['tty'] = tty
         if last_message:
             payload['last_message'] = last_message
         payload['is_working'] = session_id in self._working_sessions
