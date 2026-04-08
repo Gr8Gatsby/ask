@@ -111,6 +111,11 @@ struct RKClaudeMessagePayload: Codable {
     }
 }
 
+struct RKPendingConfirmation: Codable {
+    let title: String
+    let options: [String]
+}
+
 struct ToolHistoryEntry: Codable {
     let tool: String
     let preview: String
@@ -132,6 +137,7 @@ struct RKAgentSessionPayload: Codable {
     let permissionMode: String?
     let isHeadless: Bool?
     let tty: String?
+    let pendingConfirmation: RKPendingConfirmation?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
@@ -148,6 +154,7 @@ struct RKAgentSessionPayload: Codable {
         case permissionMode = "permission_mode"
         case isHeadless = "is_headless"
         case tty
+        case pendingConfirmation = "pending_confirmation"
     }
 
     /// Parses `brandColor` hex string (e.g. `#74AA9C`) into a SwiftUI Color.

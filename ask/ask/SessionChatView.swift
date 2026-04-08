@@ -54,7 +54,7 @@ struct SessionRowView: View {
                         .foregroundStyle(.secondary)
                         .font(.caption)
                 }
-                if confirmationCount > 0 {
+                if confirmationCount > 0 || payload.pendingConfirmation != nil {
                     Image(systemName: "exclamationmark.circle.fill")
                         .foregroundStyle(.orange)
                         .font(.caption)
@@ -162,6 +162,9 @@ struct SessionChatView: View {
                 reconnectingBanner
             }
             chatThread
+            if isActive, let pc = livePayload?.pendingConfirmation, let block = liveBlock {
+                pendingConfirmationBar(pc: pc, block: block)
+            }
             Divider()
             composeBar
             if isActive, scriptID == "codex-controller", let block = liveBlock {
@@ -362,6 +365,31 @@ struct SessionChatView: View {
         .padding(.vertical, 10)
         .padding(.bottom, 8)
         .opacity(isActive ? 1.0 : 0.5)
+    }
+
+    @ViewBuilder
+    private func pendingConfirmationBar(pc: RKPendingConfirmation, block: RKBlock) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(pc.title)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(pc.options, id: \.self) { option in
+                        Button(option) {
+                            Task { await onRespond(block, option) }
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.orange)
+                        .font(.footnote)
+                    }
+                }
+                .padding(.horizontal)
+            }
+        }
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
     }
 
     @ViewBuilder

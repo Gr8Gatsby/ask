@@ -596,33 +596,69 @@ return true'''
 
 
 async def _terminal_inject_tty(tty: str, text: str) -> bool:
-    """Inject text directly into the TTY input queue via TIOCSTI ioctl.
+    """Inject text into the terminal tab using Terminal.app's native write command.
 
-    Sends Ctrl-U + text + newline as raw input characters without needing
-    Terminal.app to be focused or Accessibility permissions.  Works with any
-    terminal emulator.  Falls back gracefully if TIOCSTI is unavailable
-    (e.g. SIP-restricted environment).
+    Uses Terminal.app's own AppleScript `write text` verb which sends text directly
+    to the tab's running process — no Accessibility permission needed, no System Events.
+    Sends text + carriage return so the input is submitted (e.g. selecting a menu option).
 
-    TIOCSTI (0x80017472) is still supported on macOS unlike Linux >= 6.2.
-    The calling process must own the TTY (same uid) — satisfied because
-    claudecode-controller runs as the same user that owns the terminal.
+    TIOCSTI was removed from macOS (permission denied for non-owning processes),
+    so Terminal.app's native scripting is the reliable cross-version approach.
     """
-    TIOCSTI = 0x80017472
     full = _tty_to_full(tty)
-    payload = '\x15' + text + '\n'   # Ctrl-U clears the line, \n submits
-    try:
-        import fcntl
-        fd = os.open(full, os.O_RDWR | os.O_NOCTTY)
-        try:
-            for ch in payload:
-                fcntl.ioctl(fd, TIOCSTI, ch.encode('utf-8', errors='replace'))
-        finally:
-            os.close(fd)
-        _dbg(f'  [inject_tty] injected {len(payload)} chars via TIOCSTI to {full}')
-        return True
-    except Exception as e:
-        _log(f'inject_tty failed ({full}): {e}', 'WARN')
-        return False
+    safe = full.replace('"', '\\"')
+
+    # Convert Python string to an AppleScript expression.
+    # Non-printable chars (like ESC = 0x1B) become (ASCII character N).
+    # do script appends Enter automatically, so ESC[B sequences navigate without extra Enter.
+    def _as_str(s: str) -> str:
+        if not s:
+            return '""'
+        parts, buf = [], ''
+        for ch in s:
+            code = ord(ch)
+            if 32 <= code <= 126 and ch not in ('"', '\\'):
+                buf += ch
+            else:
+                if buf:
+                    parts.append(f'"{buf}"')
+                    buf = ''
+                parts.append(f'(ASCII character {code})')
+        if buf:
+            parts.append(f'"{buf}"')
+        return ' & '.join(parts) if parts else '""'
+
+    as_text = _as_str(text)
+
+    # Use Terminal.app's do script to send text + Enter to the running process's stdin.
+    # No Accessibility permission needed — Terminal.app handles it internally.
+    script = f'''
+tell application "Terminal"
+    set targetTTY to "{safe}"
+    set foundTab to false
+    repeat with w in windows
+        set tabCount to count of tabs of w
+        repeat with i from 1 to tabCount
+            set t to tab i of w
+            try
+                if tty of t is targetTTY then
+                    do script {as_text} in t
+                    set foundTab to true
+                    exit repeat
+                end if
+            end try
+        end repeat
+        if foundTab then exit repeat
+    end repeat
+    return foundTab
+end tell'''
+
+    result = await _run_script(script)
+    ok = result.strip() == 'true'
+    _dbg(f'  [inject_tty] Terminal.app write text={text!r} tty={tty} ok={ok}')
+    if not ok:
+        _log(f'inject_tty failed — tab not found for {full}', 'WARN')
+    return ok
 
 
 async def _terminal_focus(tty: str) -> bool:

@@ -60,6 +60,8 @@ class MCPClient:
         self._pending_tmux_targets: dict = {}
         # tmux_target -> asyncio.Task — background pane monitors
         self._tmux_monitors: dict = {}
+        # session_id -> asyncio.Task — TTY session prompt monitors
+        self._tty_monitors: dict = {}
         # CWDs the user explicitly launched via Start Session — pid-* sessions only surface for these
         self._recently_launched_cwds: set = set()
         # per-session locks so concurrent iOS replies are serialized (prevents clipboard races)
@@ -576,8 +578,8 @@ class MCPClient:
         """Detect a numbered interactive menu in tmux pane output.
         Returns (body, options) or None if no prompt found."""
         import re
-        option_re = re.compile(r'^\s*>?\s*(\d+)[.)]\s+(.+)$')
-        footer_re = re.compile(r'press\s+enter|to\s+continue', re.IGNORECASE)
+        option_re = re.compile(r'^\s*[>❯]?\s*(\d+)[.)]\s+(.+)$')
+        footer_re = re.compile(r'press\s+enter|to\s+continue|to\s+confirm|esc\s+to', re.IGNORECASE)
         lines = content.splitlines()
         options = []
         body_lines = []
@@ -690,6 +692,120 @@ class MCPClient:
         except Exception:
             pass
 
+    def _tty_prompt_block_id(self, session_id: str) -> str:
+        digest = hashlib.sha256(f'tty-prompt-{session_id}'.encode()).hexdigest()[:8]
+        return f'claudecode-tty-prompt-{digest}'
+
+    async def _monitor_tty_session(self, session_id: str):
+        """Poll a TTY session for interactive prompts (e.g. trust prompt) and surface them to iOS.
+
+        When a numbered menu is detected, the options are embedded directly in the
+        session's agent_session block (via pending_confirmation) rather than as a
+        separate floating inbox item.  Replies come through the session's normal
+        response callback and are routed to _on_tty_prompt_reply."""
+        import hashlib as _hl
+        last_hash = ''
+        poll_interval = 1
+        idle_streak = 0
+        active_options: list = []
+
+        # Give terminal-manager time to register the session before first poll
+        await asyncio.sleep(2)
+
+        while True:
+            await asyncio.sleep(poll_interval)
+            if session_id not in self._sessions:
+                break
+
+            try:
+                result = await self._rpc('tools/call', {
+                    'name': 'read_output',
+                    'arguments': {'session_id': session_id, 'lines': 40},
+                }, timeout=4.0)
+                if not isinstance(result, dict):
+                    idle_streak += 1
+                    if idle_streak > 60:
+                        break
+                    continue
+                lines = result.get('lines', [])
+                content = '\n'.join(lines)
+            except Exception:
+                idle_streak += 1
+                if idle_streak > 60:
+                    break
+                continue
+
+            parsed = self._parse_tmux_prompt(content)
+            content_hash = _hl.md5(content.encode()).hexdigest()[:8]
+
+            if parsed:
+                idle_streak = 0
+                poll_interval = 1
+                if content_hash != last_hash:
+                    last_hash = content_hash
+                    body, options = parsed
+                    active_options = options
+                    # Embed the confirmation in the session block so it appears
+                    # inside the session card rather than floating above all sessions.
+                    session = self._sessions.get(session_id, {})
+                    session['pending_confirmation'] = {'title': body, 'options': options}
+                    session_block_id = self._session_block_id(session_id)
+                    # Emit first (emit registers the default callback), then override
+                    await self._emit_session_block(session_id)
+                    # Set override AFTER emit so _emit_session_block doesn't clobber it
+                    self._response_callbacks[session_block_id] = (
+                        lambda v, sid=session_id, opts=options:
+                            self._on_tty_prompt_reply(sid, opts, v)
+                    )
+                    _log(f'[claudecode] TTY prompt surfaced for {session_id[:8]}')
+            else:
+                if last_hash:
+                    last_hash = ''
+                    active_options = []
+                    session = self._sessions.get(session_id, {})
+                    session.pop('pending_confirmation', None)
+                    # Restore normal reply callback
+                    session_block_id = self._session_block_id(session_id)
+                    self._response_callbacks[session_block_id] = (
+                        lambda v, sid=session_id: self._on_session_reply(sid, v)
+                    )
+                    await self._emit_session_block(session_id)
+                idle_streak += 1
+                if idle_streak > 60:
+                    poll_interval = 5
+
+        self._tty_monitors.pop(session_id, None)
+        session = self._sessions.get(session_id, {})
+        session.pop('pending_confirmation', None)
+
+    async def _on_tty_prompt_reply(self, session_id: str, options: list, value: str):
+        """Send the user's menu selection to the terminal via inject_tty (TIOCSTI).
+
+        inject_tty sends Ctrl-U + text + Enter directly into the TTY input queue —
+        no Accessibility permission required, no window focus needed."""
+        try:
+            idx = options.index(value)
+        except ValueError:
+            return
+        # Build keystroke sequence: idx Down arrows (\x1b[B each), then Enter.
+        # do script in Terminal.app appends the Enter automatically.
+        down_seq = '\x1b[B' * idx
+        try:
+            await self._rpc('tools/call', {
+                'name': 'inject_tty',
+                'arguments': {'session_id': session_id, 'text': down_seq},
+            }, timeout=5.0)
+            _log(f'[claudecode] TTY prompt replied idx={idx} downs={idx} for {session_id[:8]}')
+        except Exception as e:
+            _log(f'[claudecode] TTY prompt reply failed: {e}')
+        # Clear confirmation state and restore normal reply routing
+        session = self._sessions.get(session_id, {})
+        session.pop('pending_confirmation', None)
+        session_block_id = self._session_block_id(session_id)
+        self._response_callbacks[session_block_id] = (
+            lambda v, sid=session_id: self._on_session_reply(sid, v)
+        )
+
     @staticmethod
     def _project_label(cwd: str, session_id: str, tty: str = '') -> str:
         """Human-readable label: last 2 path parts + TTY (or short session ID fallback)."""
@@ -748,7 +864,11 @@ class MCPClient:
             pass
 
     def _load_sessions(self):
-        """Load persisted sessions, discarding any older than SESSION_TTL."""
+        """Load persisted sessions, discarding any older than SESSION_TTL.
+
+        After loading, deduplicate by TTY: only one session per TTY is allowed.
+        When multiple sessions share a TTY, the real (non-pid-*) session wins;
+        if multiple real sessions share a TTY, the most-recently-seen wins."""
         try:
             with open(SESSIONS_PATH) as f:
                 data = json.load(f)
@@ -757,6 +877,18 @@ class MCPClient:
                 sid: info for sid, info in data.items()
                 if isinstance(info, dict) and info.get('last_seen', 0) >= cutoff
             }
+            # Deduplicate: one session per TTY — prefer real over pid-*, newest over old.
+            seen_ttys: dict[str, str] = {}  # tty -> winning session_id
+            for sid, info in sorted(self._sessions.items(),
+                                    key=lambda x: (x[0].startswith('pid-'), -x[1].get('last_seen', 0))):
+                tty = info.get('tty', '')
+                if not tty:
+                    continue
+                if tty not in seen_ttys:
+                    seen_ttys[tty] = sid
+                else:
+                    _log(f'[claudecode] load dedup: evicting {sid} — TTY {tty} already owned by {seen_ttys[tty][:8]}')
+                    del self._sessions[sid]
             print(f'[claudecode-controller] restored {len(self._sessions)} session(s)', file=sys.stderr)
         except FileNotFoundError:
             pass
@@ -812,9 +944,13 @@ class MCPClient:
                 continue
             if self._register_session(synthetic_id, cwd, claude_pid=pid):
                 self._sessions[synthetic_id]['tty'] = tty
+                self._sessions[synthetic_id]['is_headless'] = self._detect_headless(tty)
                 self._recently_launched_cwds.add(cwd)
                 self._save_sessions()
                 asyncio.create_task(self._tm_register(synthetic_id))
+                if synthetic_id not in self._tty_monitors:
+                    task = asyncio.create_task(self._monitor_tty_session(synthetic_id))
+                    self._tty_monitors[synthetic_id] = task
                 _log(f'[claudecode] discovered claude pid={pid} tty={tty} cwd={cwd}')
 
     @staticmethod
@@ -955,6 +1091,52 @@ class MCPClient:
         self._save_sessions()
         return True
 
+    @staticmethod
+    def _detect_headless(tty: str) -> bool:
+        """Return True if the given TTY belongs to a tmux pane with no attached clients.
+
+        A 'headless' session means Claude is running inside tmux but no terminal
+        window is actually open — the user would need to attach to see it."""
+        if not tty:
+            return False
+        try:
+            import subprocess
+            # Check if this TTY belongs to any tmux pane
+            r = subprocess.run(
+                ['tmux', 'list-panes', '-a', '-F', '#{pane_tty} #{session_name}'],
+                capture_output=True, text=True, timeout=2,
+            )
+            tty_dev = tty if tty.startswith('/dev/') else f'/dev/{tty}'
+            for line in r.stdout.strip().splitlines():
+                parts = line.split()
+                if len(parts) == 2 and parts[0] == tty_dev:
+                    session_name = parts[1]
+                    # Check if the tmux session has any attached clients
+                    lc = subprocess.run(
+                        ['tmux', 'list-clients', '-t', session_name, '-F', '#{client_tty}'],
+                        capture_output=True, text=True, timeout=2,
+                    )
+                    return not bool(lc.stdout.strip())
+        except Exception:
+            pass
+        return False
+
+    def _evict_sessions_for_tty(self, tty: str, keep_session_id: str):
+        """Remove all sessions sharing a TTY except the one being registered.
+
+        A TTY can only host one claude session at a time — any prior entry for
+        the same TTY is stale and would create a duplicate card on iOS."""
+        if not tty:
+            return
+        for sid in list(self._sessions.keys()):
+            if sid == keep_session_id:
+                continue
+            if self._sessions[sid].get('tty') == tty:
+                _log(f'[claudecode] evicting {sid} — TTY {tty} superseded by {keep_session_id[:8]}')
+                asyncio.create_task(self.clear_block(self._session_block_id(sid)))
+                del self._sessions[sid]
+        self._save_sessions()
+
     def _handle_session_active(self, msg):
         """Called by PostToolUse — registers the session and emits an initial block."""
         session_id = msg.get('session_id', '')
@@ -965,8 +1147,16 @@ class MCPClient:
         is_new = self._register_session(session_id, cwd)
         if tty and session_id in self._sessions and not self._sessions[session_id].get('tty'):
             self._sessions[session_id]['tty'] = tty
+            self._sessions[session_id]['is_headless'] = self._detect_headless(tty)
             self._save_sessions()  # persist TTY immediately so it survives restarts
             asyncio.create_task(self._tm_register(session_id))
+        # Evict any other session on this TTY — only one session per terminal.
+        if tty:
+            self._evict_sessions_for_tty(tty, session_id)
+        # Start TTY prompt monitor if not already running
+        if tty and session_id not in self._tty_monitors:
+            task = asyncio.create_task(self._monitor_tty_session(session_id))
+            self._tty_monitors[session_id] = task
         self._working_sessions.add(session_id)
         if is_new:
             asyncio.create_task(self._emit_session_block(session_id))
@@ -984,12 +1174,15 @@ class MCPClient:
                 self._sessions[session_id]['project'] = self._project_label(cwd, session_id)
             self._sessions[session_id]['last_seen'] = time.time()
         self._working_sessions.discard(session_id)
-        # Cancel any tmux pane monitor for this session
+        # Cancel any pane/TTY monitors for this session
         tmux_target = self._sessions.get(session_id, {}).get('tmux_target')
         if tmux_target:
             task = self._tmux_monitors.pop(tmux_target, None)
             if task:
                 task.cancel()
+        tty_task = self._tty_monitors.pop(session_id, None)
+        if tty_task:
+            tty_task.cancel()
         print(f'[claudecode-controller] session stopped: {session_id}', file=sys.stderr)
         asyncio.create_task(self._tm_unregister(session_id))
         asyncio.create_task(self._emit_session_block(session_id, last_message=last_message))
@@ -1037,6 +1230,9 @@ class MCPClient:
         if last_message:
             payload['last_message'] = last_message
         payload['is_working'] = session_id in self._working_sessions
+        payload['is_headless'] = session.get('is_headless', False)
+        if pc := session.get('pending_confirmation'):
+            payload['pending_confirmation'] = pc
         activity = self._current_tools.get(session_id)
         if activity:
             payload['current_tool'] = activity['tool']
@@ -1820,8 +2016,16 @@ end tell
         # Set TTY immediately if the hook provided it — no CWD-based search needed
         if tty and session_id in self._sessions and not self._sessions[session_id].get('tty'):
             self._sessions[session_id]['tty'] = tty
+            self._sessions[session_id]['is_headless'] = self._detect_headless(tty)
             self._save_sessions()
             print(f'[claudecode-controller] session_start tty={tty} pid={claude_pid} sid={session_id[:8]}', file=sys.stderr)
+        # Evict any other session on this TTY — only one session per terminal.
+        if tty:
+            self._evict_sessions_for_tty(tty, session_id)
+        # Start TTY prompt monitor if not already running
+        if tty and session_id not in self._tty_monitors:
+            task = asyncio.create_task(self._monitor_tty_session(session_id))
+            self._tty_monitors[session_id] = task
         if is_new:
             session = self._sessions.get(session_id, {})
             if session.get('tty') or session.get('tmux_target'):
@@ -1951,6 +2155,19 @@ async def _session_heartbeat(client):
                 await client.clear_block(client._session_block_id(session_id))
             except Exception:
                 pass
+        # Deduplicate: one session per TTY — newer (most-recently-seen) wins.
+        seen_ttys: dict = {}
+        for sid, info in sorted(client._sessions.items(),
+                                key=lambda x: -x[1].get('last_seen', 0)):
+            tty = info.get('tty', '')
+            if not tty:
+                continue
+            if tty not in seen_ttys:
+                seen_ttys[tty] = sid
+            else:
+                _log(f'[claudecode] heartbeat dedup: evicting {sid} — TTY {tty} owned by {seen_ttys[tty][:8]}')
+                asyncio.create_task(client.clear_block(client._session_block_id(sid)))
+                del client._sessions[sid]
         # Backfill TTY for sessions that don't have one yet
         backfilled = False
         for session_id, info in list(client._sessions.items()):
