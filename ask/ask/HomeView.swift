@@ -1449,17 +1449,6 @@ struct SettingsSheetView: View {
                     Text("Swipe left to hide a machine from the home screen, or delete its CloudKit records. A running Mac re-registers within 30 seconds.")
                 }
 
-                if let machine = machines.first {
-                    Section {
-                        NavigationLink {
-                            MessagesView(machine: machine)
-                                .environment(cloudKit)
-                        } label: {
-                            Label("Messages", systemImage: "message")
-                        }
-                    }
-                }
-
                 if !queue.isEmpty {
                     Section {
                         Button {

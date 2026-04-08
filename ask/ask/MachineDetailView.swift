@@ -42,15 +42,6 @@ struct MachineDetailView: View {
                 }
             }
 
-            Section {
-                NavigationLink {
-                    MessagesView(machine: currentMachine)
-                        .environment(cloudKit)
-                } label: {
-                    Label("Messages", systemImage: "message")
-                }
-            }
-
             if !jobs.isEmpty {
                 Section("Recent Jobs") {
                     ForEach(jobs) { job in

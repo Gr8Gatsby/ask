@@ -1,12 +1,9 @@
 import Foundation
-import UserNotifications
 import Observation
 
-/// Polls CloudKit for messages sent from the iPhone.
-/// - Chat messages (sessionID present): routed to the owning script via MCPConnection,
-///   then `readAt` is written back so the iPhone can show a "Delivered" status.
-/// - Legacy messages (no sessionID): shown as macOS notifications.
-/// Also sends outbound messages from the Mac to the iPhone.
+/// Polls CloudKit for messages sent from the iPhone into an active session.
+/// Messages with a sessionID are routed to the owning script via MCPConnection,
+/// then `readAt` is written back so the iPhone can show a "Delivered" status.
 @Observable
 final class MessageWatcherService {
     private let cloudKit: CloudKitService
@@ -22,8 +19,7 @@ final class MessageWatcherService {
 
     func start(scriptManager: ScriptManager? = nil) {
         self.scriptManager = scriptManager
-        requestNotificationPermission()
-        // Start slightly in the future so only new messages after launch are shown
+        // Start slightly in the future so only new messages after launch are delivered
         lastChecked = Date()
         pollTask = Task {
             while !Task.isCancelled {
@@ -38,60 +34,31 @@ final class MessageWatcherService {
         pollTask = nil
     }
 
-    /// Sends a message from this Mac to the iPhone.
-    func send(text: String) async throws {
-        try await cloudKit.saveMessage(machineID: machineID, text: text, messageID: UUID().uuidString)
-    }
-
     // MARK: - Private
 
     private func poll() async {
         let since = lastChecked
         lastChecked = Date()
         // Use a 30s lookback buffer to catch messages delayed by CloudKit propagation.
-        // Re-fetching already-delivered records is safe: fetchNewMessages filters by readAt.
         let queryFrom = since.addingTimeInterval(-30)
         guard let messages = try? await cloudKit.fetchNewMessages(machineID: machineID, since: queryFrom),
               !messages.isEmpty
         else { return }
 
         for message in messages {
-            if let sessionID = message.sessionID, let scriptID = message.scriptID {
-                // Route to the script's MCP connection and write readAt for delivery confirmation
-                if let conn = scriptManager?.connection(for: scriptID) {
-                    conn.deliverChatMessage(
-                        sessionID: sessionID,
-                        messageID: message.messageID,
-                        text: message.text
-                    )
-                    print("[MessageWatcher] chat_message → scriptID=\(scriptID) sessionID=\(sessionID)")
-                } else {
-                    print("[MessageWatcher] no connection for scriptID=\(scriptID), queuing notification")
-                    showNotification(text: message.text)
-                }
-                // Write readAt regardless — confirms receipt even if script is offline
-                await cloudKit.markMessageRead(messageID: message.messageID)
+            guard let sessionID = message.sessionID, let scriptID = message.scriptID else { continue }
+            if let conn = scriptManager?.connection(for: scriptID) {
+                conn.deliverChatMessage(
+                    sessionID: sessionID,
+                    messageID: message.messageID,
+                    text: message.text
+                )
+                print("[MessageWatcher] chat_message → scriptID=\(scriptID) sessionID=\(sessionID)")
             } else {
-                // Legacy Messages-screen message — show notification
-                showNotification(text: message.text)
+                print("[MessageWatcher] no connection for scriptID=\(scriptID), dropping message")
             }
+            // Write readAt regardless — confirms receipt even if script is offline
+            await cloudKit.markMessageRead(messageID: message.messageID)
         }
-    }
-
-    private func requestNotificationPermission() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
-    }
-
-    private func showNotification(text: String) {
-        let content = UNMutableNotificationContent()
-        content.title = "Message from iPhone"
-        content.body = text
-        content.sound = .default
-        let request = UNNotificationRequest(
-            identifier: UUID().uuidString,
-            content: content,
-            trigger: nil
-        )
-        UNUserNotificationCenter.current().add(request)
     }
 }

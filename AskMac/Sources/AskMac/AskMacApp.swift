@@ -47,7 +47,6 @@ struct AskMacApp: App {
             MenuBarView()
                 .environment(settings)
                 .environment(heartbeat)
-                .environment(messageWatcher)
                 .environment(scriptManager)
                 .environment(actionHistory)
                 .environment(scriptUpdater)
@@ -62,15 +61,6 @@ struct AskMacApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("Messages", id: "messages") {
-            MacMessagesView()
-                .environment(settings)
-                .environment(cloudKit)
-                .environment(messageWatcher)
-        }
-        .windowResizability(.contentSize)
-        .defaultSize(width: 400, height: 560)
-
         Window("Ask", id: "scripts") {
             MacScriptsView()
                 .environment(settings)
@@ -78,7 +68,6 @@ struct AskMacApp: App {
                 .environment(actionHistory)
                 .environment(heartbeat)
                 .environment(cloudKit)
-                .environment(messageWatcher)
                 .environment(updater)
                 .environment(scriptCatalog)
         }

@@ -11,7 +11,6 @@ enum CKSchema {
         static let event = "AskEvent"
         static let response = "AskResponse"
         static let message = "AskMessage"
-        static let typing = "AskTyping"
         static let session = "AskSession"
         static let rkBlock = "RKBlock"
         static let rkResponse = "RKResponse"
@@ -68,11 +67,6 @@ enum CKSchema {
         static let lastActivityAt = "lastActivityAt"
     }
 
-    enum Typing {
-        static let machineID = "machineID"
-        static let fromDevice = "fromDevice"
-        static let timestamp = "timestamp"
-    }
 
     enum Message {
         static let messageID = "messageID"

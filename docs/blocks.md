@@ -33,6 +33,7 @@ Blocks are the UI primitives that Mac scripts push to the iOS app via CloudKit. 
 
 | Block Type | JSON Value | Requires Response | Purpose |
 |---|---|:---:|---|
+| [Quick Reply](#quick-reply) | `quick_reply` | Yes | Compact inline response — title, description, and buttons on 2-3 lines |
 | [Progress](#progress) | `progress` | No | Progress bar for long-running tasks |
 | [Log](#log) | `log` | No | Scrollable monospace terminal output |
 | [Image](#image) | `image` | No | Display a base64-encoded image |
@@ -63,6 +64,20 @@ expiresAt       Date?
 - Type enum + payload structs: [`ask/ask/RemoteKitModels.swift`](../ask/ask/RemoteKitModels.swift)
 - CloudKit field names (iOS): [`ask/ask/AskModels.swift`](../ask/ask/AskModels.swift)
 - CloudKit field names (Mac): [`AskMac/Sources/AskMac/Models/CloudKitSchema.swift`](../AskMac/Sources/AskMac/Models/CloudKitSchema.swift)
+
+### Urgency
+
+Blocks that appear in the home screen "Needs Response" queue support an optional `urgency` field in their payload. This controls sort order and badge style in the queue.
+
+| Value | Badge | Sort |
+|---|---|---|
+| `urgent` | `[!]` red | Top |
+| `warning` | `[~]` yellow | Middle |
+| `info` | `[i]` gray | Bottom |
+
+If omitted, `requiresResponse: true` blocks default to `warning`; `requiresResponse: false` blocks are not shown in the queue.
+
+Applicable to: `confirmation`, `prompt`, `chat_prompt`, `quick_reply`, `alert` (when `action_required` is set).
 
 ---
 
@@ -593,6 +608,42 @@ An entry displayed in the iOS Feed tab. Feed items are aggregated chronologicall
 
 ---
 
+## Quick Reply
+
+A compact response block designed for the home screen "Needs Response" queue. Renders the title, a single line of description, and action buttons together — no nested containers or stacked sections. Use this instead of `confirmation` when the decision is simple and context fits in one sentence.
+
+```
++----------------------------------+
+| [!] Delete 47 migration files?   |
+| This cannot be undone.           |
+| [Yes]  [No]  [Custom..]          |
++----------------------------------+
+```
+
+With only 2 options (no custom), buttons stay inline:
+
+```
++----------------------------------+
+| [~] Deploy to staging?           |
+| Branch: feature/auth             |
+| [Deploy]              [Cancel]   |
++----------------------------------+
+```
+
+**Payload:**
+
+| Field | Type | Required | Description |
+|---|---|:---:|---|
+| `title` | `String` | Yes | The question or action required |
+| `description` | `String?` | No | One-line context (kept short — truncated if > 60 chars) |
+| `options` | `[String]` | Yes | Button labels (max 3; if > 2, renders as a compact vertical stack) |
+| `allow_custom` | `Bool?` | No | Adds a "Custom.." button that opens a single-line text input |
+| `urgency` | `String?` | No | `urgent` `warning` `info` — controls badge and sort order (default: `warning`) |
+
+Response: the tapped option label as a plain string, or the custom text if `allow_custom` was used.
+
+---
+
 ## Progress
 
 Displays a progress bar with a label and optional step indicator. Used for long-running tasks where the script emits incremental updates.
@@ -744,6 +795,8 @@ Response: JSON object — `{"run_tests": true, "verbose": false}`.
 
 | Version | Change |
 |---|---|
+| Added `quick_reply` | Compact inline response block for home screen queue; flat 2-3 line layout with optional free-text fallback |
+| Added `urgency` field | Optional field on `confirmation`, `prompt`, `chat_prompt`, `quick_reply`, `alert` — controls queue sort order and badge style |
 | Added `agent_session` | Interactive session card for Claude Code / Codex controllers |
 | Added `start_session` | Repo picker to launch new sessions from iOS |
 | Added `feed_item` | Feed tab entries |

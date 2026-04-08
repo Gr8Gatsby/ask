@@ -14,7 +14,6 @@ enum CKSchema {
         static let event = "AskEvent"
         static let response = "AskResponse"
         static let message = "AskMessage"
-        static let typing = "AskTyping"
         static let session = "AskSession"
         static let rkBlock = "RKBlock"
         static let rkResponse = "RKResponse"
@@ -70,11 +69,6 @@ enum CKSchema {
         static let lastActivityAt = "lastActivityAt"
     }
 
-    enum Typing {
-        static let machineID = "machineID"
-        static let fromDevice = "fromDevice"
-        static let timestamp = "timestamp"
-    }
 
     enum Message {
         static let messageID = "messageID"
@@ -429,40 +423,6 @@ struct AskSession: Identifiable {
         self.status = status
         self.startedAt = other.startedAt
         self.lastActivityAt = other.lastActivityAt
-    }
-}
-
-// MARK: - Message
-
-struct AskMessage: Identifiable {
-    let id: String       // messageID
-    let machineID: String
-    let text: String
-    let fromDevice: String   // "mac" or "iphone"
-    let timestamp: Date
-    let sessionID: String?
-    let scriptID: String?
-    let readAt: Date?
-
-    var fromIPhone: Bool { fromDevice == "iphone" }
-
-    init?(record: CKRecord) {
-        guard
-            let messageID = record[CKSchema.Message.messageID] as? String,
-            let machineID = record[CKSchema.Message.machineID] as? String,
-            let text = record[CKSchema.Message.text] as? String,
-            let fromDevice = record[CKSchema.Message.fromDevice] as? String,
-            let timestamp = record[CKSchema.Message.timestamp] as? Date
-        else { return nil }
-
-        self.id = messageID
-        self.machineID = machineID
-        self.text = text
-        self.fromDevice = fromDevice
-        self.timestamp = timestamp
-        self.sessionID = record[CKSchema.Message.sessionID] as? String
-        self.scriptID = record[CKSchema.Message.scriptID] as? String
-        self.readAt = record[CKSchema.Message.readAt] as? Date
     }
 }
 

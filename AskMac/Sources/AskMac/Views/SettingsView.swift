@@ -72,14 +72,13 @@ private extension Color {
 // MARK: - Top-level tab
 
 private enum MacTab: String, CaseIterable {
-    case scripts, feed, blocks, messages, machine
+    case scripts, feed, blocks, machine
 
     var icon: String {
         switch self {
         case .scripts:  "terminal"
         case .feed:     "scroll"
         case .blocks:   "rectangle.stack"
-        case .messages: "bubble.left.and.bubble.right"
         case .machine:  "desktopcomputer"
         }
     }
@@ -89,7 +88,6 @@ private enum MacTab: String, CaseIterable {
         case .scripts:  "Scripts"
         case .feed:     "Feed"
         case .blocks:   "Blocks"
-        case .messages: "Messages"
         case .machine:  "Machine"
         }
     }
@@ -102,7 +100,6 @@ struct MacScriptsView: View {
     @Environment(ActionHistoryService.self) private var actionHistory
     @Environment(AppSettings.self) private var settings
     @Environment(CloudKitService.self) private var cloudKit
-    @Environment(MessageWatcherService.self) private var messageWatcher
 
     @State private var activeTab: MacTab = .scripts
     @State private var builderBlocks: [BuilderBlock] = []
@@ -119,11 +116,6 @@ struct MacScriptsView: View {
                     .environment(actionHistory)
             case .blocks:
                 BlocksBuilderView(blocks: $builderBlocks, showJSON: $builderShowJSON)
-            case .messages:
-                MacMessagesView()
-                    .environment(settings)
-                    .environment(cloudKit)
-                    .environment(messageWatcher)
             case .machine:
                 MachineDetailView()
                     .environment(settings)
