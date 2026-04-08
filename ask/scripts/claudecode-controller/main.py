@@ -1011,12 +1011,9 @@ class MCPClient:
         # Fall back to stored last_message so heartbeats don't erase it
         if not last_message:
             last_message = self._sessions.get(session_id, {}).get('last_message', '')
-        # pid-* sessions are background process discoveries; only surface ones the
-        # user explicitly launched via Start Session (cwd is in _recently_launched_cwds).
-        if session_id.startswith('pid-'):
-            cwd = self._sessions.get(session_id, {}).get('cwd', '')
-            if cwd not in self._recently_launched_cwds:
-                return
+        # pid-* sessions are background process discoveries — always surface them on iOS.
+        # CWD deduplication in _discover_active_processes already prevents duplicates
+        # when an Agent Session (hook-registered) tracks the same directory.
         if not self._initialized:
             print(f'[claudecode-controller] skipping session block — not yet initialized', file=sys.stderr)
             return
