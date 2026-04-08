@@ -3,6 +3,47 @@ import UIKit
 import CloudKit
 import SwiftData
 
+// MARK: - Machine tombstone store
+
+/// Persists deletion timestamps for machines removed from the iOS app.
+/// A machine is suppressed until it produces a heartbeat newer than its tombstone.
+enum MachineTombstoneStore {
+    private static let key = "deletedMachineTimestamps"
+    private static let formatter = ISO8601DateFormatter()
+
+    static func record(machineID: String) {
+        var store = load()
+        store[machineID] = formatter.string(from: Date())
+        UserDefaults.standard.set(store, forKey: key)
+    }
+
+    static func clear(machineID: String) {
+        var store = load()
+        store.removeValue(forKey: machineID)
+        UserDefaults.standard.set(store, forKey: key)
+    }
+
+    /// Filters machines through tombstone logic. Machines whose heartbeat is newer than their
+    /// tombstone are surfaced and their tombstone is cleared. Others remain suppressed.
+    static func apply(to machines: [AskMachine]) -> [AskMachine] {
+        let store = load()
+        return machines.filter { machine in
+            guard let dateStr = store[machine.id],
+                  let tombstoneDate = formatter.date(from: dateStr)
+            else { return true }
+            if machine.lastHeartbeat > tombstoneDate {
+                clear(machineID: machine.id)
+                return true
+            }
+            return false
+        }
+    }
+
+    private static func load() -> [String: String] {
+        UserDefaults.standard.dictionary(forKey: key) as? [String: String] ?? [:]
+    }
+}
+
 // MARK: - Navigation value for session chat
 
 /// Carries enough context to render SessionChatView even after the live block disappears.
@@ -609,7 +650,7 @@ struct HomeView: View {
     private func load() async {
         do {
             let fresh = try await cloudKit.fetchMachines()
-            machines = fresh
+            machines = MachineTombstoneStore.apply(to: fresh)
             fetchFailed = false
         } catch {
             print("[HomeView] Failed to fetch machines: \(error)")
@@ -1707,6 +1748,7 @@ struct SettingsSheetView: View {
     private func confirmDelete() async {
         guard let machine = machineToDelete else { return }
         isDeleting = true
+        MachineTombstoneStore.record(machineID: machine.id)
         await cloudKit.deleteMachine(machineID: machine.id)
         machines.removeAll { $0.id == machine.id }
         // Also remove from hidden list if present

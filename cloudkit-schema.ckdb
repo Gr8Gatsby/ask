@@ -1,23 +1,5 @@
 DEFINE SCHEMA
 
-    RECORD TYPE Machine (
-        "___createTime" TIMESTAMP,
-        "___createdBy"  REFERENCE,
-        "___etag"       STRING,
-        "___modTime"    TIMESTAMP,
-        "___modifiedBy" REFERENCE,
-        "___recordID"   REFERENCE QUERYABLE,
-        activeJobID     STRING,
-        lastHeartbeat   TIMESTAMP QUERYABLE SORTABLE,
-        machineID       STRING QUERYABLE SEARCHABLE SORTABLE,
-        name            STRING QUERYABLE SEARCHABLE SORTABLE,
-        platform        STRING QUERYABLE SEARCHABLE SORTABLE,
-        status          STRING QUERYABLE SEARCHABLE SORTABLE,
-        GRANT WRITE TO "_creator",
-        GRANT CREATE TO "_icloud",
-        GRANT READ TO "_world"
-    );
-
     RECORD TYPE Agent (
         "___createTime"      TIMESTAMP,
         "___createdBy"       REFERENCE,
@@ -36,6 +18,127 @@ DEFINE SCHEMA
         name                 STRING QUERYABLE SORTABLE,
         scriptName           STRING,
         timeout              INT64,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE AskDevice (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE,
+        deviceID        STRING QUERYABLE SEARCHABLE SORTABLE,
+        deviceName      STRING QUERYABLE SEARCHABLE SORTABLE,
+        lastSeen        TIMESTAMP QUERYABLE SORTABLE,
+        machineID       STRING QUERYABLE SEARCHABLE SORTABLE,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE AskEvent (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE QUERYABLE,
+        body            STRING,
+        eventID         STRING QUERYABLE,
+        machineID       STRING QUERYABLE,
+        options         LIST<STRING>,
+        sessionID       STRING QUERYABLE,
+        source          STRING,
+        timestamp       TIMESTAMP QUERYABLE SORTABLE,
+        title           STRING,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE AskMessage (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE QUERYABLE,
+        fromDevice      STRING QUERYABLE,
+        machineID       STRING QUERYABLE,
+        messageID       STRING QUERYABLE,
+        readAt          TIMESTAMP QUERYABLE SORTABLE,
+        scriptID        STRING QUERYABLE SEARCHABLE SORTABLE,
+        sessionID       STRING QUERYABLE SEARCHABLE SORTABLE,
+        text            STRING,
+        timestamp       TIMESTAMP QUERYABLE SORTABLE,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE AskResponse (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE QUERYABLE,
+        choice          STRING,
+        eventID         STRING QUERYABLE,
+        machineID       STRING QUERYABLE,
+        timestamp       TIMESTAMP,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE AskSession (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE QUERYABLE,
+        lastActivityAt  TIMESTAMP QUERYABLE SORTABLE,
+        machineID       STRING QUERYABLE,
+        sessionID       STRING QUERYABLE,
+        startedAt       TIMESTAMP,
+        status          STRING QUERYABLE,
+        title           STRING,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE AskTyping (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE QUERYABLE,
+        fromDevice      STRING QUERYABLE,
+        machineID       STRING QUERYABLE,
+        timestamp       TIMESTAMP QUERYABLE SORTABLE,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE FeedSchedule (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE,
+        machineID       STRING QUERYABLE SEARCHABLE SORTABLE,
+        schedule        STRING QUERYABLE SEARCHABLE SORTABLE,
+        scriptID        STRING QUERYABLE SEARCHABLE SORTABLE,
+        updatedAt       TIMESTAMP QUERYABLE SORTABLE,
         GRANT WRITE TO "_creator",
         GRANT CREATE TO "_icloud",
         GRANT READ TO "_world"
@@ -62,6 +165,24 @@ DEFINE SCHEMA
         GRANT READ TO "_world"
     );
 
+    RECORD TYPE Machine (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE QUERYABLE,
+        activeJobID     STRING,
+        lastHeartbeat   TIMESTAMP QUERYABLE SORTABLE,
+        machineID       STRING QUERYABLE SEARCHABLE SORTABLE,
+        name            STRING QUERYABLE SEARCHABLE SORTABLE,
+        platform        STRING QUERYABLE SEARCHABLE SORTABLE,
+        status          STRING QUERYABLE SEARCHABLE SORTABLE,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
     RECORD TYPE OutputChunk (
         "___createTime" TIMESTAMP,
         "___createdBy"  REFERENCE,
@@ -79,106 +200,27 @@ DEFINE SCHEMA
         GRANT READ TO "_world"
     );
 
-    RECORD TYPE AskEvent (
-        "___createTime" TIMESTAMP,
-        "___createdBy"  REFERENCE,
-        "___etag"       STRING,
-        "___modTime"    TIMESTAMP,
-        "___modifiedBy" REFERENCE,
-        "___recordID"   REFERENCE QUERYABLE,
-        body            STRING,
-        eventID         STRING QUERYABLE,
-        machineID       STRING QUERYABLE,
-        options         LIST<STRING>,
-        sessionID       STRING QUERYABLE,
-        source          STRING,
-        timestamp       TIMESTAMP QUERYABLE SORTABLE,
-        title           STRING,
-        GRANT WRITE TO "_creator",
-        GRANT CREATE TO "_icloud",
-        GRANT READ TO "_world"
-    );
-
-    RECORD TYPE AskSession (
+    RECORD TYPE RKBlock (
         "___createTime"  TIMESTAMP,
         "___createdBy"   REFERENCE,
         "___etag"        STRING,
         "___modTime"     TIMESTAMP,
         "___modifiedBy"  REFERENCE,
         "___recordID"    REFERENCE QUERYABLE,
-        lastActivityAt   TIMESTAMP QUERYABLE SORTABLE,
+        blockID          STRING QUERYABLE,
+        blockType        STRING QUERYABLE,
+        createdAt        TIMESTAMP QUERYABLE SORTABLE,
+        expiresAt        TIMESTAMP QUERYABLE SORTABLE,
         machineID        STRING QUERYABLE,
-        sessionID        STRING QUERYABLE,
-        startedAt        TIMESTAMP,
-        status           STRING QUERYABLE,
-        title            STRING,
-        GRANT WRITE TO "_creator",
-        GRANT CREATE TO "_icloud",
-        GRANT READ TO "_world"
-    );
-
-    RECORD TYPE AskResponse (
-        "___createTime" TIMESTAMP,
-        "___createdBy"  REFERENCE,
-        "___etag"       STRING,
-        "___modTime"    TIMESTAMP,
-        "___modifiedBy" REFERENCE,
-        "___recordID"   REFERENCE QUERYABLE,
-        choice          STRING,
-        eventID         STRING QUERYABLE,
-        machineID       STRING QUERYABLE,
-        timestamp       TIMESTAMP,
-        GRANT WRITE TO "_creator",
-        GRANT CREATE TO "_icloud",
-        GRANT READ TO "_world"
-    );
-
-    RECORD TYPE AskMessage (
-        "___createTime" TIMESTAMP,
-        "___createdBy"  REFERENCE,
-        "___etag"       STRING,
-        "___modTime"    TIMESTAMP,
-        "___modifiedBy" REFERENCE,
-        "___recordID"   REFERENCE QUERYABLE,
-        fromDevice      STRING QUERYABLE,
-        machineID       STRING QUERYABLE,
-        messageID       STRING QUERYABLE,
-        text            STRING,
-        timestamp       TIMESTAMP QUERYABLE SORTABLE,
-        GRANT WRITE TO "_creator",
-        GRANT CREATE TO "_icloud",
-        GRANT READ TO "_world"
-    );
-
-    RECORD TYPE AskTyping (
-        "___createTime" TIMESTAMP,
-        "___createdBy"  REFERENCE,
-        "___etag"       STRING,
-        "___modTime"    TIMESTAMP,
-        "___modifiedBy" REFERENCE,
-        "___recordID"   REFERENCE QUERYABLE,
-        fromDevice      STRING QUERYABLE,
-        machineID       STRING QUERYABLE,
-        timestamp       TIMESTAMP QUERYABLE SORTABLE,
-        GRANT WRITE TO "_creator",
-        GRANT CREATE TO "_icloud",
-        GRANT READ TO "_world"
-    );
-
-    RECORD TYPE RKBlock (
-        "___createTime" TIMESTAMP,
-        "___createdBy"  REFERENCE,
-        "___etag"       STRING,
-        "___modTime"    TIMESTAMP,
-        "___modifiedBy" REFERENCE,
-        "___recordID"   REFERENCE QUERYABLE,
-        blockID         STRING QUERYABLE,
-        machineID       STRING QUERYABLE,
-        scriptID        STRING QUERYABLE,
-        blockType       STRING QUERYABLE,
-        payload         STRING,
-        createdAt       TIMESTAMP QUERYABLE SORTABLE,
-        expiresAt       TIMESTAMP,
+        payload          STRING,
+        requiresResponse INT64 QUERYABLE SORTABLE,
+        scriptID         STRING QUERYABLE,
+        scriptIcon       STRING QUERYABLE SEARCHABLE SORTABLE,
+        scriptIconData   STRING QUERYABLE SEARCHABLE SORTABLE,
+        scriptIconSVG    STRING QUERYABLE SEARCHABLE SORTABLE,
+        scriptName       STRING QUERYABLE SEARCHABLE SORTABLE,
+        scriptType       STRING QUERYABLE SEARCHABLE SORTABLE,
+        showsInInbox     INT64 QUERYABLE SORTABLE,
         GRANT WRITE TO "_creator",
         GRANT CREATE TO "_icloud",
         GRANT READ TO "_world"
@@ -194,8 +236,8 @@ DEFINE SCHEMA
         blockID         STRING QUERYABLE,
         machineID       STRING QUERYABLE,
         scriptID        STRING QUERYABLE,
-        value           STRING,
         timestamp       TIMESTAMP QUERYABLE SORTABLE,
+        value           STRING,
         GRANT WRITE TO "_creator",
         GRANT CREATE TO "_icloud",
         GRANT READ TO "_world"

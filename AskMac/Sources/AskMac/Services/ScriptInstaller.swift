@@ -1,4 +1,6 @@
+#if canImport(AskMacCore)
 import AskMacCore
+#endif
 import Foundation
 import SwiftUI
 
