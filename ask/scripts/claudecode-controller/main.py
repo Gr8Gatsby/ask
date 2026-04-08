@@ -147,11 +147,7 @@ class MCPClient:
         # then scan for live claude processes to register fresh pid-* entries.
         self._load_sessions()
         await self._discover_active_processes()
-        dead_pid = self._prune_dead_pid_sessions()
-        dead_real = await self._prune_dead_real_sessions()
-        for session_id in dead_pid + dead_real:
-            asyncio.create_task(self.clear_block(self._session_block_id(session_id)))
-        # Backfill TTYs immediately at startup (don't wait for heartbeat)
+        # Backfill TTYs before re-registering so sessions have routing info.
         backfilled = False
         for session_id, info in list(self._sessions.items()):
             if not info.get('tty') and info.get('cwd'):
@@ -162,12 +158,16 @@ class MCPClient:
                     print(f'[claudecode-controller] startup TTY backfill: {session_id} -> {tty}', file=sys.stderr)
         if backfilled:
             self._save_sessions()
-        # Re-register ALL sessions that have routing info with terminal-manager.
-        # Sessions loaded from disk already have a stored TTY but terminal-manager
-        # loses its registry on restart, so we must re-register unconditionally.
+        # Re-register ALL sessions with terminal-manager BEFORE pruning.
+        # TM loses its registry on restart; if we prune first, real sessions that
+        # haven't re-registered yet look dead and get incorrectly evicted.
         for session_id, info in list(self._sessions.items()):
             if info.get('tty') or info.get('tmux_target'):
-                asyncio.create_task(self._tm_register(session_id))
+                await self._tm_register(session_id)
+        dead_pid = self._prune_dead_pid_sessions()
+        dead_real = await self._prune_dead_real_sessions()
+        for session_id in dead_pid + dead_real:
+            asyncio.create_task(self.clear_block(self._session_block_id(session_id)))
         self._write_status()
         # Await session block emits so that _update_tile() (called after initialize())
         # sees the correct last_emitted counts and doesn't show "No sessions".
