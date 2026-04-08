@@ -147,9 +147,9 @@ class MCPClient:
         # then scan for live claude processes to register fresh pid-* entries.
         self._load_sessions()
         await self._discover_active_processes()
-        self._prune_dead_pid_sessions()
+        dead_pid = self._prune_dead_pid_sessions()
         dead_real = await self._prune_dead_real_sessions()
-        for session_id in dead_real:
+        for session_id in dead_pid + dead_real:
             asyncio.create_task(self.clear_block(self._session_block_id(session_id)))
         # Backfill TTYs immediately at startup (don't wait for heartbeat)
         backfilled = False
@@ -806,9 +806,9 @@ class MCPClient:
                 pass
             if not cwd:
                 continue
-            # Skip if a hook-confirmed session already owns this exact PID.
-            # Multiple claude processes in the same CWD are allowed (shown as separate sessions).
-            if any(info.get('claude_pid') == pid
+            # Skip if an existing session already owns this PID or TTY.
+            # TTY check catches hook sessions (which don't store claude_pid) on the same terminal.
+            if any(info.get('claude_pid') == pid or info.get('tty') == tty
                    for info in self._sessions.values()):
                 continue
             if self._register_session(synthetic_id, cwd, claude_pid=pid):
