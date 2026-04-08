@@ -363,12 +363,17 @@ func namedColor(_ name: String?) -> Color {
 extension RKBlock {
     var feedHeadline: String {
         switch blockType {
-        case .feedItem: return feedItemPayload?.headline ?? scriptName ?? scriptID
-        case .status:   return statusPayload?.label ?? scriptName ?? scriptID
-        case .detail:   return detailPayload?.title ?? scriptName ?? scriptID
-        case .infoCard: return infoCardPayload?.title ?? scriptName ?? scriptID
-        case .iconCard: return iconCardPayload?.title ?? scriptName ?? scriptID
-        default:        return scriptName ?? scriptID
+        case .feedItem:    return feedItemPayload?.headline ?? scriptName ?? scriptID
+        case .status:      return statusPayload?.label ?? scriptName ?? scriptID
+        case .detail:      return detailPayload?.title ?? scriptName ?? scriptID
+        case .infoCard:    return infoCardPayload?.title ?? scriptName ?? scriptID
+        case .iconCard:    return iconCardPayload?.title ?? scriptName ?? scriptID
+        case .confirmation: return confirmationPayload?.title ?? scriptName ?? scriptID
+        case .prompt:      return promptPayload?.title ?? scriptName ?? scriptID
+        case .chatPrompt:  return chatPromptPayload?.title ?? scriptName ?? scriptID
+        case .quickReply:  return quickReplyPayload?.title ?? scriptName ?? scriptID
+        case .alert:       return alertPayload?.title ?? scriptName ?? scriptID
+        default:           return scriptName ?? scriptID
         }
     }
 

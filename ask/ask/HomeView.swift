@@ -161,6 +161,11 @@ struct HomeView: View {
     @State private var wasOffline: Bool = false
     @State private var selectedTab: HomeTab = .home
 
+    @Environment(\.modelContext) private var modelContext
+    /// Machine picker state — shown when a multi-machine quick_reply group has > 5 machines.
+    @State private var machinePickerTargets: [RKBlock]? = nil
+    @State private var machinePickerValue: String? = nil
+
     private var offlineQueue: OfflineQueue { .shared }
 
     enum HomeTab: Hashable { case home, feed }
@@ -201,16 +206,36 @@ struct HomeView: View {
 
     private var scriptGroups: [ScriptGroup] {
         let grouped = Dictionary(grouping: blocks, by: { $0.scriptID })
-        let sorted = grouped.keys.sorted { a, b in
+        return grouped.keys.sorted { a, b in
             if a == "claudecode-controller" { return true }
             if b == "claudecode-controller" { return false }
             return a < b
-        }
-        return sorted.map { ScriptGroup(scriptID: $0, blocks: grouped[$0] ?? []) }
+        }.map { ScriptGroup(scriptID: $0, blocks: grouped[$0] ?? []) }
     }
 
-    private var actionGroups: [ScriptGroup] {
-        scriptGroups.filter { $0.isActionRequired }
+    /// Groups that have at least one block requiring a response.
+    /// Sorted by dominant urgency (urgent first), then oldest actionable block first within the same tier.
+    private var needsResponseGroups: [ScriptGroup] {
+        scriptGroups
+            .filter { $0.blocks.contains(where: { $0.requiresResponse }) }
+            .sorted { a, b in
+                let aRank = a.dominantUrgency?.sortRank ?? 3
+                let bRank = b.dominantUrgency?.sortRank ?? 3
+                if aRank != bRank { return aRank < bRank }
+                let aDate = a.blocks.filter(\.requiresResponse).map(\.createdAt).min() ?? .distantFuture
+                let bDate = b.blocks.filter(\.requiresResponse).map(\.createdAt).min() ?? .distantFuture
+                return aDate < bDate
+            }
+    }
+
+    /// Groups with no blocks requiring a response, sorted most-recently-active first.
+    private var recentGroups: [ScriptGroup] {
+        scriptGroups
+            .filter { !$0.blocks.contains(where: { $0.requiresResponse }) }
+            .sorted {
+                ($0.blocks.map(\.createdAt).max() ?? .distantPast) >
+                ($1.blocks.map(\.createdAt).max() ?? .distantPast)
+            }
     }
 
     var body: some View {
@@ -326,6 +351,23 @@ struct HomeView: View {
             SettingsSheetView()
                 .environment(cloudKit)
         }
+        .sheet(
+            isPresented: Binding(
+                get: { machinePickerTargets != nil },
+                set: { if !$0 { machinePickerTargets = nil; machinePickerValue = nil } }
+            )
+        ) {
+            if let targets = machinePickerTargets, let value = machinePickerValue {
+                MachinePickerSheet(targets: targets, machines: machines, value: value) { selected in
+                    let capturedValue = value
+                    machinePickerTargets = nil
+                    machinePickerValue = nil
+                    for block in selected {
+                        Task { await respondToBlock(block, value: capturedValue) }
+                    }
+                }
+            }
+        }
         .task {
             await cloudKit.checkAccountStatus()
             await load()
@@ -359,8 +401,7 @@ struct HomeView: View {
     private var content: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                // Script tiles — single column, full width
-                if scriptGroups.isEmpty {
+                if needsResponseGroups.isEmpty && recentGroups.isEmpty {
                     ContentUnavailableView {
                         Label("No Active Scripts", systemImage: "terminal")
                     } description: {
@@ -368,21 +409,60 @@ struct HomeView: View {
                     }
                     .padding(.top, 40)
                 } else {
-                    LazyVStack(spacing: 8) {
-                        ForEach(scriptGroups) { group in
-                            ScriptTileView(group: group) {
-                                selectedScriptID = group.scriptID
+                    // Needs Response section
+                    if !needsResponseGroups.isEmpty {
+                        queueSectionHeader("Needs Response", count: needsResponseGroups.count)
+                        LazyVStack(spacing: 8) {
+                            ForEach(needsResponseGroups) { group in
+                                ActionQueueCardView(
+                                    group: group,
+                                    onTap: { selectedScriptID = group.scriptID },
+                                    onRespond: { value in await respondToGroup(group, value: value) }
+                                )
                             }
                         }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .padding(.bottom, 20)
+
+                    // Recent section
+                    if !recentGroups.isEmpty {
+                        queueSectionHeader("Recent", count: nil)
+                        LazyVStack(spacing: 8) {
+                            ForEach(recentGroups) { group in
+                                ScriptTileView(group: group) { selectedScriptID = group.scriptID }
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 20)
+                    }
                 }
             }
-            .animation(.easeOut(duration: 0.25), value: scriptGroups.map(\.scriptID))
+            .animation(.easeOut(duration: 0.25), value: needsResponseGroups.map(\.scriptID))
+            .animation(.easeOut(duration: 0.25), value: recentGroups.map(\.scriptID))
         }
         .refreshable { await load() }
+    }
+
+    private func queueSectionHeader(_ title: String, count: Int?) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+            if let count, count > 0 {
+                Text("\(count)")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.orange)
+                    .clipShape(Capsule())
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 4)
     }
 
     // MARK: - Toolbar (nav bar title only)
@@ -588,12 +668,11 @@ struct HomeView: View {
     private func notifyNewActionGroups() {
         let allCurrentBlockIDs = Set(blocks.map { $0.id })
 
-        for group in actionGroups {
-            // Prefer explicit confirmation/prompt blocks; fall back to the tile block
-            // itself when the script marks action_required on the tile (e.g. Claude Code).
+        for group in needsResponseGroups {
+            // Prefer explicit confirmation/prompt/quickReply blocks; fall back to the tile block.
             let triggerBlocks: [RKBlock]
             let explicit = group.blocks.filter {
-                $0.blockType == .confirmation || $0.blockType == .prompt
+                $0.blockType == .confirmation || $0.blockType == .prompt || $0.blockType == .quickReply
             }
             if !explicit.isEmpty {
                 triggerBlocks = explicit
@@ -699,11 +778,12 @@ struct HomeView: View {
 
         let shouldRemove: Bool
         switch block.blockType {
-        case .confirmation, .prompt, .picker, .detail: shouldRemove = true
+        case .confirmation, .prompt, .picker, .detail, .quickReply: shouldRemove = true
         default: shouldRemove = false
         }
 
         if shouldRemove {
+            saveRespondedBlockToHistory(block)
             withAnimation(.easeOut(duration: 0.22)) {
                 blocks.removeAll { $0.id == block.id }
             }
@@ -737,6 +817,40 @@ struct HomeView: View {
                 withAnimation(.default) { responseErrorMessage = nil }
             }
         }
+    }
+    /// Responds to a quick_reply block across all machines in a group.
+    /// If there are > 5 target machines, shows a picker instead of responding to all.
+    private func respondToGroup(_ group: ScriptGroup, value: String) async {
+        // Deduplicate: one quick_reply block per machine (most recent).
+        let byMachine = Dictionary(grouping: group.blocks.filter { $0.blockType == .quickReply },
+                                   by: { $0.machineID })
+        let targets = byMachine.values.compactMap { $0.max(by: { $0.createdAt < $1.createdAt }) }
+
+        if targets.count > 5 {
+            machinePickerTargets = targets
+            machinePickerValue = value
+            return
+        }
+        for block in targets {
+            await respondToBlock(block, value: value)
+        }
+    }
+
+    private func saveRespondedBlockToHistory(_ block: RKBlock) {
+        let entry = FeedHistoryEntry(
+            blockID:       block.id,
+            scriptID:      block.scriptID,
+            scriptName:    block.scriptName,
+            scriptIcon:    block.scriptIcon,
+            scriptIconData: block.scriptIconData,
+            blockTypeRaw:  block.blockType.rawValue,
+            headline:      block.feedHeadline,
+            statusColor:   block.feedStatusColor,
+            payloadJSON:   block.payloadJSON,
+            createdAt:     block.createdAt
+        )
+        modelContext.insert(entry)
+        try? modelContext.save()
     }
 }
 
@@ -807,6 +921,16 @@ private struct ScriptTileView: View {
 
                 Spacer()
 
+                if group.machineCount > 1 {
+                    Text("\(group.machineCount)")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Color(.tertiarySystemFill))
+                        .clipShape(Capsule())
+                }
+
                 if group.isActionRequired {
                     Image(systemName: "exclamationmark.circle.fill")
                         .foregroundStyle(effectiveHighlight ?? .orange)
@@ -869,6 +993,198 @@ private struct CountdownTileLine: View {
             return "\(payload.label) in \(hours)h\(mins > 0 ? " \(mins)m" : "")"
         } else {
             return "\(payload.label) in \(mins)m"
+        }
+    }
+}
+
+// MARK: - Action queue card
+
+/// Card for the "Needs Response" section. Shows urgency badge, machine count, and—for
+/// quick_reply groups—inline response buttons. All other group types tap to navigate.
+private struct ActionQueueCardView: View {
+    let group: ScriptGroup
+    let onTap: () -> Void
+    let onRespond: (String) async -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage("useBrandColors") private var useBrandColors: Bool = true
+
+    /// The quick_reply block to render inline, if any (highest urgency, then most recent).
+    private var quickReplyBlock: RKBlock? {
+        group.blocks
+            .filter { $0.blockType == .quickReply }
+            .max { a, b in
+                let aRank = a.effectiveUrgency?.sortRank ?? 3
+                let bRank = b.effectiveUrgency?.sortRank ?? 3
+                if aRank != bRank { return aRank > bRank }   // lower rank = higher priority
+                return a.createdAt < b.createdAt
+            }
+    }
+
+    private var effectiveBackground: Color {
+        useBrandColors ? (group.brandBackground ?? Color(.secondarySystemGroupedBackground))
+                       : Color(.secondarySystemGroupedBackground)
+    }
+
+    private var effectiveHighlight: Color? {
+        useBrandColors ? group.brandHighlight : nil
+    }
+
+    private var effectiveColorScheme: ColorScheme {
+        useBrandColors ? (group.brandColorScheme ?? colorScheme) : colorScheme
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Script header row — always tappable
+            Button(action: onTap) {
+                HStack(spacing: 12) {
+                    ScriptIconView(
+                        svgString: group.iconSVG,
+                        iconData: group.iconData,
+                        sfSymbol: group.icon ?? "terminal.fill"
+                    )
+                    .frame(width: 30, height: 30)
+                    .colorInvert(useBrandColors && group.brandColorScheme == .dark)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(group.name)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+
+                        if let label = group.tileLabel {
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(effectiveHighlight ?? blockStatusColor(group.tileStatusColor))
+                                    .frame(width: 7, height: 7)
+                                Text(label)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+
+                    Spacer()
+
+                    // Urgency badge
+                    if let urgency = group.dominantUrgency {
+                        UrgencyBadgeView(urgency: urgency)
+                    }
+
+                    // Machine count badge
+                    if group.machineCount > 1 {
+                        Text("\(group.machineCount) machines")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Color(.tertiarySystemFill))
+                            .clipShape(Capsule())
+                    }
+
+                    // Chevron for non-quick_reply groups
+                    if quickReplyBlock == nil {
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+
+            // Inline quick_reply content
+            if let block = quickReplyBlock, let payload = block.quickReplyPayload {
+                Divider()
+                    .padding(.horizontal, 14)
+
+                QuickReplyBlockView(payload: payload, onRespond: onRespond)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
+            }
+        }
+        .background(effectiveBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(
+                    (effectiveHighlight ?? urgencyBorderColor).opacity(0.5),
+                    lineWidth: 1
+                )
+        )
+        .environment(\.colorScheme, effectiveColorScheme)
+    }
+
+    private var urgencyBorderColor: Color {
+        switch group.dominantUrgency {
+        case .urgent:  return .red
+        case .warning: return .orange
+        case .info:    return Color(.separator)
+        case nil:      return .orange
+        }
+    }
+}
+
+// MARK: - Machine picker sheet
+
+private struct MachinePickerSheet: View {
+    let targets: [RKBlock]
+    let machines: [AskMachine]
+    let value: String
+    let onConfirm: ([RKBlock]) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedMachineIDs: Set<String> = []
+
+    private func machineName(for machineID: String) -> String {
+        machines.first { $0.id == machineID }?.name ?? machineID
+    }
+
+    var body: some View {
+        NavigationStack {
+            List(targets, id: \.machineID) { block in
+                Button {
+                    if selectedMachineIDs.contains(block.machineID) {
+                        selectedMachineIDs.remove(block.machineID)
+                    } else {
+                        selectedMachineIDs.insert(block.machineID)
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: selectedMachineIDs.contains(block.machineID)
+                              ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(selectedMachineIDs.contains(block.machineID)
+                                             ? Color.accentColor : Color.secondary)
+                        Text(machineName(for: block.machineID))
+                            .foregroundStyle(.primary)
+                        Spacer()
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            .navigationTitle("Select Machines")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Send to \(selectedMachineIDs.count)") {
+                        let selected = targets.filter { selectedMachineIDs.contains($0.machineID) }
+                        onConfirm(selected)
+                        dismiss()
+                    }
+                    .fontWeight(.semibold)
+                    .disabled(selectedMachineIDs.isEmpty)
+                }
+            }
+            .onAppear {
+                // Pre-select all machines for convenience
+                selectedMachineIDs = Set(targets.map(\.machineID))
+            }
         }
     }
 }
