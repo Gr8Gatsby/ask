@@ -184,6 +184,16 @@ class MCPClient:
             args['inbox'] = True
         return await self._rpc('tools/call', {'name': 'emit_block', 'arguments': args})
 
+    async def emit_quick_reply(self, block_id, title, options, description=None,
+                               allow_custom=False, urgency='warning', ttl=300):
+        """Emit a quick_reply block — compact inline response card shown in the home queue."""
+        payload = {'title': title, 'options': options, 'urgency': urgency}
+        if description:
+            payload['description'] = description
+        if allow_custom:
+            payload['allow_custom'] = True
+        return await self.emit_block(block_id, 'quick_reply', payload, ttl=ttl, inbox=True)
+
     async def clear_block(self, block_id):
         return await self._rpc('tools/call', {'name': 'clear_block', 'arguments': {'blockId': block_id}})
 
@@ -620,7 +630,7 @@ class MCPClient:
                     self._response_callbacks[block_id] = (
                         lambda v, c=captured: self._on_tmux_prompt_reply(c[0], c[1], v, c[2])
                     )
-                    payload = {'title': body, 'body': '', 'options': options}
+                    payload = {'title': body, 'body': '', 'options': options, 'urgency': 'warning'}
                     try:
                         await self.emit_block(block_id, 'confirmation', payload, ttl=300, inbox=True)
                         print(f'[claudecode-controller] tmux prompt surfaced for {tmux_target}', file=sys.stderr)
@@ -1613,7 +1623,7 @@ end tell
         session_id = msg.get('session_id', '')
         preview = msg.get('preview', '')
         options = msg.get('options', ['Allow', 'Deny'])
-        payload = {'title': f'Allow {tool}?', 'body': preview, 'options': options}
+        payload = {'title': f'Allow {tool}?', 'body': preview, 'options': options, 'urgency': 'urgent'}
         if session_id:
             payload['session_id'] = session_id
         # Capture TTY from the permission hook — ensures the session block is surfaced
@@ -1683,7 +1693,7 @@ end tell
         title = msg.get('title', 'Choose an option')
         body = msg.get('body', '')
         options = msg.get('options', [])
-        payload = {'title': title, 'body': body, 'options': options}
+        payload = {'title': title, 'body': body, 'options': options, 'urgency': 'warning'}
         try:
             await self.emit_block(block_id, 'confirmation', payload, ttl=300, inbox=True)
             self._active_confirmations += 1
