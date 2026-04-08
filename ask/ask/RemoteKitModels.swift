@@ -25,6 +25,24 @@ enum RKBlockType: String, Codable {
     case compactSummary = "compact_summary"
     case sessionEvent = "session_event"
     case diagnostics
+    case quickReply = "quick_reply"
+}
+
+// MARK: - Urgency
+
+enum RKUrgency: String, Codable {
+    case urgent
+    case warning
+    case info
+
+    /// Sort rank — lower value sorts first.
+    var sortRank: Int {
+        switch self {
+        case .urgent:  return 0
+        case .warning: return 1
+        case .info:    return 2
+        }
+    }
 }
 
 // MARK: - Block payloads
@@ -34,9 +52,10 @@ struct RKConfirmationPayload: Codable {
     let body: String
     let options: [String]
     let sessionId: String?
+    let urgency: RKUrgency?
 
     private enum CodingKeys: String, CodingKey {
-        case title, body, options
+        case title, body, options, urgency
         case sessionId = "session_id"
     }
 }
@@ -45,6 +64,7 @@ struct RKAlertPayload: Codable {
     let title: String
     let body: String
     let icon: String?
+    let urgency: RKUrgency?
 }
 
 struct RKStatusPayload: Codable {
@@ -58,12 +78,27 @@ struct RKPromptPayload: Codable {
     let title: String
     let placeholder: String?
     let multiline: Bool?
+    let urgency: RKUrgency?
 }
 
 struct RKChatPromptPayload: Codable {
     let title: String
     let context: String?       // Claude's last message shown above the input — rendered as markdown
     let placeholder: String?
+    let urgency: RKUrgency?
+}
+
+struct RKQuickReplyPayload: Codable {
+    let title: String
+    let description: String?
+    let options: [String]
+    let allowCustom: Bool?
+    let urgency: RKUrgency?
+
+    enum CodingKeys: String, CodingKey {
+        case title, description, options, urgency
+        case allowCustom = "allow_custom"
+    }
 }
 
 struct RKClaudeMessagePayload: Codable {
@@ -319,10 +354,27 @@ struct RKBlock: Identifiable {
 
     var requiresResponse: Bool {
         switch blockType {
-        case .confirmation, .prompt, .chatPrompt, .picker, .list, .detail, .agentSession, .startSession: return true
+        case .confirmation, .prompt, .chatPrompt, .picker, .list, .detail, .agentSession, .startSession, .quickReply: return true
         case .alert, .status, .infoCard, .iconCard, .claudeMessage, .tile, .countdown, .feedItem,
              .activityFeed, .compactSummary, .sessionEvent, .diagnostics: return false
         }
+    }
+
+    /// The urgency declared in the block's payload, if supported.
+    var urgency: RKUrgency? {
+        switch blockType {
+        case .confirmation: return confirmationPayload?.urgency
+        case .alert:        return alertPayload?.urgency
+        case .prompt:       return promptPayload?.urgency
+        case .chatPrompt:   return chatPromptPayload?.urgency
+        case .quickReply:   return quickReplyPayload?.urgency
+        default:            return nil
+        }
+    }
+
+    /// Urgency with default applied: requiresResponse blocks without an explicit urgency default to .warning.
+    var effectiveUrgency: RKUrgency? {
+        urgency ?? (requiresResponse ? .warning : nil)
     }
 
     /// Decoded confirmation payload, or nil if wrong type / bad JSON.
@@ -354,6 +406,11 @@ struct RKBlock: Identifiable {
     var chatPromptPayload: RKChatPromptPayload? {
         guard blockType == .chatPrompt else { return nil }
         return try? JSONDecoder().decode(RKChatPromptPayload.self, from: payloadData)
+    }
+
+    var quickReplyPayload: RKQuickReplyPayload? {
+        guard blockType == .quickReply else { return nil }
+        return try? JSONDecoder().decode(RKQuickReplyPayload.self, from: payloadData)
     }
 
     var claudeMessagePayload: RKClaudeMessagePayload? {

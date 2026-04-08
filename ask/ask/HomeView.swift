@@ -113,6 +113,19 @@ struct ScriptGroup: Identifiable {
         if let label = tileBlock?.label, isActionRequired { return label }
         return nil
     }
+
+    /// Number of distinct machines contributing blocks to this group.
+    var machineCount: Int {
+        Set(blocks.map { $0.machineID }).count
+    }
+
+    /// The highest urgency among all actionable blocks in this group (with defaults applied).
+    var dominantUrgency: RKUrgency? {
+        blocks
+            .filter { $0.requiresResponse }
+            .compactMap { $0.effectiveUrgency }
+            .min(by: { $0.sortRank < $1.sortRank })
+    }
 }
 
 // MARK: - HomeView

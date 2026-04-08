@@ -196,6 +196,10 @@ struct BlockView: View {
             }
         case .diagnostics:
             EmptyView() // rendered on ScriptLogView, not inline
+        case .quickReply:
+            if let p = block.quickReplyPayload {
+                QuickReplyBlockView(payload: p, onRespond: onRespond)
+            }
         }
     }
 
@@ -1633,5 +1637,163 @@ struct SessionEventBlockView: View {
             }
         }
         .padding(12)
+    }
+}
+
+// MARK: - Urgency badge
+
+struct UrgencyBadgeView: View {
+    let urgency: RKUrgency
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 10, weight: .bold, design: .monospaced))
+            .foregroundStyle(color)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.15))
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+
+    private var label: String {
+        switch urgency {
+        case .urgent:  return "[!]"
+        case .warning: return "[~]"
+        case .info:    return "[i]"
+        }
+    }
+
+    var color: Color {
+        switch urgency {
+        case .urgent:  return .red
+        case .warning: return .orange
+        case .info:    return Color(UIColor.secondaryLabel)
+        }
+    }
+}
+
+// MARK: - QuickReply
+
+struct QuickReplyBlockView: View {
+    let payload: RKQuickReplyPayload
+    let onRespond: (String) async -> Void
+
+    @State private var responding = false
+    @State private var selectedOption: String?
+    @State private var showCustomInput = false
+    @State private var customText = ""
+
+    private var displayedOptions: [String] {
+        payload.allowCustom == true ? payload.options + ["Custom…"] : payload.options
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: BlockStyle.innerSpacing) {
+            // Urgency badge + title
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                if let urgency = payload.urgency {
+                    UrgencyBadgeView(urgency: urgency)
+                }
+                EmojiText(text: payload.title, uiFont: BlockStyle.titleFont)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // Description (truncated to 60 chars if needed)
+            if let desc = payload.description, !desc.isEmpty {
+                let truncated = desc.count > 60 ? String(desc.prefix(60)) + "…" : desc
+                EmojiText(text: truncated, uiFont: BlockStyle.monoFont, color: .secondaryLabel)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // Option buttons — inline if ≤ 2, stacked if more
+            if displayedOptions.count <= 2 {
+                HStack(spacing: 8) {
+                    ForEach(displayedOptions, id: \.self) { option in
+                        optionButton(option)
+                    }
+                }
+            } else {
+                VStack(spacing: 6) {
+                    ForEach(displayedOptions, id: \.self) { option in
+                        optionButton(option)
+                    }
+                }
+            }
+
+            // Custom text input — revealed when "Custom…" is tapped
+            if showCustomInput {
+                HStack(spacing: 8) {
+                    TextField("Custom response…", text: $customText)
+                        .textFieldStyle(.plain)
+                        .font(.footnote)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(Color(.tertiarySystemFill))
+                        .clipShape(RoundedRectangle(cornerRadius: BlockStyle.buttonCornerRadius))
+
+                    Button {
+                        guard !customText.isEmpty, !responding else { return }
+                        let response = customText
+                        Task {
+                            responding = true
+                            await onRespond(response)
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(customText.isEmpty ? Color.secondary : Color.accentColor)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(customText.isEmpty || responding)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.vertical, BlockStyle.blockVerticalPadding)
+        .animation(.easeInOut(duration: 0.15), value: showCustomInput)
+    }
+
+    private func optionButton(_ option: String) -> some View {
+        let isCustomTrigger = option == "Custom…"
+        let isSelected = selectedOption == option
+        return Button {
+            guard !responding else { return }
+            if isCustomTrigger {
+                showCustomInput.toggle()
+                return
+            }
+            selectedOption = option
+            Task {
+                responding = true
+                await onRespond(option)
+            }
+        } label: {
+            ZStack {
+                if responding && isSelected {
+                    ProgressView().tint(Color.accentColor)
+                } else {
+                    EmojiText(
+                        text: option,
+                        uiFont: BlockStyle.buttonFont,
+                        color: UIColor(isCustomTrigger ? Color.secondary : Color.accentColor),
+                        alignment: .center
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: BlockStyle.buttonMinHeight)
+            .padding(.vertical, BlockStyle.buttonVerticalPadding)
+            .background(
+                isCustomTrigger
+                    ? Color(.tertiarySystemFill)
+                    : (isSelected ? Color.accentColor.opacity(0.2) : Color.accentColor.opacity(0.12))
+            )
+            .clipShape(RoundedRectangle(cornerRadius: BlockStyle.buttonCornerRadius))
+        }
+        .buttonStyle(.plain)
+        .disabled(responding && !isCustomTrigger)
+        .opacity(responding && !isSelected && !isCustomTrigger ? 0.4 : 1)
+        .animation(.easeInOut(duration: 0.15), value: responding)
     }
 }
