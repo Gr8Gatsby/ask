@@ -22,6 +22,15 @@ enum UITestingSupport {
         ProcessInfo.processInfo.environment["UI_TEST_SCENARIO"]
     }
 
+    // MARK: - Responded block tracking
+    // Blocks that have been "responded to" are filtered out on subsequent fetches,
+    // so the UI reflects the dismissal even when the poll loop re-fetches mock data.
+    private static var respondedBlockIDs: Set<String> = []
+
+    static func markResponded(_ blockID: String) {
+        respondedBlockIDs.insert(blockID)
+    }
+
     // MARK: - Mock machines
 
     static var machines: [AskMachine] {
@@ -32,12 +41,17 @@ enum UITestingSupport {
 
     // swiftlint:disable function_body_length
     static func blocks(for scenario: String) -> [RKBlock] {
+        allBlocks(for: scenario).filter { !respondedBlockIDs.contains($0.id) }
+    }
+
+    private static func allBlocks(for scenario: String) -> [RKBlock] {
         switch scenario {
 
         case "confirmation":
             return [
                 tile(scriptID: "claudecode-controller", label: "Claude Code"),
                 RKBlock.make(
+                    id: "mock-confirmation-1",
                     machineID: "mac-1",
                     scriptID: "claudecode-controller",
                     blockType: .confirmation,
@@ -50,6 +64,7 @@ enum UITestingSupport {
             return [
                 tile(scriptID: "claudecode-controller", label: "Claude Code"),
                 RKBlock.make(
+                    id: "mock-confirmation-list-1",
                     machineID: "mac-1",
                     scriptID: "claudecode-controller",
                     blockType: .confirmation,
@@ -161,9 +176,50 @@ enum UITestingSupport {
     }
 }
 
+// MARK: - RKBlock mock factory
+
+extension RKBlock {
+    static func make(
+        id: String = UUID().uuidString,
+        machineID: String = "machine-1",
+        scriptID: String = "test-script",
+        blockType: RKBlockType,
+        payloadJSON: String = "{}",
+        showsInInbox: Bool = false,
+        createdAt: Date = Date()
+    ) -> RKBlock {
+        RKBlock(
+            id: id,
+            machineID: machineID,
+            scriptID: scriptID,
+            scriptName: nil,
+            scriptIcon: nil,
+            scriptIconData: nil,
+            scriptIconSVG: nil,
+            blockType: blockType,
+            payloadJSON: payloadJSON,
+            createdAt: createdAt,
+            expiresAt: nil,
+            scriptType: "tile",
+            showsInInbox: showsInInbox
+        )
+    }
+}
+
 // MARK: - AskMachine mock factory
 
 extension AskMachine {
+    /// Direct memberwise init for use in test/mock contexts.
+    /// `AskMachine`'s only body-level init is the failable `init?(record:)`, so we
+    /// provide this unfailable convenience init in an extension.
+    init(id: String, name: String, lastHeartbeat: Date, status: MachineStatus, activeJobID: String?) {
+        self.id = id
+        self.name = name
+        self.lastHeartbeat = lastHeartbeat
+        self.status = status
+        self.activeJobID = activeJobID
+    }
+
     static func mock(id: String, name: String, status: MachineStatus = .idle) -> AskMachine {
         AskMachine(
             id: id,

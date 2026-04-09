@@ -18,6 +18,7 @@ final class iOSCloudKitService {
     // MARK: - Account
 
     func checkAccountStatus() async {
+        if UITestingSupport.isUITesting { accountStatus = .available; return }
         do {
             accountStatus = try await container.accountStatus()
         } catch {
@@ -360,6 +361,7 @@ final class iOSCloudKitService {
 
     /// Posts an RKResponse so the Mac daemon can route it back to the script.
     func postResponse(blockID: String, machineID: String, scriptID: String, value: String) async throws {
+        if UITestingSupport.isUITesting { UITestingSupport.markResponded(blockID); return }
         let record = CKRecord(recordType: CKSchema.RecordType.rkResponse)
         record[CKSchema.RKResponse.blockID] = blockID
         record[CKSchema.RKResponse.machineID] = machineID
@@ -396,6 +398,7 @@ final class iOSCloudKitService {
 
     /// Returns false if the Mac has disabled this device. Defaults to true (enabled) if record is absent.
     func checkDeviceEnabled(machineID: String) async -> Bool {
+        if UITestingSupport.isUITesting { return true }
         let recordName = "device-\(Self.stableDeviceID)-\(machineID)"
         let recordID = CKRecord.ID(recordName: recordName)
         guard let record = try? await database.record(for: recordID) else { return true }

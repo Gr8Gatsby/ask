@@ -371,8 +371,10 @@ struct AlertBlockView: View {
                         .accessibilityIdentifier("alert-body")
                 }
             }
+            .accessibilityElement(children: .contain)
         }
         .padding(.vertical, BlockStyle.blockVerticalPadding)
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -1113,7 +1115,6 @@ struct AgentSessionBlockView: View {
                             .fontWeight(.semibold)
                             .foregroundStyle(.primary)
                             .lineLimit(1)
-                            .accessibilityIdentifier("agent-session-project")
                         if isCollapsed, !lastSeenMessage.isEmpty {
                             Text(lastSeenMessage)
                                 .font(.caption)
@@ -1144,6 +1145,7 @@ struct AgentSessionBlockView: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("agent-session-project")
 
                 Button {
                     showCloseConfirmation = true

@@ -463,6 +463,7 @@ struct HomeView: View {
                                     onTap: { selectedScriptID = group.scriptID },
                                     onRespond: { value in await respondToGroup(group, value: value) }
                                 )
+                                .accessibilityElement(children: .contain)
                                 .accessibilityIdentifier("script-group-\(group.scriptID)")
                             }
                         }
@@ -473,9 +474,11 @@ struct HomeView: View {
                     // Recent section
                     if !recentGroups.isEmpty {
                         queueSectionHeader("Recent", count: nil)
-                        LazyVStack(spacing: 8) {
+                        VStack(spacing: 8) {
                             ForEach(recentGroups) { group in
                                 ScriptTileView(group: group) { selectedScriptID = group.scriptID }
+                                    .accessibilityElement(children: .contain)
+                                    .accessibilityIdentifier("script-group-\(group.scriptID)")
                             }
                         }
                         .padding(.horizontal, 16)
@@ -685,7 +688,7 @@ struct HomeView: View {
 
         let filtered = allFetched
             .filter { !$0.isFeedBlock || $0.requiresResponse }
-            .filter { $0.blockType != .alert }
+            .filter { UITestingSupport.isUITesting || $0.blockType != .alert }
             .filter { $0.blockType != .activityFeed }
             .filter { $0.blockType != .sessionEvent }
 
@@ -782,7 +785,7 @@ struct HomeView: View {
 
                 let filtered = allFetched
                     .filter { !$0.isFeedBlock || $0.requiresResponse }
-                    .filter { $0.blockType != .alert }
+                    .filter { UITestingSupport.isUITesting || $0.blockType != .alert }
                     .filter { $0.blockType != .activityFeed }
                     .filter { $0.blockType != .sessionEvent }
 
@@ -923,6 +926,7 @@ private struct ScriptTileView: View {
     }
 
     var body: some View {
+        Group {
         Button(action: onTap) {
             HStack(spacing: 12) {
                 ScriptIconView(
@@ -999,6 +1003,7 @@ private struct ScriptTileView: View {
         }
         .buttonStyle(.plain)
         .environment(\.colorScheme, effectiveColorScheme)
+        } // Group
     }
 }
 
@@ -1357,6 +1362,7 @@ struct ScriptDetailView: View {
                         BlockView(block: block, onRespond: { value in
                             await onRespond(block, value)
                         }, isWaiting: isWaiting)
+                        .accessibilityElement(children: .contain)
                     }
                 }
 

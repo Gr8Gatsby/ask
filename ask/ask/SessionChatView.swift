@@ -19,6 +19,7 @@ struct SessionRowView: View {
                         .font(.subheadline)
                         .fontWeight(.semibold)
                         .lineLimit(1)
+                        .accessibilityIdentifier("session-row-project")
                 }
                 Group {
                     if let msg = payload.lastMessage, !msg.isEmpty {
