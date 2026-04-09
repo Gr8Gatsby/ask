@@ -53,9 +53,11 @@ struct RKConfirmationPayload: Codable {
     let options: [String]
     let sessionId: String?
     let urgency: RKUrgency?
+    /// When "list", always render as a vertical radio-button list regardless of option count.
+    let style: String?
 
     private enum CodingKeys: String, CodingKey {
-        case title, body, options, urgency
+        case title, body, options, urgency, style
         case sessionId = "session_id"
     }
 }

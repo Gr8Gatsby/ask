@@ -251,14 +251,14 @@ struct ConfirmationBlockView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            if payload.options.count <= 2 {
+            if payload.style == "list" || payload.options.count > 2 {
+                optionList
+            } else {
                 HStack(spacing: 8) {
                     ForEach(payload.options, id: \.self) { option in
                         optionButton(option)
                     }
                 }
-            } else {
-                optionList
             }
         }
         .padding(.vertical, BlockStyle.blockVerticalPadding)

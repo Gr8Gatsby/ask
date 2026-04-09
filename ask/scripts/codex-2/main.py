@@ -650,15 +650,16 @@ class CodexController:
         if not options:
             return None
         cmd_title = result.get('title', '')
-        # Each button shows "N  <full option text>" so user can see what they're choosing.
-        # On response, we parse the leading number to send to tmux.
+        # Values are "N  <option text>" — the leading number is extracted on response
+        # and sent to tmux. style=list forces a vertical radio-button list in the app.
         option_values = [f'{i+1}  {opt}' for i, opt in enumerate(options)]
         block_id = f'codex2-menu-{self._sanitize_id(session_id[:8])}'
         payload = {
-            'title': cmd_title or 'Select an option',
+            'title': cmd_title or 'Choose an option',
             'body': '',
             'options': option_values,
             'session_id': session_id,
+            'style': 'list',
         }
         await self.emit_block(block_id, 'confirmation', payload, inbox=True)
         return block_id
@@ -667,14 +668,16 @@ class CodexController:
         commands = result.get('commands', [])
         if not commands:
             return None
-        body = '\n'.join(f"{c['cmd']}  {c.get('desc', '')}" for c in commands)
         options = [c['cmd'] for c in commands]
+        descs = {c['cmd']: c.get('desc', '') for c in commands}
+        body = '\n'.join(f"{cmd}  {descs[cmd]}" for cmd in options if descs.get(cmd))
         block_id = f'codex2-slash-{self._sanitize_id(session_id[:8])}'
         payload = {
             'title': 'Slash commands',
             'body': body,
             'options': options,
             'session_id': session_id,
+            'style': 'list',
         }
         await self.emit_block(block_id, 'confirmation', payload, inbox=True)
         return block_id

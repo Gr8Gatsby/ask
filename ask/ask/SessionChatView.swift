@@ -406,30 +406,41 @@ struct SessionChatView: View {
 
     @ViewBuilder
     private func pendingLinkedConfirmationBar(block: RKBlock, cp: RKConfirmationPayload) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(cp.title)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(cp.options, id: \.self) { option in
-                        Button(option) {
-                            Task {
-                                await onRespond(block, option)
-                                markLinkedConfirmationResolved(block: block, value: option)
+        if cp.style == "list" {
+            // TUI-style menu: render as full inline block so it flows naturally in the view
+            BlockView(block: block, onRespond: { value in
+                await onRespond(block, value)
+                markLinkedConfirmationResolved(block: block, value: value)
+            })
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(cp.title)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(cp.options, id: \.self) { option in
+                            Button(option) {
+                                Task {
+                                    await onRespond(block, option)
+                                    markLinkedConfirmationResolved(block: block, value: option)
+                                }
                             }
+                            .buttonStyle(.bordered)
+                            .tint(.orange)
+                            .font(.footnote)
                         }
-                        .buttonStyle(.bordered)
-                        .tint(.orange)
-                        .font(.footnote)
                     }
+                    .padding(.horizontal)
                 }
-                .padding(.horizontal)
             }
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial)
         }
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial)
     }
 
     @ViewBuilder
