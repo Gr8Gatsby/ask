@@ -463,6 +463,7 @@ struct HomeView: View {
                                     onTap: { selectedScriptID = group.scriptID },
                                     onRespond: { value in await respondToGroup(group, value: value) }
                                 )
+                                .accessibilityIdentifier("script-group-\(group.scriptID)")
                             }
                         }
                         .padding(.horizontal, 16)

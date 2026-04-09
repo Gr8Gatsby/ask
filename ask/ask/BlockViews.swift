@@ -293,6 +293,7 @@ struct ConfirmationBlockView: View {
         .disabled(responding)
         .opacity(responding && !isSelected ? 0.4 : 1)
         .animation(.easeInOut(duration: 0.15), value: responding)
+        .accessibilityIdentifier("confirm-option-\(option)")
     }
 
     private var optionList: some View {
@@ -333,6 +334,7 @@ struct ConfirmationBlockView: View {
                 .disabled(responding)
                 .opacity(responding && !isSelected ? 0.4 : 1)
                 .animation(.easeInOut(duration: 0.15), value: responding)
+                .accessibilityIdentifier("confirm-option-\(option)")
 
                 if idx < payload.options.count - 1 {
                     Divider().padding(.leading, 36)
@@ -361,10 +363,12 @@ struct AlertBlockView: View {
                 Text(payload.title)
                     .font(.footnote)
                     .fontWeight(.medium)
+                    .accessibilityIdentifier("alert-title")
                 if !payload.body.isEmpty {
                     Text(payload.body)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("alert-body")
                 }
             }
         }
@@ -1109,6 +1113,7 @@ struct AgentSessionBlockView: View {
                             .fontWeight(.semibold)
                             .foregroundStyle(.primary)
                             .lineLimit(1)
+                            .accessibilityIdentifier("agent-session-project")
                         if isCollapsed, !lastSeenMessage.isEmpty {
                             Text(lastSeenMessage)
                                 .font(.caption)

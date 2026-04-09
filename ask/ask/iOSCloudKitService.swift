@@ -28,6 +28,7 @@ final class iOSCloudKitService {
     // MARK: - Machines
 
     func fetchMachines() async throws -> [AskMachine] {
+        if UITestingSupport.isUITesting { return UITestingSupport.machines }
         let query = CKQuery(
             recordType: CKSchema.RecordType.machine,
             predicate: NSPredicate(value: true)
@@ -325,6 +326,10 @@ final class iOSCloudKitService {
 
     /// Fetches all active RKBlock records for a machine, sorted by type priority then createdAt.
     func fetchBlocks(machineID: String) async throws -> [RKBlock] {
+        if UITestingSupport.isUITesting {
+            return UITestingSupport.blocks(for: UITestingSupport.scenario ?? "empty")
+                .filter { $0.machineID == machineID || machineID.isEmpty }
+        }
         let predicate = NSPredicate(format: "%K == %@", CKSchema.RKBlock.machineID, machineID)
         let query = CKQuery(recordType: CKSchema.RecordType.rkBlock, predicate: predicate)
         query.sortDescriptors = [NSSortDescriptor(key: CKSchema.RKBlock.createdAt, ascending: false)]
