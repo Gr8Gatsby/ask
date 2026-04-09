@@ -11,7 +11,7 @@ import socket
 import os
 import subprocess
 
-SOCKET_PATH = os.path.expanduser('~/.ask/sockets/claudecode-controller.sock')
+SOCKET_PATH = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/sockets/claudecode-controller.sock'))
 
 
 def _get_tty_and_claude_pid():

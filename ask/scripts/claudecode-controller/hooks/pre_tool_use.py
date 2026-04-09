@@ -8,7 +8,7 @@ import json
 import socket
 import os
 
-SOCKET_PATH = os.path.expanduser('~/.ask/sockets/claudecode-controller.sock')
+SOCKET_PATH = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/sockets/claudecode-controller.sock'))
 
 data = json.load(sys.stdin)
 session_id = data.get('session_id', '')

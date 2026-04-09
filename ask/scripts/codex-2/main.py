@@ -1667,7 +1667,7 @@ class CodexController:
                 block_id_log = f'codex2-log-{self._sanitize_id(session_id[:16])}'
                 await self.emit_block(block_id_log, 'info_card', {
                     'title': info.get('project', session_id[:12]),
-                    'body': log_text[-2000:],
+                    'pairs': [{'key': 'output', 'value': log_text[-2000:]}],
                 }, ttl=60)
             return
         elif '-menu-' in block_id:

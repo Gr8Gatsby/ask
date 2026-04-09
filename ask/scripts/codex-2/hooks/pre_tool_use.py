@@ -11,8 +11,8 @@ import socket
 import os
 
 SOCKET_PATH           = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/sockets/codex-2.sock'))
-ALLOWLIST_PATH        = os.path.expanduser('~/.ask/codex_allowlist.json')
-PERMISSION_MODE_PATH  = os.path.expanduser('~/.ask/codex_permission_mode.json')
+ALLOWLIST_PATH        = os.environ.get('ASK_CODEX2_ALLOWLIST_PATH', os.path.expanduser('~/.ask/codex_allowlist.json'))
+PERMISSION_MODE_PATH  = os.environ.get('ASK_CODEX2_PERMISSION_MODE_PATH', os.path.expanduser('~/.ask/codex_permission_mode.json'))
 
 
 def _check_allowlist(preview: str) -> bool:
