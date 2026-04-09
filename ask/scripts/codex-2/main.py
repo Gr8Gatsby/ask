@@ -249,15 +249,15 @@ def _save_settings_file(settings: dict):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _find_tmux_target(cwd: str = '') -> str:
-    """Return 'session:window.pane' for any pane running Codex/node across all sessions.
+    """Return 'session:window_name.pane' for a Codex pane in the 'codex' session.
 
-    If cwd is provided, prefers a pane whose current path matches exactly.
-    Falls back to the first codex-running pane found.
+    If cwd is provided, prefers the window whose current path matches exactly.
+    Falls back to the first codex/node pane found.
     """
     try:
         r = subprocess.run(
-            [TMUX, 'list-panes', '-a', '-F',
-             '#{session_name}:#{window_index}.#{pane_index} #{pane_current_command} #{pane_current_path}'],
+            [TMUX, 'list-panes', '-t', 'codex', '-a', '-F',
+             '#{session_name}:#{window_name}.#{pane_index} #{pane_current_command} #{pane_current_path}'],
             capture_output=True, text=True, timeout=3,
         )
         candidates = []
@@ -686,8 +686,8 @@ class CodexController:
                     continue
                 target, cmd = parts
                 session_name = target.split(':')[0]
-                # Look for panes running node (Codex) in any tmux session
-                if cmd.lower() not in ('node', 'codex'):
+                # Look for panes running node (Codex) in the shared 'codex' session
+                if session_name.lower() != 'codex' or cmd.lower() not in ('node', 'codex'):
                     continue
                 # Generate a stable synthetic session_id from the tmux target
                 synth_id = f'tmux-{target}'
@@ -1000,29 +1000,34 @@ class CodexController:
             f'cd {shlex.quote(repo_path)} && exec {shlex.quote(codex_bin)}'
         )
 
-        # Use the repo name as the tmux session name so each project gets its own
-        # named session (e.g. 'ask', 'life') instead of all sharing 'codex'.
-        r = subprocess.run([TMUX, 'has-session', '-t', project],
+        # All Codex projects share one 'codex' tmux session; each project gets its
+        # own window named after the repo (e.g. codex:ask, codex:life).
+        r = subprocess.run([TMUX, 'has-session', '-t', 'codex'],
                            capture_output=True, timeout=3)
         if r.returncode == 0:
-            # Session exists — open Codex in a new window.
-            # -P -F prints the new window index atomically (no name lookup needed).
-            r2 = subprocess.run([
-                TMUX, 'new-window', '-t', project, '-c', repo_path, '-n', project,
-                '-P', '-F', '#{window_index}',
-                shell, '-l', '-c', shell_cmd,
-            ], capture_output=True, text=True, timeout=5)
-            win_idx = r2.stdout.strip()
-            pane_target = f'{project}:{win_idx}.0' if win_idx else ''
-            _log(f'new-window rc={r2.returncode} win_idx={win_idx!r} stderr={r2.stderr.strip()!r}')
+            # Session exists — check if a window for this project already exists.
+            lw = subprocess.run(
+                [TMUX, 'list-windows', '-t', 'codex', '-F', '#{window_name}'],
+                capture_output=True, text=True, timeout=3,
+            )
+            existing = lw.stdout.strip().splitlines() if lw.returncode == 0 else []
+            if project not in existing:
+                r2 = subprocess.run([
+                    TMUX, 'new-window', '-t', 'codex', '-c', repo_path, '-n', project,
+                    shell, '-l', '-c', shell_cmd,
+                ], capture_output=True, text=True, timeout=5)
+                _log(f'new-window rc={r2.returncode} stderr={r2.stderr.strip()!r}')
+            else:
+                _log(f'Window codex:{project} already exists — reusing')
+            pane_target = f'codex:{project}.0'
         else:
-            # Create a new detached tmux session named after the repo.
+            # Create the shared 'codex' session with this project as the first window.
             r2 = subprocess.run([
-                TMUX, 'new-session', '-d', '-s', project,
+                TMUX, 'new-session', '-d', '-s', 'codex',
                 '-c', repo_path, '-n', project,
                 shell, '-l', '-c', shell_cmd,
             ], capture_output=True, text=True, timeout=5)
-            pane_target = f'{project}:0.0'
+            pane_target = f'codex:{project}.0'
             _log(f'new-session rc={r2.returncode} stderr={r2.stderr.strip()!r}')
 
         _log(f'New window pane target: {pane_target!r}')
