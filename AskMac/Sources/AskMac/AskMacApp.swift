@@ -33,14 +33,18 @@ struct AskMacApp: App {
         _scriptManager = State(initialValue: sm)
         _responsePoller = State(initialValue: rp)
 
-        Task {
-            await ck.checkAccountStatus()
-            hb.start()
-            mw.start(scriptManager: sm)
-            sm.start()
-            rp.start(scriptManager: sm)
-            // Purge old records in the background after services are running.
-            await ck.purgeOldRecords(machineID: s.machineID)
+        if MacUITestingSupport.isUITesting {
+            sm.loadMockScenario(MacUITestingSupport.scenario)
+        } else {
+            Task {
+                await ck.checkAccountStatus()
+                hb.start()
+                mw.start(scriptManager: sm)
+                sm.start()
+                rp.start(scriptManager: sm)
+                // Purge old records in the background after services are running.
+                await ck.purgeOldRecords(machineID: s.machineID)
+            }
         }
     }
 
@@ -97,6 +101,7 @@ struct AskMacApp: App {
 
 struct MenuBarLabel: View {
     let hasActiveScripts: Bool
+    @Environment(\.openWindow) private var openWindow
 
     private var isDevBuild: Bool {
         let exe = CommandLine.arguments.first ?? ""
@@ -106,5 +111,13 @@ struct MenuBarLabel: View {
     var body: some View {
         Image(systemName: isDevBuild ? "icloud" : "icloud.fill")
             .symbolEffect(.pulse, isActive: hasActiveScripts)
+            .onAppear {
+                // In UI testing mode the menu bar icon is the first SwiftUI view rendered,
+                // so we trigger the Scripts window open here — tests can then access it
+                // directly via app.windows["Ask"] without clicking the menu bar icon.
+                if MacUITestingSupport.isUITesting {
+                    openWindow(id: "scripts")
+                }
+            }
     }
 }

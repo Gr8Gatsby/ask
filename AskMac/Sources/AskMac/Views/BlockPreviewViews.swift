@@ -149,6 +149,7 @@ private struct ConfirmationPreview: View {
                         .controlSize(.small)
                         .tint(idx == 0 ? .accentColor : Color(.tertiaryLabelColor))
                         .disabled(onRespond == nil)
+                        .accessibilityIdentifier("confirm-option-\(opt)")
                     }
                     Spacer()
                 }
@@ -173,6 +174,7 @@ private struct ConfirmationPreview: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(onRespond == nil)
+                        .accessibilityIdentifier("confirm-option-\(opt)")
                         if idx < options.count - 1 {
                             Divider().padding(.leading, 8)
                         }

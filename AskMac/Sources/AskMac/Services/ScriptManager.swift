@@ -459,6 +459,18 @@ final class ScriptManager: @unchecked Sendable {
     func respondToBlock(scriptID: String, blockID: String, value: String) {
         connections[scriptID]?.deliverResponse(blockID: blockID, value: value)
         activeBlocks[scriptID]?.removeValue(forKey: blockID)
+        if MacUITestingSupport.isUITesting {
+            MacUITestingSupport.markResponded(blockID)
+        }
+    }
+
+    // MARK: - UI Testing
+
+    /// Injects mock scripts and blocks for XCUITest runs.
+    /// Call before any service is started (i.e. from AskMacApp.init when --uitesting).
+    func loadMockScenario(_ scenario: String) {
+        scripts = MacUITestingSupport.scripts(for: scenario)
+        activeBlocks = MacUITestingSupport.activeBlocks(for: scenario)
     }
 
     func enableScript(id: String) {
