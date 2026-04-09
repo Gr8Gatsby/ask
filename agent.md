@@ -169,6 +169,23 @@ Reserve `.ultraThinMaterial` for secondary chrome that should recede. Use the sy
 
 ---
 
+## Script Source Control
+
+All Ask scripts live in **`ask/scripts/<script-id>/`** and must be kept in source control. The full set of scripts is:
+
+- `claudecode-controller` — Claude Code session supervisor
+- `codex-2` — Codex CLI session supervisor
+- `brew-monitor`, `github`, `ollama`, `opencode-controller`, `terminal-manager` — supporting scripts
+
+**Workflow:**
+1. Edit scripts in `ask/scripts/<script-id>/` (never in `~/.ask/scripts/`)
+2. Commit the changes
+3. Run `/deploy-scripts` to rsync from repo → `~/.ask/scripts/`
+
+Never edit `~/.ask/scripts/` directly — it is not a git repo and changes will be lost.
+
+---
+
 ## Ask Block System
 
 This project uses a block-based UI system where Mac scripts push UI cards to the iOS app via CloudKit. When writing scripts or modifying block rendering:
