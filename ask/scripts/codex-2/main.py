@@ -248,17 +248,33 @@ def _save_settings_file(settings: dict):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _find_tmux_target(session_name: str = 'codex') -> str:
-    """Return 'session:window.pane' if a tmux session named 'codex' exists."""
+def _find_tmux_target(cwd: str = '') -> str:
+    """Return 'session:window.pane' for any pane running Codex/node across all sessions.
+
+    If cwd is provided, prefers a pane whose current path matches exactly.
+    Falls back to the first codex-running pane found.
+    """
     try:
         r = subprocess.run(
-            [TMUX, 'list-panes', '-t', session_name, '-F',
-             '#{session_name}:#{window_index}.#{pane_index}'],
+            [TMUX, 'list-panes', '-a', '-F',
+             '#{session_name}:#{window_index}.#{pane_index} #{pane_current_command} #{pane_current_path}'],
             capture_output=True, text=True, timeout=3,
         )
-        if r.returncode == 0:
-            first = r.stdout.strip().splitlines()[0]
-            return first
+        candidates = []
+        for line in r.stdout.strip().splitlines():
+            parts = line.split(' ', 2)
+            if len(parts) < 2:
+                continue
+            target = parts[0]
+            cmd = parts[1].lower()
+            pane_cwd = parts[2].strip() if len(parts) > 2 else ''
+            if cmd not in ('node', 'codex'):
+                continue
+            if cwd and pane_cwd == cwd:
+                return target  # exact cwd match — highest priority
+            candidates.append(target)
+        if candidates:
+            return candidates[0]
     except Exception:
         pass
     return ''
@@ -459,7 +475,7 @@ class CodexController:
         if raw_id in self._real_to_stable:
             return self._real_to_stable[raw_id]
         # Derive from provided or freshly-looked-up tmux target
-        target = tmux_target or _find_tmux_target('codex')
+        target = tmux_target or _find_tmux_target()
         if target:
             stable = f'tmux-{target}'
             if raw_id:
@@ -670,8 +686,8 @@ class CodexController:
                     continue
                 target, cmd = parts
                 session_name = target.split(':')[0]
-                # Look for panes running node (Codex) in a session named 'codex'
-                if session_name.lower() != 'codex' or cmd.lower() not in ('node', 'codex'):
+                # Look for panes running node (Codex) in any tmux session
+                if cmd.lower() not in ('node', 'codex'):
                     continue
                 # Generate a stable synthetic session_id from the tmux target
                 synth_id = f'tmux-{target}'
@@ -769,7 +785,7 @@ class CodexController:
             return
 
         tty = _tty_to_dev(raw_tty)
-        tmux_target = msg.get('tmux_target') or _find_tmux_target('codex')
+        tmux_target = msg.get('tmux_target') or _find_tmux_target(cwd)
 
         # Always resolve to stable tmux-based ID — block IDs are constant across restarts
         session_id = self._stable_id(raw_id, tmux_target)
@@ -821,7 +837,7 @@ class CodexController:
         if not raw_id:
             return
         # Resolve to stable ID; fall back to raw_id if tmux is already gone
-        tmux_target = _find_tmux_target('codex')
+        tmux_target = _find_tmux_target()
         session_id = self._stable_id(raw_id, tmux_target) if raw_id in self._sessions or not raw_id.startswith('tmux-') else raw_id
         if session_id not in self._sessions:
             session_id = self._real_to_stable.get(raw_id, raw_id)
@@ -984,27 +1000,29 @@ class CodexController:
             f'cd {shlex.quote(repo_path)} && exec {shlex.quote(codex_bin)}'
         )
 
-        r = subprocess.run([TMUX, 'has-session', '-t', 'codex'],
+        # Use the repo name as the tmux session name so each project gets its own
+        # named session (e.g. 'ask', 'life') instead of all sharing 'codex'.
+        r = subprocess.run([TMUX, 'has-session', '-t', project],
                            capture_output=True, timeout=3)
         if r.returncode == 0:
             # Session exists — open Codex in a new window.
             # -P -F prints the new window index atomically (no name lookup needed).
             r2 = subprocess.run([
-                TMUX, 'new-window', '-t', 'codex', '-c', repo_path, '-n', project,
+                TMUX, 'new-window', '-t', project, '-c', repo_path, '-n', project,
                 '-P', '-F', '#{window_index}',
                 shell, '-l', '-c', shell_cmd,
             ], capture_output=True, text=True, timeout=5)
             win_idx = r2.stdout.strip()
-            pane_target = f'codex:{win_idx}.0' if win_idx else ''
+            pane_target = f'{project}:{win_idx}.0' if win_idx else ''
             _log(f'new-window rc={r2.returncode} win_idx={win_idx!r} stderr={r2.stderr.strip()!r}')
         else:
-            # Create a new detached tmux session; window index is always 0.
+            # Create a new detached tmux session named after the repo.
             r2 = subprocess.run([
-                TMUX, 'new-session', '-d', '-s', 'codex',
+                TMUX, 'new-session', '-d', '-s', project,
                 '-c', repo_path, '-n', project,
                 shell, '-l', '-c', shell_cmd,
             ], capture_output=True, text=True, timeout=5)
-            pane_target = 'codex:0.0'
+            pane_target = f'{project}:0.0'
             _log(f'new-session rc={r2.returncode} stderr={r2.stderr.strip()!r}')
 
         _log(f'New window pane target: {pane_target!r}')
