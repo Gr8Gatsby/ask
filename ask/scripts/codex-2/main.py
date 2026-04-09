@@ -25,8 +25,10 @@ SOCKET_PATH  = os.environ.get('ASK_SOCKET_PATH',
 LOG_PATH     = os.path.expanduser('~/.ask/logs/codex-2.log')
 TILE_ID               = 'codex-2-tile'
 START_SESSION_BLOCK_ID = 'codex2-start'
-MODE_PICK_BLOCK_ID    = 'codex2-mode-pick'
 SETTINGS_PATH         = os.path.expanduser('~/.ask/codex2-settings.json')
+ALLOWLIST_PATH        = os.path.expanduser('~/.ask/codex_allowlist.json')
+ACTIVE_BLOCKS_PATH    = os.path.expanduser('~/.ask/codex2-active-blocks.json')
+MAX_RECENT_REPOS      = 5
 SESSION_TTL           = 300  # heartbeat refreshes every 30s; 300s gives buffer for MCP hiccups
 
 # Common repo search roots — scanned by start_session picker
@@ -109,6 +111,20 @@ def _get_pane_cwd(target: str) -> str:
     try:
         r = subprocess.run(
             [TMUX, 'display-message', '-p', '-t', target, '#{pane_current_path}'],
+            capture_output=True, text=True, timeout=3,
+        )
+        if r.returncode == 0:
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return ''
+
+
+def _get_pane_command(target: str) -> str:
+    """Return the foreground command running in a tmux pane."""
+    try:
+        r = subprocess.run(
+            [TMUX, 'display-message', '-p', '-t', target, '#{pane_current_command}'],
             capture_output=True, text=True, timeout=3,
         )
         if r.returncode == 0:
@@ -204,25 +220,43 @@ def _ensure_config_flag():
 def _write_hooks_json():
     py = sys.executable
     hooks_dir = os.path.join(SCRIPT_DIR, 'hooks')
-    hooks = {
-        'hooks': {
-            'SessionStart': [{'hooks': [{'type': 'command',
-                'command': f'{py} {os.path.join(hooks_dir, "session_start.py")}'}]}],
-            'PreToolUse': [{'hooks': [{'type': 'command',
-                'command': f'{py} {os.path.join(hooks_dir, "pre_tool_use.py")}'}]}],
-            'PostToolUse': [{'hooks': [{'type': 'command',
-                'command': f'{py} {os.path.join(hooks_dir, "post_tool_use.py")}'}]}],
-            'Stop': [{'hooks': [{'type': 'command',
-                'command': f'{py} {os.path.join(hooks_dir, "session_stop.py")}'}]}],
-            'UserPromptSubmit': [{'hooks': [{'type': 'command',
-                'command': f'{py} {os.path.join(hooks_dir, "user_prompt_submit.py")}'}]}],
-        }
+    our_hooks = {
+        'SessionStart': [{'hooks': [{'type': 'command',
+            'command': f'{py} {os.path.join(hooks_dir, "session_start.py")}'}]}],
+        'PreToolUse': [{'hooks': [{'type': 'command',
+            'command': f'{py} {os.path.join(hooks_dir, "pre_tool_use.py")}'}]}],
+        'PostToolUse': [{'hooks': [{'type': 'command',
+            'command': f'{py} {os.path.join(hooks_dir, "post_tool_use.py")}'}]}],
+        'Stop': [{'hooks': [{'type': 'command',
+            'command': f'{py} {os.path.join(hooks_dir, "session_stop.py")}'}]}],
+        'UserPromptSubmit': [{'hooks': [{'type': 'command',
+            'command': f'{py} {os.path.join(hooks_dir, "user_prompt_submit.py")}'}]}],
     }
+    # Read existing hooks and merge — preserve any hooks not ours
+    existing = {}
+    try:
+        with open(CODEX_HOOKS_PATH) as f:
+            existing = json.load(f).get('hooks', {})
+    except Exception:
+        pass
+    merged = dict(existing)
+    for event, hook_list in our_hooks.items():
+        our_cmd = hook_list[0]['hooks'][0]['command']
+        # Check if our hook is already registered for this event
+        existing_for_event = existing.get(event, [])
+        already_registered = any(
+            h.get('command') == our_cmd
+            for entry in existing_for_event
+            for h in entry.get('hooks', [])
+        )
+        if not already_registered:
+            # Prepend our hook to existing hooks for this event
+            merged[event] = hook_list + existing_for_event
     os.makedirs(os.path.dirname(CODEX_HOOKS_PATH), exist_ok=True)
     try:
         with open(CODEX_HOOKS_PATH, 'w') as f:
-            json.dump(hooks, f, indent=2)
-        _log(f'Wrote hooks to {CODEX_HOOKS_PATH}')
+            json.dump({'hooks': merged}, f, indent=2)
+        _log(f'Updated hooks at {CODEX_HOOKS_PATH}')
     except Exception as e:
         _log(f'Could not write hooks.json: {e}', 'WARN')
 
@@ -244,6 +278,51 @@ def _save_settings_file(settings: dict):
             json.dump(settings, f, indent=2)
     except Exception as e:
         _log(f'Could not save settings: {e}', 'WARN')
+
+
+def _append_allowlist(preview: str):
+    """Append a command preview to the persistent allowlist."""
+    try:
+        data = {'patterns': []}
+        try:
+            with open(ALLOWLIST_PATH) as f:
+                data = json.load(f)
+        except Exception:
+            pass
+        patterns = data.setdefault('patterns', [])
+        if preview not in patterns:
+            patterns.append(preview)
+            with open(ALLOWLIST_PATH, 'w') as f:
+                json.dump(data, f, indent=2)
+            _log(f'Allowlisted: {preview[:60]!r}')
+    except Exception as e:
+        _log(f'Could not save allowlist: {e}', 'WARN')
+
+
+def _update_recent_repos(settings: dict, path: str) -> dict:
+    """Move path to the front of recent_repos in settings."""
+    recent = settings.get('recent_repos', [])
+    if path in recent:
+        recent.remove(path)
+    recent.insert(0, path)
+    settings['recent_repos'] = recent[:MAX_RECENT_REPOS]
+    return settings
+
+
+def _load_active_blocks() -> set:
+    try:
+        with open(ACTIVE_BLOCKS_PATH) as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+
+def _save_active_blocks(block_ids: set):
+    try:
+        with open(ACTIVE_BLOCKS_PATH, 'w') as f:
+            json.dump(list(block_ids), f)
+    except Exception:
+        pass
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -345,7 +424,8 @@ class CodexController:
         self._initialized = False
         # Persistent settings (last-used interactive mode, etc.)
         self._settings = _load_settings_file()
-        self._pending_launch_path = ''   # repo path waiting for mode selection
+        self._pending_launches: dict = {}   # launch_id → repo_path
+        self._active_perm_blocks: set = set()
         # Deduplication: last payload hash per block_id — skip emit if unchanged
         self._last_payload_hash = {}      # block_id → sha256 hex
         # Debounce: pending tile-emit tasks per session
@@ -544,6 +624,8 @@ class CodexController:
                 payload['current_tool'] = ct
             if cp := info.get('current_preview'):
                 payload['current_preview'] = cp
+            if info.get('current_prompt') and info.get('is_working'):
+                payload['current_prompt'] = info['current_prompt']
         await self.emit_block(
             self._session_block_id(session_id),
             'agent_session',
@@ -736,12 +818,18 @@ class CodexController:
                 # Validate existing sessions — clean up any whose process died
                 for session_id in list(self._sessions.keys()):
                     info = self._sessions.get(session_id, {})
-                    pid = info.get('pid', 0)
-                    if pid and not _pid_running(pid):
-                        _log(f'PID {pid} gone — cleaning up session {session_id[:12]}')
-                        asyncio.create_task(self._handle_session_stop(
-                            {'session_id': session_id, 'last_message': 'Session ended'}))
-                        continue
+                    # Check if the tmux pane is still running Codex.
+                    # #{pane_pid} is the shell PID (always alive), so instead we
+                    # check the foreground command. If it's no longer node/codex,
+                    # Codex has exited and the session should be cleaned up.
+                    tmux_target = info.get('tmux_target', '')
+                    if tmux_target:
+                        pane_cmd = _get_pane_command(tmux_target)
+                        if pane_cmd and pane_cmd.lower() not in ('node', 'codex'):
+                            _log(f'Pane {tmux_target} running {pane_cmd!r} — Codex exited, cleaning up')
+                            asyncio.create_task(self._handle_session_stop(
+                                {'session_id': session_id, 'last_message': 'Session ended'}))
+                            continue
                     # Sessions that predate is_headless tracking: detect via tmux clients.
                     if 'is_headless' not in info:
                         tmux_target = info.get('tmux_target', '')
@@ -836,7 +924,8 @@ class CodexController:
         if not raw_id:
             return
         # Resolve to stable ID; fall back to raw_id if tmux is already gone
-        tmux_target = _find_tmux_target()
+        cwd = msg.get('cwd', '')
+        tmux_target = _find_tmux_target(cwd)
         session_id = self._stable_id(raw_id, tmux_target) if raw_id in self._sessions or not raw_id.startswith('tmux-') else raw_id
         if session_id not in self._sessions:
             session_id = self._real_to_stable.get(raw_id, raw_id)
@@ -941,6 +1030,14 @@ class CodexController:
     async def _emit_start_session_block(self, force: bool = False):
         """Emit the start-session block so the iPhone shows a + button."""
         repos = _find_repos()
+        # Put recently used repos at the top
+        recent = self._settings.get('recent_repos', [])
+        def repo_sort_key(r):
+            try:
+                return recent.index(r[1])
+            except ValueError:
+                return len(recent)
+        repos.sort(key=repo_sort_key)
         self._start_repos = {name: path for name, path in repos}
         repo_list = [{'name': name, 'path': path} for name, path in repos]
         if not repo_list:
@@ -982,6 +1079,20 @@ class CodexController:
         _install_hooks()
 
         _log(f'Launching Codex: project={project!r} cwd={repo_path!r} bin={codex_bin!r}')
+
+        # Emit a provisional "Starting…" tile immediately so iPhone shows feedback.
+        provisional_id = f'tmux-codex:{project}.0'
+        if provisional_id not in self._sessions:
+            self._sessions[provisional_id] = {
+                'cwd': repo_path,
+                'project': project,
+                'tmux_target': f'codex:{project}.0',
+                'pid': 0,
+                'is_working': False,
+                'is_headless': not self._settings.get('interactive', True),
+                'last_message': 'Starting…',
+            }
+            await self._emit_session_tile(provisional_id, force=True)
 
         # Wrap in a login shell so ~/.zshrc / ~/.zprofile is sourced and
         # OPENAI_API_KEY and PATH are available (AskMac doesn't source shell profiles).
@@ -1062,7 +1173,7 @@ class CodexController:
                 win_target = pane_target.rsplit('.', 1)[0]
                 # -d detaches any existing clients first so only one Terminal window
                 # is ever attached — prevents shared input across multiple terminals.
-                attach_cmd = f'tmux attach-session -d -t {win_target}'
+                attach_cmd = f'tmux attach-session -t {win_target}'
                 osascript_script = f'tell application "Terminal" to do script "{attach_cmd}"'
                 subprocess.Popen(['osascript', '-e', osascript_script],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1073,6 +1184,10 @@ class CodexController:
         # Schedule a delayed pane snapshot to log what Codex shows on startup
         if pane_target:
             asyncio.create_task(self._log_pane_snapshot(pane_target, delay=8))
+
+        # Update recent repos list and re-emit start-session block
+        self._settings = _update_recent_repos(self._settings, repo_path)
+        _save_settings_file(self._settings)
 
         # Re-emit the start-session block so the + button comes back immediately
         await self._emit_start_session_block(force=True)
@@ -1138,6 +1253,15 @@ class CodexController:
                     if last_msg:
                         info['last_message'] = last_msg
                         info.pop('current_preview', None)  # clear stale preview when message arrives
+                    WRITE_TOOLS = {'write_file', 'str_replace_editor', 'apply_patch',
+                                   'edit_file', 'create_file', 'overwrite_file'}
+                    if tool.lower() in WRITE_TOOLS:
+                        file_path = msg.get('last_message', '') or msg.get('cwd', '')
+                        project = info.get('project', session_id[:12])
+                        await self._handle_notification({
+                            'title': f'{project}: file changed',
+                            'body': f'{_map_tool_name(tool)} completed',
+                        })
                     self._schedule_session_tile(session_id)
                 elif session_id:
                     await self._handle_session_active(msg)
@@ -1151,6 +1275,11 @@ class CodexController:
                         tool = msg.get('tool_name', msg.get('tool', ''))
                         if tool:
                             info['current_tool'] = _map_tool_name(tool)
+                    if t == 'user_prompt_submit':
+                        prompt = msg.get('prompt', '').strip()
+                        if prompt:
+                            info['current_prompt'] = prompt[:200]
+                            info.pop('last_message', None)  # clear stale message when new prompt arrives
                     self._schedule_session_tile(session_id)
             elif t == 'permission_request':
                 # Hook is blocking on a response -- emit confirmation, wait, reply.
@@ -1176,6 +1305,8 @@ class CodexController:
         loop = asyncio.get_running_loop()
         fut = loop.create_future()
         self._pending_permissions[block_id] = fut
+        self._active_perm_blocks.add(block_id)
+        _save_active_blocks(self._active_perm_blocks)
 
         payload = {
             'title': f'Allow {tool}?',
@@ -1188,6 +1319,8 @@ class CodexController:
         except Exception as e:
             _log(f'emit_block for permission failed: {e}', 'WARN')
             self._pending_permissions.pop(block_id, None)
+            self._active_perm_blocks.discard(block_id)
+            _save_active_blocks(self._active_perm_blocks)
             return 'Deny'
 
         # Mark session as working while waiting for permission
@@ -1206,12 +1339,16 @@ class CodexController:
             value = 'Deny'
         finally:
             self._pending_permissions.pop(block_id, None)
+            self._active_perm_blocks.discard(block_id)
+            _save_active_blocks(self._active_perm_blocks)
             try:
                 await self.clear_block(block_id)
             except Exception:
                 pass
 
         _log(f'Permission resolved: {tool!r} => {value!r}')
+        if value == 'Always Allow' and preview:
+            _append_allowlist(preview)
         return value
 
     async def _start_socket_server(self):
@@ -1271,11 +1408,7 @@ class CodexController:
                     _log(f'chat_message → session={session_id[:12]!r} text={text[:60]!r}')
                     await self._tm_send_text(session_id, text)
                 elif text:
-                    # Fall back to first session if sessionId not matched
-                    sid = next(iter(self._sessions), None)
-                    if sid:
-                        _log(f'chat_message (fallback) → session={sid[:12]!r} text={text[:60]!r}')
-                        await self._tm_send_text(sid, text)
+                    _log(f'chat_message: no matching session for sessionId={session_id!r}, dropping', 'WARN')
             return
 
         # Inbound tool calls from daemon
@@ -1308,26 +1441,41 @@ class CodexController:
             # value is the repo name/path sent by the iPhone picker
             path = self._start_repos.get(value, value)
             if path and path != '(no repos found)':
-                # Store path and ask user to pick session mode before launching.
-                self._pending_launch_path = path
                 project = os.path.basename(path.rstrip('/'))
                 await self.clear_block(START_SESSION_BLOCK_ID)
-                await self.emit_block(MODE_PICK_BLOCK_ID, 'confirmation', {
-                    'title': f'Start "{project}" as…',
-                    'body': 'Interactive opens a Terminal window on this Mac.\nHeadless runs silently in the background.',
-                    'options': ['Interactive', 'Headless'],
-                }, ttl=120)
+                # If a mode is already saved, launch directly — no need to ask again.
+                if 'interactive' in self._settings:
+                    mode = 'Interactive' if self._settings['interactive'] else 'Headless'
+                    _log(f'Launching {project!r} in saved mode: {mode}')
+                    asyncio.create_task(self._launch_codex(path))
+                else:
+                    launch_id = str(uuid.uuid4())[:8]
+                    mode_block_id = f'codex2-mode-{launch_id}'
+                    self._pending_launches[mode_block_id] = path
+                    await self.emit_block(mode_block_id, 'confirmation', {
+                        'title': f'Start "{project}" as…',
+                        'body': 'Interactive opens a Terminal window on this Mac.\nHeadless runs silently in the background.',
+                        'options': ['Interactive', 'Headless'],
+                    }, ttl=120)
             return
 
-        if block_id == MODE_PICK_BLOCK_ID:
-            path = self._pending_launch_path
-            self._pending_launch_path = ''
+        if block_id in self._pending_launches:
+            path = self._pending_launches.pop(block_id)
             self._settings['interactive'] = (value == 'Interactive')
             _save_settings_file(self._settings)
             _log(f'Session mode: {value!r} → launching {path!r}')
-            await self.clear_block(MODE_PICK_BLOCK_ID)
+            await self.clear_block(block_id)
             if path:
                 asyncio.create_task(self._launch_codex(path))
+            return
+
+        if value == '__switch_mode__':
+            # Toggle saved interactive setting and re-emit start block
+            self._settings['interactive'] = not self._settings.get('interactive', True)
+            _save_settings_file(self._settings)
+            mode = 'Interactive' if self._settings['interactive'] else 'Headless'
+            _log(f'Switched mode to {mode}')
+            await self._emit_start_session_block(force=True)
             return
 
         # Find which session this block belongs to (match sanitized prefix)
@@ -1341,16 +1489,19 @@ class CodexController:
             return
 
         if value == '__close_session__':
-            # User tapped Stop — send Ctrl+C twice to interrupt and exit Codex
             info = self._sessions.get(session_id, {})
             tmux_target = info.get('tmux_target', '')
             if tmux_target:
+                # Interrupt any running task then quit Codex CLI
                 subprocess.run([TMUX, 'send-keys', '-t', tmux_target, 'C-c'],
                                capture_output=True, timeout=3)
                 await asyncio.sleep(0.3)
                 subprocess.run([TMUX, 'send-keys', '-t', tmux_target, 'C-c'],
                                capture_output=True, timeout=3)
-                _log(f'Sent C-c x2 to {tmux_target}')
+                await asyncio.sleep(0.3)
+                subprocess.run([TMUX, 'send-keys', '-t', tmux_target, '/quit', 'Enter'],
+                               capture_output=True, timeout=3)
+                _log(f'Sent C-c x2 + /quit to {tmux_target}')
             return
         elif value == '__go_interactive__':
             # User tapped the ghost button — open a Terminal.app window for this session
@@ -1358,13 +1509,31 @@ class CodexController:
             tmux_target = info.get('tmux_target', '')
             if tmux_target:
                 win_target = tmux_target.rsplit('.', 1)[0]
-                attach_cmd = f'tmux attach-session -d -t {win_target}'
+                attach_cmd = f'tmux attach-session -t {win_target}'
                 osascript_script = f'tell application "Terminal" to do script "{attach_cmd}"'
                 subprocess.Popen(['osascript', '-e', osascript_script],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 _log(f'Go interactive: opened Terminal.app for {win_target}')
                 info['is_headless'] = False
                 self._schedule_session_tile(session_id)
+            return
+        elif value == '__view_log__':
+            info = self._sessions.get(session_id, {})
+            tmux_target = info.get('tmux_target', '')
+            if tmux_target:
+                try:
+                    r = subprocess.run(
+                        [TMUX, 'capture-pane', '-t', tmux_target, '-p', '-S', '-50'],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    log_text = r.stdout.strip() if r.returncode == 0 else '(no output)'
+                except Exception as e:
+                    log_text = f'(capture failed: {e})'
+                block_id_log = f'codex2-log-{self._sanitize_id(session_id[:16])}'
+                await self.emit_block(block_id_log, 'info_card', {
+                    'title': info.get('project', session_id[:12]),
+                    'body': log_text[-2000:],
+                }, ttl=60)
             return
         elif '-menu-' in block_id:
             # Value is "N  option text" — extract the leading number to send to tmux
@@ -1403,6 +1572,17 @@ class CodexController:
         server = await self._start_socket_server()
 
         stdin_task = asyncio.create_task(self._read_stdin())
+
+        # Clear any permission blocks orphaned by a previous crash
+        stale_blocks = _load_active_blocks()
+        if stale_blocks:
+            _log(f'Clearing {len(stale_blocks)} orphaned block(s) from previous run')
+            for bid in stale_blocks:
+                try:
+                    await self.clear_block(bid)
+                except Exception:
+                    pass
+            _save_active_blocks(set())
 
         try:
             # Script initiates the MCP handshake with AskMac
