@@ -127,6 +127,7 @@ struct BlockView: View {
         case .confirmation:
             if let p = block.confirmationPayload {
                 ConfirmationBlockView(payload: p, onRespond: onRespond)
+                    .id(p.title + p.options.joined())
             }
         case .alert:
             if let p = block.alertPayload {

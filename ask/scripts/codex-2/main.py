@@ -677,7 +677,7 @@ class CodexController:
         try:
             r = subprocess.run(
                 [TMUX, 'list-panes', '-a', '-F',
-                 '#{session_name}:#{window_index}.#{pane_index} #{pane_current_command}'],
+                 '#{session_name}:#{window_name}.#{pane_index} #{pane_current_command}'],
                 capture_output=True, text=True, timeout=3,
             )
             for line in r.stdout.strip().splitlines():
@@ -693,16 +693,15 @@ class CodexController:
                 synth_id = f'tmux-{target}'
                 if synth_id in self._sessions:
                     continue
-                # Skip if a real (non-synthetic) session already covers this tmux target.
-                # This prevents duplicate sessions after codex-2 reloads while Codex is running.
-                target_prefix = target.split('.')[0]  # e.g. "codex:0"
-                real_exists = any(
-                    not sid.startswith('tmux-') and
+                # Skip if any known session already maps to this tmux target.
+                # Prevents duplicate sessions after codex-2 reloads while Codex is running.
+                target_prefix = target.split('.')[0]  # e.g. "codex:ask"
+                already_tracked = any(
                     info.get('tmux_target', '').split('.')[0] == target_prefix
-                    for sid, info in self._sessions.items()
+                    for info in self._sessions.values()
                 )
-                if real_exists:
-                    _log(f'Skipping discovery for {target} — real session already registered')
+                if already_tracked:
+                    _log(f'Skipping discovery for {target} — session already tracked')
                     continue
                 _log(f'Discovered idle Codex session at {target}')
                 pid = _get_pane_pid(target)
