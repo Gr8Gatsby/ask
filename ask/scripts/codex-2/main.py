@@ -752,7 +752,7 @@ class CodexController:
             except Exception as e:
                 _log(f'Poll error for {session_id[:12]}: {e}', 'WARN')
 
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(0.5)
 
         # Clean up TUI block when session ends
         if active_tui_block:

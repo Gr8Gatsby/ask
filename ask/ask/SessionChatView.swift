@@ -244,11 +244,8 @@ struct SessionChatView: View {
                     sessionId: sessionId, role: "system", entryKind: "event", text: "Session ended"
                 ))
                 try? modelContext.save()
-                // Auto-pop back to script screen after a brief moment
-                Task {
-                    try? await Task.sleep(for: .milliseconds(800))
-                    dismiss()
-                }
+                // Stay in conversation so the user can see the last message and any
+                // pending action blocks; they can navigate back with the back button.
             }
         }
         // Reconnecting banner handles the disconnected UI state.
