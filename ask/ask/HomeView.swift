@@ -532,8 +532,9 @@ struct HomeView: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
-        .background(.regularMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+        .background(Color(.systemBackground), in: Capsule())
+        .overlay(Capsule().strokeBorder(.primary.opacity(0.12), lineWidth: 1))
+        .shadow(color: .black.opacity(0.22), radius: 16, y: 6)
         .padding(.horizontal, 32)
         .padding(.bottom, 16)
         .padding(.top, 4)
@@ -1247,6 +1248,7 @@ struct ScriptDetailView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.modelContext) private var modelContext
     @AppStorage("useBrandColors") private var useBrandColors: Bool = true
 
     // Detail-push navigation state (for list→detail block pattern)
@@ -1325,6 +1327,26 @@ struct ScriptDetailView: View {
         }
     }
 
+    /// Persists a session-linked confirmation block into ChatEntry so it's visible in Chat
+    /// even after the block is cleared from CloudKit before the user navigates there.
+    private func seedConfirmationToChatEntry(block: RKBlock, sessionId: String) {
+        let blockID = block.id
+        let descriptor = FetchDescriptor<ChatEntry>(
+            predicate: #Predicate { $0.blockID == blockID }
+        )
+        guard (try? modelContext.fetch(descriptor))?.isEmpty ?? true else { return }
+        let title = block.confirmationPayload?.title ?? "Request"
+        modelContext.insert(ChatEntry(
+            sessionId: sessionId,
+            role: "system",
+            entryKind: "inlineBlock",
+            text: title,
+            blockID: block.id,
+            blockJSON: block.payloadJSON
+        ))
+        try? modelContext.save()
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -1381,6 +1403,15 @@ struct ScriptDetailView: View {
                         try? await Task.sleep(for: .milliseconds(300))
                         dismiss()
                     }
+                }
+            }
+            .onChange(of: allBlocks.map(\.id)) { _, _ in
+                // Persist any session-linked confirmation blocks to ChatEntry as soon as
+                // they appear in allBlocks, so Chat has a record even if the block is
+                // cleared before the user navigates there.
+                for block in group.blocks where block.blockType == .confirmation {
+                    guard let sessionId = block.confirmationPayload?.sessionId else { continue }
+                    seedConfirmationToChatEntry(block: block, sessionId: sessionId)
                 }
             }
             .navigationBarTitleDisplayMode(.inline)

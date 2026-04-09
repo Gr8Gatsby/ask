@@ -2697,7 +2697,7 @@ private struct MacFeedView: View {
     @Environment(ActionHistoryService.self) private var history
     @State private var feedFilter: FeedFilter? = .all
     @State private var selectedEvent: HistoryEvent?
-    @State private var showVerbose = false
+    @State private var showVerbose = true
 
     private var filteredEvents: [HistoryEvent] {
         switch feedFilter {
@@ -2820,23 +2820,34 @@ private struct MacFeedView: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            HStack {
-                Spacer()
-                Button { showVerbose.toggle() } label: {
-                    Label(
-                        showVerbose ? "Compact" : "Table",
-                        systemImage: showVerbose ? "list.bullet" : "tablecells"
-                    )
-                    .font(.caption)
+            VStack(spacing: 0) {
+                Divider()
+                HStack {
+                    Spacer()
+                    Button { showVerbose.toggle() } label: {
+                        Label(
+                            showVerbose ? "Compact" : "Table",
+                            systemImage: showVerbose ? "list.bullet" : "tablecells"
+                        )
+                        .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(showVerbose ? Color.accentColor : Color.secondary)
+                    .help(showVerbose ? "Switch to compact view" : "Switch to table view")
+                    Button {
+                        history.purge()
+                    } label: {
+                        Label("Purge Log", systemImage: "trash")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(Color.secondary)
+                    .help("Delete all log entries")
                 }
-                .buttonStyle(.borderless)
-                .foregroundStyle(showVerbose ? Color.accentColor : Color.secondary)
-                .help(showVerbose ? "Switch to compact view" : "Switch to table view")
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(.bar)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(.bar)
-            Divider()
         }
     }
 

@@ -110,6 +110,14 @@ struct askApp: App {
     init() {
         let container = CKContainer(identifier: CKSchema.containerID)
         _push = State(initialValue: PushService(container: container))
+
+        let appearance = UINavigationBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = UIColor.systemBackground
+        appearance.shadowColor = UIColor.separator.withAlphaComponent(0.5)
+        UINavigationBar.appearance().standardAppearance = appearance
+        UINavigationBar.appearance().compactAppearance = appearance
+        UINavigationBar.appearance().scrollEdgeAppearance = appearance
     }
 
     var body: some Scene {

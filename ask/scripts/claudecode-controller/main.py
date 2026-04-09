@@ -145,11 +145,9 @@ class MCPClient:
         self._write({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         self._initialized = True
         print('[claudecode-controller] MCP initialized', file=sys.stderr)
-        # Restore sessions from disk (pid-* sessions are NOT persisted, so none load here),
-        # then scan for live claude processes to register fresh pid-* entries.
+        # Restore sessions from disk, then backfill TTYs BEFORE discovery so that
+        # _discover_active_processes sees the real sessions' TTYs and doesn't create duplicates.
         self._load_sessions()
-        await self._discover_active_processes()
-        # Backfill TTYs before re-registering so sessions have routing info.
         backfilled = False
         for session_id, info in list(self._sessions.items()):
             if not info.get('tty') and info.get('cwd'):
@@ -160,6 +158,8 @@ class MCPClient:
                     print(f'[claudecode-controller] startup TTY backfill: {session_id} -> {tty}', file=sys.stderr)
         if backfilled:
             self._save_sessions()
+        # Now scan for any claude processes not yet tracked (backfill ensures no duplicates).
+        await self._discover_active_processes()
         # Re-register ALL sessions with terminal-manager BEFORE pruning.
         # TM loses its registry on restart; if we prune first, real sessions that
         # haven't re-registered yet look dead and get incorrectly evicted.
@@ -878,10 +878,10 @@ class MCPClient:
                 if isinstance(info, dict) and info.get('last_seen', 0) >= cutoff
             }
             # Deduplicate: one session per TTY — prefer real over pid-*, newest over old.
-            seen_ttys: dict[str, str] = {}  # tty -> winning session_id
+            seen_ttys: dict[str, str] = {}  # normalized tty -> winning session_id
             for sid, info in sorted(self._sessions.items(),
                                     key=lambda x: (x[0].startswith('pid-'), -x[1].get('last_seen', 0))):
-                tty = info.get('tty', '')
+                tty = self._normalize_tty(info.get('tty', ''))
                 if not tty:
                     continue
                 if tty not in seen_ttys:
@@ -939,7 +939,8 @@ class MCPClient:
                 continue
             # Skip if an existing session already owns this PID or TTY.
             # TTY check catches hook sessions (which don't store claude_pid) on the same terminal.
-            if any(info.get('claude_pid') == pid or info.get('tty') == tty
+            norm_tty = self._normalize_tty(tty)
+            if any(info.get('claude_pid') == pid or self._normalize_tty(info.get('tty', '')) == norm_tty
                    for info in self._sessions.values()):
                 continue
             if self._register_session(synthetic_id, cwd, claude_pid=pid):
@@ -1092,6 +1093,21 @@ class MCPClient:
         return True
 
     @staticmethod
+    def _normalize_tty(tty: str) -> str:
+        """Normalize TTY to short form (e.g. 's003') for consistent comparison.
+
+        ps returns 's003'; Claude Code hooks return 'ttys003'; both must compare equal.
+        Strips any /dev/ prefix, then strips the 'tty' prefix from ttys*/ttyp* forms."""
+        if not tty:
+            return tty
+        if tty.startswith('/dev/'):
+            tty = tty[5:]
+        # 'ttys003' -> 's003', 'ttyp0' -> 'p0', etc.
+        if tty.startswith('tty') and len(tty) > 3:
+            tty = tty[3:]
+        return tty
+
+    @staticmethod
     def _detect_headless(tty: str) -> bool:
         """Return True if the given TTY belongs to a tmux pane with no attached clients.
 
@@ -1128,10 +1144,11 @@ class MCPClient:
         the same TTY is stale and would create a duplicate card on iOS."""
         if not tty:
             return
+        tty = self._normalize_tty(tty)
         for sid in list(self._sessions.keys()):
             if sid == keep_session_id:
                 continue
-            if self._sessions[sid].get('tty') == tty:
+            if self._normalize_tty(self._sessions[sid].get('tty', '')) == tty:
                 _log(f'[claudecode] evicting {sid} — TTY {tty} superseded by {keep_session_id[:8]}')
                 asyncio.create_task(self.clear_block(self._session_block_id(sid)))
                 del self._sessions[sid]
@@ -1141,7 +1158,7 @@ class MCPClient:
         """Called by PostToolUse — registers the session and emits an initial block."""
         session_id = msg.get('session_id', '')
         cwd = msg.get('cwd', '') or msg.get('tool_cwd', '')
-        tty = msg.get('tty')
+        tty = self._normalize_tty(msg.get('tty') or '')
         if not session_id:
             return
         is_new = self._register_session(session_id, cwd)
@@ -1266,71 +1283,56 @@ class MCPClient:
             await self._route_to_terminal(session_id, value)
 
     async def _close_session(self, session_id: str):
-        """Send Ctrl+C to the terminal running this session, then remove it."""
+        """Stop the Claude Code process and remove the session."""
         session = self._sessions.get(session_id, {})
         tty_short = session.get('tty', '')
+        tmux_target = session.get('tmux_target', '')
         _log(f'[claudecode] close_session {session_id} tty={tty_short!r}')
 
-        # Try terminal-manager first — handles both TTY (Terminal.app) and tmux uniformly.
-        # Must send before unregistering so the session is still known to terminal-manager.
-        ctrl_c_sent = False
-        try:
-            for _ in range(2):
-                r = await self._rpc('tools/call', {
-                    'name': 'send_key',
-                    'arguments': {'session_id': session_id, 'key': 'ctrl_c'}
-                }, timeout=3.0)
-                if isinstance(r, dict) and r.get('ok'):
-                    ctrl_c_sent = True
-                await asyncio.sleep(0.3)
-        except Exception as e:
-            _log(f'[claudecode] close_session send_key failed: {e}')
-
-        # Fallback: bespoke osascript for Terminal.app TTY sessions
-        if not ctrl_c_sent and tty_short:
-            if tty_short.startswith('/dev/'):
-                full_tty = tty_short
-            elif tty_short.startswith('ttys') or tty_short.startswith('ttyp'):
-                full_tty = f'/dev/{tty_short}'
-            else:
-                full_tty = f'/dev/tty{tty_short}'
-            safe_tty = full_tty.replace('"', '\\"')
-            script = f'''
-set targetTTY to "{safe_tty}"
-tell application "Terminal"
-    repeat with w in every window
-        repeat with t in every tab of w
-            try
-                if tty of t is targetTTY then
-                    set selected tab of w to t
-                    set index of w to 1
-                    activate
-                    exit repeat
-                end if
-            end try
-        end repeat
-    end repeat
-end tell
-delay 0.3
-tell application "System Events"
-    keystroke "c" using control down
-end tell
-delay 0.5
-tell application "System Events"
-    keystroke "c" using control down
-end tell
-'''
+        # Priority 1: direct SIGINT to the claude process by PID.
+        # Works regardless of terminal mode, no Accessibility needed.
+        # Find PID from session, or look it up from the TTY.
+        claude_pid = session.get('claude_pid')
+        if not claude_pid and tty_short:
             try:
-                proc = await asyncio.create_subprocess_exec(
-                    'osascript', '-e', script,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                _, err = await asyncio.wait_for(proc.communicate(), timeout=8.0)
-                if err and err.strip():
-                    _log(f'[claudecode] close_session osascript error: {err.decode().strip()}')
+                import subprocess as _sp
+                r = _sp.run(['ps', '-eo', 'pid,tty,comm'],
+                            capture_output=True, text=True, timeout=2)
+                full_tty = tty_short if not tty_short.startswith('ttys') else tty_short
+                for line in r.stdout.splitlines()[1:]:
+                    parts = line.split()
+                    if len(parts) >= 3 and parts[1] == full_tty and 'claude' in parts[2].lower():
+                        claude_pid = int(parts[0])
+                        break
+            except Exception:
+                pass
+
+        killed = False
+        if claude_pid and self._is_pid_alive(claude_pid):
+            try:
+                import signal as _sig
+                os.kill(claude_pid, _sig.SIGINT)
+                _log(f'[claudecode] close_session SIGINT → pid {claude_pid}')
+                await asyncio.sleep(0.8)
+                if self._is_pid_alive(claude_pid):
+                    os.kill(claude_pid, _sig.SIGTERM)
+                    _log(f'[claudecode] close_session SIGTERM → pid {claude_pid}')
+                killed = True
             except Exception as e:
-                _log(f'[claudecode] close_session osascript failed: {e}')
+                _log(f'[claudecode] close_session kill failed: {e}')
+
+        # Priority 2: tmux send-keys C-c (for tmux sessions without a reachable PID)
+        if not killed and tmux_target:
+            try:
+                for _ in range(2):
+                    await self._rpc('tools/call', {
+                        'name': 'send_key',
+                        'arguments': {'session_id': session_id, 'key': 'ctrl_c'}
+                    }, timeout=3.0)
+                    await asyncio.sleep(0.3)
+                _log(f'[claudecode] close_session ctrl_c via tmux send-keys')
+            except Exception as e:
+                _log(f'[claudecode] close_session tmux ctrl_c failed: {e}')
 
         # Remove from tracked sessions and clear the iOS block
         asyncio.create_task(self._tm_unregister(session_id))
@@ -1865,7 +1867,7 @@ end tell
             payload['session_id'] = session_id
         # Capture TTY from the permission hook — ensures the session block is surfaced
         # even on the very first tool use before any PostToolUse has fired.
-        tty = msg.get('tty')
+        tty = self._normalize_tty(msg.get('tty') or '')
         if tty and session_id and session_id in self._sessions and not self._sessions[session_id].get('tty'):
             self._sessions[session_id]['tty'] = tty
             self._save_sessions()
@@ -1898,7 +1900,7 @@ end tell
         session_id = msg.get('session_id', '')
         tool_name = msg.get('tool_name', '')
         cwd = msg.get('cwd', '')
-        tty = msg.get('tty')
+        tty = self._normalize_tty(msg.get('tty') or '')
         if not session_id or not tool_name:
             return
         # Register session if new; refresh the block TTL on every tool use.
@@ -2008,7 +2010,7 @@ end tell
         the process immediately, without waiting for the first PostToolUse."""
         session_id = msg.get('session_id', '')
         cwd = msg.get('cwd', '')
-        tty = msg.get('tty')           # Captured by session_start.py from the process tree
+        tty = self._normalize_tty(msg.get('tty') or '')  # Captured by session_start.py from the process tree
         claude_pid = msg.get('claude_pid')  # PID of the claude process
         if not session_id:
             return
@@ -2159,7 +2161,7 @@ async def _session_heartbeat(client):
         seen_ttys: dict = {}
         for sid, info in sorted(client._sessions.items(),
                                 key=lambda x: -x[1].get('last_seen', 0)):
-            tty = info.get('tty', '')
+            tty = client._normalize_tty(info.get('tty', ''))
             if not tty:
                 continue
             if tty not in seen_ttys:

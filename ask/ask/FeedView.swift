@@ -3,6 +3,79 @@ import CloudKit
 import SwiftData
 import Charts
 
+// MARK: - Shared palette & helpers
+
+private let feedPalette: [Color] = [
+    Color(hue: 0.60, saturation: 0.7, brightness: 0.80),
+    Color(hue: 0.95, saturation: 0.6, brightness: 0.80),
+    Color(hue: 0.13, saturation: 0.8, brightness: 0.85),
+    Color(hue: 0.35, saturation: 0.6, brightness: 0.70),
+    Color(hue: 0.75, saturation: 0.55, brightness: 0.80),
+    Color(hue: 0.05, saturation: 0.7, brightness: 0.80),
+]
+
+/// Ordered unique scriptIDs from history, oldest-first — gives stable color assignment.
+private func orderedScriptIDs(from history: [FeedHistoryEntry]) -> [String] {
+    var seen = Set<String>()
+    var ordered: [String] = []
+    for entry in history.sorted(by: { $0.createdAt < $1.createdAt }) {
+        if seen.insert(entry.scriptID).inserted { ordered.append(entry.scriptID) }
+    }
+    return ordered
+}
+
+private func feedColor(for scriptID: String, orderedIDs: [String]) -> Color {
+    let idx = orderedIDs.firstIndex(of: scriptID) ?? 0
+    return feedPalette[idx % feedPalette.count]
+}
+
+/// Relative time: minutes → hours → days, no seconds.
+private func coarseRelativeTime(_ date: Date) -> String {
+    let secs = Int(Date().timeIntervalSince(date))
+    if secs < 0 { return "just now" }
+    let mins = secs / 60
+    if mins < 1  { return "just now" }
+    if mins < 60 { return "\(mins) min" }
+    let hrs = mins / 60
+    if hrs  < 24 { return "\(hrs) hr" }
+    return "\(hrs / 24) d"
+}
+
+/// Relative time with hr+min detail for the detail view.
+private func detailedRelativeTime(_ date: Date) -> String {
+    let secs = Int(Date().timeIntervalSince(date))
+    if secs < 0 { return "just now" }
+    let mins = secs / 60
+    if mins < 1  { return "just now" }
+    if mins < 60 { return "\(mins) min" }
+    let hrs = mins / 60
+    let rem = mins % 60
+    if hrs < 24 { return rem > 0 ? "\(hrs) hr, \(rem) min" : "\(hrs) hr" }
+    return "\(hrs / 24) d"
+}
+
+// MARK: - Display item model
+
+private enum FeedDisplayItem: Identifiable {
+    case single(FeedHistoryEntry)
+    case burst(scriptID: String, scriptName: String?, iconData: String?, icon: String?,
+               entries: [FeedHistoryEntry])
+
+    var id: String {
+        switch self {
+        case .single(let e):          return e.blockID
+        case .burst(_, _, _, _, let entries): return "burst-\(entries.first?.blockID ?? UUID().uuidString)"
+        }
+    }
+}
+
+private struct BurstSelection: Identifiable {
+    let id = UUID()
+    let scriptID: String
+    let scriptName: String?
+    let entries: [FeedHistoryEntry]
+}
+
 // MARK: - FeedView
 
 struct FeedView: View {
@@ -16,6 +89,7 @@ struct FeedView: View {
     @State private var pollTask: Task<Void, Never>?
     @State private var hasLoaded = false
     @State private var selectedEntry: FeedHistoryEntry?
+    @State private var selectedBurst: BurstSelection?
 
     @Query(sort: \FeedHistoryEntry.createdAt, order: .reverse)
     private var history: [FeedHistoryEntry]
@@ -29,6 +103,38 @@ struct FeedView: View {
         history.filter { $0.scriptID == scriptID }
     }
 
+    // Stable color IDs derived from full history (oldest appearance first)
+    private var scriptIDs: [String] { orderedScriptIDs(from: history) }
+
+    // Group consecutive same-script runs of 2+ into burst cards
+    private var displayItems: [FeedDisplayItem] {
+        guard !history.isEmpty else { return [] }
+        var items: [FeedDisplayItem] = []
+        var run: [FeedHistoryEntry] = [history[0]]
+
+        func commit(_ r: [FeedHistoryEntry]) {
+            if r.count >= 2 {
+                let first = r[0]
+                items.append(.burst(scriptID: first.scriptID, scriptName: first.scriptName,
+                                    iconData: first.scriptIconData, icon: first.scriptIcon,
+                                    entries: r))
+            } else {
+                items.append(.single(r[0]))
+            }
+        }
+
+        for entry in history.dropFirst() {
+            if entry.scriptID == run[0].scriptID {
+                run.append(entry)
+            } else {
+                commit(run)
+                run = [entry]
+            }
+        }
+        commit(run)
+        return items
+    }
+
     var body: some View {
         Group {
             if !hasLoaded {
@@ -40,6 +146,16 @@ struct FeedView: View {
         }
         .sheet(item: $selectedEntry) { entry in
             FeedItemDetailView(entry: entry, scriptEntries: historyFor(entry.scriptID))
+        }
+        .sheet(item: $selectedBurst) { burst in
+            NavigationStack {
+                FeedScriptDetailView(scriptID: burst.scriptID, entries: burst.entries)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { selectedBurst = nil }
+                        }
+                    }
+            }
         }
         .task {
             await load()
@@ -59,12 +175,12 @@ struct FeedView: View {
     private var feedList: some View {
         List {
             Section {
-                ActivitySparklineCard(history: history)
+                ActivitySparklineCard(history: history, scriptIDs: scriptIDs)
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
             }
 
             Section {
-                if history.isEmpty {
+                if displayItems.isEmpty {
                     ContentUnavailableView {
                         Label("No Feed Activity", systemImage: "tray")
                     } description: {
@@ -73,9 +189,23 @@ struct FeedView: View {
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets())
                 } else {
-                    ForEach(history) { entry in
-                        FeedEntryRow(entry: entry) {
-                            selectedEntry = entry
+                    ForEach(displayItems) { item in
+                        switch item {
+                        case .single(let entry):
+                            FeedEntryRow(
+                                entry: entry,
+                                color: feedColor(for: entry.scriptID, orderedIDs: scriptIDs)
+                            ) { selectedEntry = entry }
+
+                        case .burst(let sid, let name, _, _, let entries):
+                            FeedBurstRow(
+                                scriptID: sid,
+                                scriptName: name,
+                                entries: entries,
+                                color: feedColor(for: sid, orderedIDs: scriptIDs)
+                            ) {
+                                selectedBurst = BurstSelection(scriptID: sid, scriptName: name, entries: entries)
+                            }
                         }
                     }
                 }
@@ -131,25 +261,42 @@ struct FeedView: View {
 
 private struct ActivitySparklineCard: View {
     let history: [FeedHistoryEntry]
+    let scriptIDs: [String]
 
-    private struct HourBucket: Identifiable {
-        let id: Int
+    private struct ScriptBucket: Identifiable {
+        let id: String
         let start: Date
+        let scriptID: String
+        let scriptName: String
         let count: Int
     }
 
-    private var buckets: [HourBucket] {
-        let now = Date()
-        let cal = Calendar.current
-        return (0..<24).map { i in
-            let start = cal.date(byAdding: .hour, value: -(24 - i), to: now)!
-            let end   = cal.date(byAdding: .hour, value: -(23 - i), to: now)!
-            let count = history.filter { $0.createdAt >= start && $0.createdAt < end }.count
-            return HourBucket(id: i, start: start, count: count)
-        }
+    private var windowStart: Date {
+        Calendar.current.date(byAdding: .hour, value: -24, to: Date())!
     }
 
-    private var lastActivity: Date? { history.map(\.createdAt).max() }
+    private var buckets: [ScriptBucket] {
+        let cal = Calendar.current
+        let now = Date()
+        let start24 = cal.date(byAdding: .hour, value: -24, to: now)!
+        let recent = history.filter { $0.createdAt >= start24 }
+        let scripts = scriptIDs.filter { sid in recent.contains { $0.scriptID == sid } }
+        var result: [ScriptBucket] = []
+        for i in 0..<24 {
+            let sliceStart = cal.date(byAdding: .hour, value: -(24 - i), to: now)!
+            let sliceEnd   = cal.date(byAdding: .hour, value: -(23 - i), to: now)!
+            let inHour = recent.filter { $0.createdAt >= sliceStart && $0.createdAt < sliceEnd }
+            for sid in scripts {
+                let count = inHour.filter { $0.scriptID == sid }.count
+                if count > 0 {
+                    let name = inHour.first { $0.scriptID == sid }?.scriptName ?? sid
+                    result.append(ScriptBucket(id: "\(i)-\(sid)", start: sliceStart,
+                                               scriptID: sid, scriptName: name, count: count))
+                }
+            }
+        }
+        return result
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -157,68 +304,140 @@ private struct ActivitySparklineCard: View {
                 Text("Activity")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
-                if let date = lastActivity {
-                    Text(date, style: .relative)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text("\(history.count) events · 24 h")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Chart(buckets) { bucket in
                 BarMark(
-                    x: .value("Hour", bucket.start),
+                    x: .value("Hour", bucket.start, unit: .hour),
                     y: .value("Events", bucket.count)
                 )
-                .foregroundStyle(Color.secondary.opacity(0.55))
+                .foregroundStyle(by: .value("Script", bucket.scriptName))
                 .cornerRadius(2)
             }
+            .chartForegroundStyleScale { (name: String) in
+                let idx = buckets.first(where: { $0.scriptName == name })
+                    .flatMap { b in scriptIDs.firstIndex(of: b.scriptID) } ?? 0
+                return feedPalette[idx % feedPalette.count]
+            }
+            .chartXScale(domain: windowStart...Date())
             .chartXAxis(.hidden)
             .chartYAxis(.hidden)
-            .frame(height: 44)
-
-            Text("\(history.count) events · 24 h")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+            .chartLegend(.hidden)
+            .frame(height: 64)
         }
         .padding(.vertical, 4)
     }
 }
 
-// MARK: - Feed entry row
+// MARK: - Feed entry row (single)
 
 private struct FeedEntryRow: View {
     let entry: FeedHistoryEntry
+    let color: Color
     let onTap: () -> Void
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 12) {
-                FeedIconView(iconData: entry.scriptIconData, sfSymbol: entry.scriptIcon ?? "doc.text")
+            HStack(spacing: 0) {
+                // Colored left stripe
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(color)
+                    .frame(width: 3)
+                    .padding(.trailing, 9)
 
-                VStack(alignment: .leading, spacing: 2) {
+                FeedIconView(iconData: entry.scriptIconData, sfSymbol: entry.scriptIcon ?? "doc.text")
+                    .frame(width: 22, height: 22)
+
+                VStack(alignment: .leading, spacing: 1) {
                     Text(entry.scriptName ?? entry.scriptID)
-                        .font(.footnote)
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                     Text(entry.headline)
-                        .font(.subheadline)
+                        .font(.footnote)
                         .foregroundStyle(.primary)
-                        .lineLimit(2)
+                        .lineLimit(1)
                 }
+                .padding(.leading, 9)
 
                 Spacer()
 
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text(entry.createdAt, style: .relative)
+                HStack(spacing: 5) {
+                    if let statusColor = entry.statusColor {
+                        Circle()
+                            .fill(namedColor(statusColor))
+                            .frame(width: 6, height: 6)
+                    }
+                    Text(coarseRelativeTime(entry.createdAt))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
-                    if let color = entry.statusColor {
-                        Circle()
-                            .fill(namedColor(color))
-                            .frame(width: 7, height: 7)
-                    }
+                        .monospacedDigit()
                 }
             }
-            .padding(.vertical, 2)
+            .padding(.vertical, 1)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Feed burst row (grouped)
+
+private struct FeedBurstRow: View {
+    let scriptID: String
+    let scriptName: String?
+    let entries: [FeedHistoryEntry]
+    let color: Color
+    let onTap: () -> Void
+
+    // entries are newest-first; oldest is last
+    private var newest: FeedHistoryEntry { entries[0] }
+    private var oldest: FeedHistoryEntry { entries[entries.count - 1] }
+
+    private var timeRange: String {
+        let t1 = coarseRelativeTime(oldest.createdAt)
+        let t2 = coarseRelativeTime(newest.createdAt)
+        return t1 == t2 ? t1 : "\(t2) – \(t1)"
+    }
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 0) {
+                // Colored left stripe
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(color)
+                    .frame(width: 3)
+                    .padding(.trailing, 9)
+
+                FeedIconView(iconData: newest.scriptIconData, sfSymbol: newest.scriptIcon ?? "doc.text")
+                    .frame(width: 22, height: 22)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(scriptName ?? scriptID)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 4) {
+                        Text("\(entries.count) events")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(.primary)
+                        Text("·")
+                            .font(.footnote)
+                            .foregroundStyle(.tertiary)
+                        Text(timeRange)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.leading, 9)
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.vertical, 1)
         }
         .buttonStyle(.plain)
     }
@@ -233,18 +452,18 @@ struct FeedScriptDetailView: View {
     var body: some View {
         List {
             ForEach(entries) { entry in
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Circle()
-                            .fill(namedColor(entry.statusColor))
-                            .frame(width: 8, height: 8)
-                        Text(entry.headline)
-                            .font(.subheadline.weight(.medium))
-                        Spacer()
-                        Text(entry.createdAt, style: .relative)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(namedColor(entry.statusColor))
+                        .frame(width: 7, height: 7)
+                    Text(entry.headline)
+                        .font(.footnote)
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    Text(detailedRelativeTime(entry.createdAt))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
                 }
                 .padding(.vertical, 2)
             }

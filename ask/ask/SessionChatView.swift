@@ -146,6 +146,13 @@ struct SessionChatView: View {
         }
     }
 
+    /// Linked confirmation blocks that are still live (in allBlocks) and not yet responded to.
+    private var pendingLinkedConfirmations: [RKBlock] {
+        linkedConfirmations.filter { block in
+            !entries.contains(where: { $0.blockID == block.id && $0.resolvedValue != nil })
+        }
+    }
+
     /// True while the session block is present in allBlocks.
     private var isActive: Bool { liveBlock != nil }
 
@@ -164,6 +171,11 @@ struct SessionChatView: View {
             chatThread
             if isActive, let pc = livePayload?.pendingConfirmation, let block = liveBlock {
                 pendingConfirmationBar(pc: pc, block: block)
+            }
+            ForEach(pendingLinkedConfirmations, id: \.id) { block in
+                if let cp = block.confirmationPayload {
+                    pendingLinkedConfirmationBar(block: block, cp: cp)
+                }
             }
             Divider()
             composeBar
@@ -264,7 +276,7 @@ struct SessionChatView: View {
     private var chatThread: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 4) {
+                VStack(spacing: 4) {
                     ForEach(entries, id: \.entryID) { entry in
                         chatEntryView(for: entry)
                             .id(entry.entryID)
@@ -393,6 +405,34 @@ struct SessionChatView: View {
     }
 
     @ViewBuilder
+    private func pendingLinkedConfirmationBar(block: RKBlock, cp: RKConfirmationPayload) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(cp.title)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(cp.options, id: \.self) { option in
+                        Button(option) {
+                            Task {
+                                await onRespond(block, option)
+                                markLinkedConfirmationResolved(block: block, value: option)
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.orange)
+                        .font(.footnote)
+                    }
+                }
+                .padding(.horizontal)
+            }
+        }
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+    }
+
+    @ViewBuilder
     private func modeToggle(block: RKBlock) -> some View {
         let isFullAuto = livePayload?.permissionMode == "full-auto"
         Button {
@@ -503,6 +543,34 @@ struct SessionChatView: View {
             text: title,
             blockID: block.id,
             blockJSON: block.payloadJSON
+        ))
+        try? modelContext.save()
+    }
+
+    private func markLinkedConfirmationResolved(block: RKBlock, value: String) {
+        // If an InlineBlockCard entry exists for this block, mark it resolved.
+        // If not (bar was shown before the entry was inserted), insert a resolved entry.
+        if let entry = entries.first(where: { $0.blockID == block.id }) {
+            entry.resolvedValue = value
+        } else {
+            let title = block.confirmationPayload?.title ?? "Request"
+            let entry = ChatEntry(
+                sessionId: sessionId,
+                role: "system",
+                entryKind: "inlineBlock",
+                text: title,
+                blockID: block.id,
+                blockJSON: block.payloadJSON,
+                resolvedValue: value
+            )
+            modelContext.insert(entry)
+        }
+        modelContext.insert(ChatEntry(
+            sessionId: sessionId,
+            role: "user",
+            entryKind: "blockResponse",
+            text: "Chose: \(value)",
+            resolvedValue: value
         ))
         try? modelContext.save()
     }

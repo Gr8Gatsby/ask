@@ -15,6 +15,10 @@ struct MachineRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(machine.name)
                     .font(.body)
+                Text(machine.id)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
                 HStack(spacing: 4) {
                     Image(systemName: machine.connectionStatus.systemImage)
                         .font(.caption2)

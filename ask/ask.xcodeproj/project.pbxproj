@@ -654,9 +654,9 @@
 		AA000008000000000000AA01 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = ../AskMac/Sources/AskMac/AskMac.entitlements;
-				CODE_SIGN_IDENTITY = "Developer ID Application: Kevin Hill (B5J28L8ARB)";
-				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_ENTITLEMENTS = ../AskMac/Sources/AskMac/AskMacDev.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = B5J28L8ARB;
@@ -671,7 +671,6 @@
 				MARKETING_VERSION = 0.7.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.kevinhill.askmac;
 				PRODUCT_NAME = AskMac;
-				PROVISIONING_PROFILE_SPECIFIER = "036fee16-227d-478a-a99e-021fe8ec952d";
 				SDKROOT = macosx;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;

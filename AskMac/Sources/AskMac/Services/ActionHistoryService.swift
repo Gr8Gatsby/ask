@@ -286,6 +286,11 @@ final class ActionHistoryService: @unchecked Sendable {
         append(event)
     }
 
+    func purge() {
+        events = []
+        try? FileManager.default.removeItem(at: fileURL)
+    }
+
     private func append(_ event: HistoryEvent) {
         guard let data = try? encoder.encode(event),
               let line = String(data: data, encoding: .utf8) else { return }
