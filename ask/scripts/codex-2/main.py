@@ -1180,11 +1180,12 @@ class CodexController:
         # Open a Terminal.app window attached to the new pane if interactive mode is on
         if self._settings.get('interactive', True) and pane_target:
             try:
-                # Target the specific window (e.g. 'codex:2' from 'codex:2.0')
                 win_target = pane_target.rsplit('.', 1)[0]
-                # -d detaches any existing clients first so only one Terminal window
-                # is ever attached — prevents shared input across multiple terminals.
-                attach_cmd = f'tmux attach-session -t {win_target}'
+                # Select the window now (by name, before auto-rename kicks in),
+                # then attach to the session — avoids "can't find window" errors.
+                subprocess.run([TMUX, 'select-window', '-t', win_target],
+                               capture_output=True, timeout=3)
+                attach_cmd = f'tmux attach-session -t codex'
                 osascript_script = f'tell application "Terminal" to do script "{attach_cmd}"'
                 subprocess.Popen(['osascript', '-e', osascript_script],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1520,7 +1521,11 @@ class CodexController:
             tmux_target = info.get('tmux_target', '')
             if tmux_target:
                 win_target = tmux_target.rsplit('.', 1)[0]
-                attach_cmd = f'tmux attach-session -t {win_target}'
+                # Select the window first (while name may still be valid),
+                # then attach to the session to avoid "can't find window" errors.
+                subprocess.run([TMUX, 'select-window', '-t', win_target],
+                               capture_output=True, timeout=3)
+                attach_cmd = f'tmux attach-session -t codex'
                 osascript_script = f'tell application "Terminal" to do script "{attach_cmd}"'
                 subprocess.Popen(['osascript', '-e', osascript_script],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
