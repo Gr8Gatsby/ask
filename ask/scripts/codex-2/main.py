@@ -25,9 +25,17 @@ SOCKET_PATH  = os.environ.get('ASK_SOCKET_PATH',
 LOG_PATH     = os.path.expanduser('~/.ask/logs/codex-2.log')
 TILE_ID               = 'codex-2-tile'
 START_SESSION_BLOCK_ID = 'codex2-start'
-SETTINGS_PATH         = os.path.expanduser('~/.ask/codex2-settings.json')
-ALLOWLIST_PATH        = os.path.expanduser('~/.ask/codex_allowlist.json')
-ACTIVE_BLOCKS_PATH    = os.path.expanduser('~/.ask/codex2-active-blocks.json')
+# Paths are overridable via env vars for testing
+SETTINGS_PATH      = os.environ.get('ASK_CODEX2_SETTINGS_PATH',
+                     os.path.expanduser('~/.ask/codex2-settings.json'))
+ALLOWLIST_PATH     = os.environ.get('ASK_CODEX2_ALLOWLIST_PATH',
+                     os.path.expanduser('~/.ask/codex_allowlist.json'))
+ACTIVE_BLOCKS_PATH = os.environ.get('ASK_CODEX2_ACTIVE_BLOCKS_PATH',
+                     os.path.expanduser('~/.ask/codex2-active-blocks.json'))
+CODEX_HOOKS_PATH   = os.environ.get('ASK_CODEX2_HOOKS_PATH',
+                     os.path.expanduser('~/.codex/hooks.json'))
+# Set ASK_CODEX2_SKIP_DISCOVERY=1 in tests to skip tmux scanning
+_SKIP_DISCOVERY    = os.environ.get('ASK_CODEX2_SKIP_DISCOVERY') == '1'
 MAX_RECENT_REPOS      = 5
 SESSION_TTL           = 300  # heartbeat refreshes every 30s; 300s gives buffer for MCP hiccups
 
@@ -40,7 +48,6 @@ REPO_SEARCH_DIRS = [
 ]
 
 CODEX_CONFIG_PATH = os.path.expanduser('~/.codex/config.toml')
-CODEX_HOOKS_PATH  = os.path.expanduser('~/.codex/hooks.json')
 
 # Resolve tmux at startup — Homebrew installs to /opt/homebrew/bin which isn't
 # in AskMac's restricted PATH.
@@ -756,6 +763,8 @@ class CodexController:
 
     async def _discover_active_sessions(self):
         """Scan tmux for running Codex sessions and register any not yet known."""
+        if _SKIP_DISCOVERY:
+            return
         try:
             r = subprocess.run(
                 [TMUX, 'list-panes', '-a', '-F',
@@ -811,6 +820,8 @@ class CodexController:
 
     async def _session_heartbeat(self):
         """Periodically rediscover sessions, validate PIDs, and refresh TTLs."""
+        if _SKIP_DISCOVERY:
+            return
         while True:
             await asyncio.sleep(30)
             try:
@@ -1573,17 +1584,6 @@ class CodexController:
 
         stdin_task = asyncio.create_task(self._read_stdin())
 
-        # Clear any permission blocks orphaned by a previous crash
-        stale_blocks = _load_active_blocks()
-        if stale_blocks:
-            _log(f'Clearing {len(stale_blocks)} orphaned block(s) from previous run')
-            for bid in stale_blocks:
-                try:
-                    await self.clear_block(bid)
-                except Exception:
-                    pass
-            _save_active_blocks(set())
-
         try:
             # Script initiates the MCP handshake with AskMac
             await self._rpc('initialize', {
@@ -1594,6 +1594,19 @@ class CodexController:
             self._write({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
             self._initialized = True
             _log('MCP initialized')
+
+            # Clear any permission blocks orphaned by a previous crash.
+            # Must run after MCP init so clear_block calls can reach AskMac.
+            stale_blocks = _load_active_blocks()
+            if stale_blocks:
+                _log(f'Clearing {len(stale_blocks)} orphaned block(s) from previous run')
+                for bid in stale_blocks:
+                    try:
+                        await self.clear_block(bid)
+                    except Exception:
+                        pass
+                _save_active_blocks(set())
+
             await self.emit_block(TILE_ID, 'tile', {
                 'label': 'No sessions',
                 'status_color': 'blue',
