@@ -52,7 +52,7 @@ elif 'description' in ti:
     preview = ti['description']
 else:
     preview = json.dumps(ti)
-preview = preview[:200]
+preview = preview[:500]
 
 # Build option list from permission_suggestions
 suggestions_map = {}

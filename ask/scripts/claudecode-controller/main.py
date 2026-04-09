@@ -70,6 +70,7 @@ class MCPClient:
         self._active_confirmations = 0
         self._tile_body: Optional[str] = None
         self._initialized = False  # True after MCP handshake completes
+        self._tm_healthy: Optional[bool] = None  # None = unknown, True/False after health check
 
     # ------------------------------------------------------------------
     # terminal-manager integration helpers
@@ -177,6 +178,21 @@ class MCPClient:
             await self._emit_session_block(session_id, last_message=info.get('last_message', ''), touch_last_seen=False)
         await self._emit_start_session_block()
         await self._emit_diagnostics_block()
+        # Check terminal-manager is reachable
+        try:
+            await asyncio.wait_for(
+                self._rpc('tools/call', {'name': 'list_sessions', 'arguments': {}}),
+                timeout=5.0
+            )
+            self._tm_healthy = True
+            _log('[claudecode] terminal-manager: reachable')
+        except Exception as tm_err:
+            self._tm_healthy = False
+            _log(f'[claudecode] terminal-manager: unreachable ({tm_err})')
+            await self.emit_block('claudecode-tm-diagnostic', 'alert', {
+                'title': 'terminal-manager not running',
+                'body': 'TUI detection and keyboard input are unavailable. Start the terminal-manager script to enable interactive prompts.',
+            }, ttl=300)
 
     async def emit_block(self, block_id, block_type, payload, ttl=None, inbox=False):
         args = {'blockId': block_id, 'blockType': block_type, 'payload': payload}
@@ -575,28 +591,65 @@ class MCPClient:
 
     @staticmethod
     def _parse_tmux_prompt(content: str):
-        """Detect a numbered interactive menu in tmux pane output.
-        Returns (body, options) or None if no prompt found."""
+        """Detect an interactive prompt in tmux pane output.
+        Returns (body, options, reply_mode) or None if no prompt found.
+        reply_mode is one of: 'numbered', 'yn', 'arrow'
+        """
         import re
+        lines = content.splitlines()
+
+        # Format 1: Numbered menu (e.g. "1. Option") with a footer line
         option_re = re.compile(r'^\s*[>❯]?\s*(\d+)[.)]\s+(.+)$')
         footer_re = re.compile(r'press\s+enter|to\s+continue|to\s+confirm|esc\s+to', re.IGNORECASE)
-        lines = content.splitlines()
-        options = []
+        options_numbered = []
         body_lines = []
         found_options = False
         for line in lines:
             m = option_re.match(line)
             if m:
                 found_options = True
-                options.append(m.group(2).strip())
+                options_numbered.append(m.group(2).strip())
             elif not found_options:
-                stripped = line.strip()
-                if stripped and not re.match(r'^[$%#>]\s', stripped):
-                    body_lines.append(stripped)
+                s = line.strip()
+                if s and not re.match(r'^[$%#>]\s', s):
+                    body_lines.append(s)
         has_footer = any(footer_re.search(l) for l in lines)
-        if len(options) >= 2 and has_footer:
+        if len(options_numbered) >= 2 and has_footer:
             body = ' '.join(body_lines[-2:]) if body_lines else 'Choose an option'
-            return body, options
+            return body, options_numbered, 'numbered'
+
+        # Format 2: Arrow-key menu (lines prefixed with ❯ or >, no numbers)
+        # e.g. "❯ Yes, proceed" / "  No, exit" or Claude Code trust prompt
+        arrow_re = re.compile(r'^[❯>]\s+(.+)$')
+        plain_re = re.compile(r'^\s{2,}(\S.+)$')
+        arrow_options = []
+        in_menu = False
+        menu_body_lines = []
+        for line in lines:
+            ma = arrow_re.match(line.rstrip())
+            if ma:
+                in_menu = True
+                arrow_options.append(ma.group(1).strip())
+            elif in_menu:
+                mp = plain_re.match(line.rstrip())
+                if mp:
+                    arrow_options.append(mp.group(1).strip())
+                elif line.strip():
+                    in_menu = False
+            elif not in_menu and line.strip() and not re.match(r'^[$%#❯>]', line.strip()):
+                menu_body_lines.append(line.strip())
+        if len(arrow_options) >= 2:
+            body = ' '.join(menu_body_lines[-2:]) if menu_body_lines else 'Choose an option'
+            return body, arrow_options, 'arrow'
+
+        # Format 3: y/n inline prompt
+        yn_re = re.compile(r'(\(y[/\\]n\)|\[y[/\\]N\]|\[Y[/\\]n\])\s*[›>]?\s*$', re.IGNORECASE)
+        for line in lines:
+            m = yn_re.search(line)
+            if m:
+                body = line.strip()
+                return body, ['Yes', 'No'], 'yn'
+
         return None
 
     async def _monitor_tmux_pane(self, tmux_target: str):
@@ -620,18 +673,18 @@ class MCPClient:
             except Exception:
                 break  # pane is gone
 
-            result = self._parse_tmux_prompt(content)
+            parse_result = self._parse_tmux_prompt(content)
             content_hash = _hl.md5(content.encode()).hexdigest()[:8]
 
-            if result:
+            if parse_result:
                 idle_streak = 0
                 poll_interval = 1
                 if content_hash != last_hash:
                     last_hash = content_hash
-                    body, options = result
-                    captured = (tmux_target, options, block_id)
+                    body, options, reply_mode = parse_result
+                    captured = (tmux_target, options, block_id, reply_mode)
                     self._response_callbacks[block_id] = (
-                        lambda v, c=captured: self._on_tmux_prompt_reply(c[0], c[1], v, c[2])
+                        lambda v, c=captured: self._on_tmux_prompt_reply(c[0], c[1], v, c[2], c[3])
                     )
                     payload = {'title': body, 'body': '', 'options': options, 'urgency': 'warning'}
                     try:
@@ -652,6 +705,7 @@ class MCPClient:
                     poll_interval = 5  # slow down after startup phase
 
         # Pane gone — clean up
+
         self._tmux_monitors.pop(tmux_target, None)
         self._response_callbacks.pop(block_id, None)
         try:
@@ -659,31 +713,56 @@ class MCPClient:
         except Exception:
             pass
 
-    async def _on_tmux_prompt_reply(self, tmux_target: str, options: list, value: str, block_id: str):
+    async def _on_tmux_prompt_reply(self, tmux_target: str, options: list, value: str, block_id: str, reply_mode: str = 'numbered'):
         """Send the user's selection to the tmux pane."""
         try:
-            idx = options.index(value)  # 0-based
-        except ValueError:
-            return
-        try:
-            for _ in range(idx):
+            if reply_mode == 'yn':
+                key = 'y' if value == 'Yes' else 'n'
                 p = await asyncio.create_subprocess_exec(
-                    'tmux', 'send-keys', '-t', tmux_target, 'Down',
+                    'tmux', 'send-keys', '-t', tmux_target, key, 'Enter',
                     stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
                 )
                 await p.communicate()
-                await asyncio.sleep(0.05)
-            p = await asyncio.create_subprocess_exec(
-                'tmux', 'send-keys', '-t', tmux_target, 'Enter',
-                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
-            )
-            await p.communicate()
-            await asyncio.sleep(0.4)
-            p = await asyncio.create_subprocess_exec(
-                'tmux', 'send-keys', '-t', tmux_target, 'Enter',
-                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
-            )
-            await p.communicate()
+            elif reply_mode == 'arrow':
+                try:
+                    idx = options.index(value)
+                except ValueError:
+                    idx = 0
+                for _ in range(idx):
+                    p = await asyncio.create_subprocess_exec(
+                        'tmux', 'send-keys', '-t', tmux_target, 'Down',
+                        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await p.communicate()
+                    await asyncio.sleep(0.05)
+                p = await asyncio.create_subprocess_exec(
+                    'tmux', 'send-keys', '-t', tmux_target, 'Enter',
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                )
+                await p.communicate()
+            else:  # numbered
+                try:
+                    idx = options.index(value)
+                except ValueError:
+                    idx = 0
+                for _ in range(idx):
+                    p = await asyncio.create_subprocess_exec(
+                        'tmux', 'send-keys', '-t', tmux_target, 'Down',
+                        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await p.communicate()
+                    await asyncio.sleep(0.05)
+                p = await asyncio.create_subprocess_exec(
+                    'tmux', 'send-keys', '-t', tmux_target, 'Enter',
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                )
+                await p.communicate()
+                await asyncio.sleep(0.4)
+                p = await asyncio.create_subprocess_exec(
+                    'tmux', 'send-keys', '-t', tmux_target, 'Enter',
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                )
+                await p.communicate()
         except Exception as e:
             print(f'[claudecode-controller] tmux prompt reply failed: {e}', file=sys.stderr)
         self._response_callbacks.pop(block_id, None)
@@ -743,7 +822,7 @@ class MCPClient:
                 poll_interval = 1
                 if content_hash != last_hash:
                     last_hash = content_hash
-                    body, options = parsed
+                    body, options, _reply_mode = parsed
                     active_options = options
                     # Embed the confirmation in the session block so it appears
                     # inside the session card rather than floating above all sessions.

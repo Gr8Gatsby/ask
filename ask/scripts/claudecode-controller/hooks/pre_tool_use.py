@@ -21,7 +21,7 @@ if not session_id or not tool_name:
 # Build a short preview string for the most common tools
 preview = ''
 if tool_name == 'Bash':
-    preview = str(tool_input.get('command', ''))[:120]
+    preview = str(tool_input.get('command', ''))[:500]
 elif tool_name in ('Edit', 'Write', 'Read', 'NotebookEdit'):
     preview = str(tool_input.get('file_path', ''))
 elif tool_name == 'Glob':
@@ -29,7 +29,7 @@ elif tool_name == 'Glob':
 elif tool_name == 'Grep':
     preview = str(tool_input.get('pattern', ''))
 elif tool_name == 'Agent':
-    preview = str(tool_input.get('description', ''))[:120]
+    preview = str(tool_input.get('description', ''))[:500]
 
 cwd = os.getcwd()
 

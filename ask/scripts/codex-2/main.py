@@ -32,6 +32,8 @@ ALLOWLIST_PATH     = os.environ.get('ASK_CODEX2_ALLOWLIST_PATH',
                      os.path.expanduser('~/.ask/codex_allowlist.json'))
 ACTIVE_BLOCKS_PATH = os.environ.get('ASK_CODEX2_ACTIVE_BLOCKS_PATH',
                      os.path.expanduser('~/.ask/codex2-active-blocks.json'))
+SESSIONS_PATH      = os.environ.get('ASK_CODEX2_SESSIONS_PATH',
+                     os.path.expanduser('~/.ask/codex2-sessions.json'))
 CODEX_HOOKS_PATH   = os.environ.get('ASK_CODEX2_HOOKS_PATH',
                      os.path.expanduser('~/.codex/hooks.json'))
 # Set ASK_CODEX2_SKIP_DISCOVERY=1 in tests to skip tmux scanning
@@ -332,18 +334,43 @@ def _save_active_blocks(block_ids: set):
         pass
 
 
+def _load_sessions() -> dict:
+    """Return persisted sessions dict, pruning stale entries (older than SESSION_TTL)."""
+    try:
+        with open(SESSIONS_PATH) as f:
+            raw = json.load(f)
+        now = datetime.datetime.now().timestamp()
+        return {
+            sid: info for sid, info in raw.items()
+            if info.get('last_seen') and (now - info['last_seen']) < SESSION_TTL
+        }
+    except Exception:
+        return {}
+
+
+def _save_sessions(sessions: dict):
+    """Persist sessions dict to disk; silently ignore errors."""
+    try:
+        os.makedirs(os.path.dirname(SESSIONS_PATH), exist_ok=True)
+        with open(SESSIONS_PATH, 'w') as f:
+            json.dump(sessions, f)
+    except Exception:
+        pass
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _find_tmux_target(cwd: str = '') -> str:
-    """Return 'session:window_name.pane' for a Codex pane in the 'codex' session.
+    """Return 'session:window_index.pane' for a Codex pane in the 'codex' session.
 
-    If cwd is provided, prefers the window whose current path matches exactly.
+    Uses window index (not name) so the target stays valid even if tmux auto-renames
+    the window. If cwd is provided, prefers the window whose current path matches exactly.
     Falls back to the first codex/node pane found.
     """
     try:
         r = subprocess.run(
             [TMUX, 'list-panes', '-t', 'codex', '-a', '-F',
-             '#{session_name}:#{window_name}.#{pane_index} #{pane_current_command} #{pane_current_path}'],
+             '#{session_name}:#{window_index}.#{pane_index} #{pane_current_command} #{pane_current_path}'],
             capture_output=True, text=True, timeout=3,
         )
         candidates = []
@@ -771,7 +798,7 @@ class CodexController:
         try:
             r = subprocess.run(
                 [TMUX, 'list-panes', '-a', '-F',
-                 '#{session_name}:#{window_name}.#{pane_index} #{pane_current_command}'],
+                 '#{session_name}:#{window_index}.#{pane_index} #{pane_current_command}'],
                 capture_output=True, text=True, timeout=3,
             )
             for line in r.stdout.strip().splitlines():
@@ -912,6 +939,8 @@ class CodexController:
                 info.pop('current_tool', None)
                 info.pop('current_preview', None)
 
+        info['last_seen'] = datetime.datetime.now().timestamp()
+        _save_sessions(self._sessions)
         _log(f'Session active: {session_id} (raw={raw_id[:12]}) cwd={cwd} tmux={tmux_target!r}')
 
         # Register with terminal-manager if not already done
@@ -961,6 +990,7 @@ class CodexController:
         # Clear the session block — iOS auto-dismisses when blocks are gone.
         # Lingering "Session ended" blocks were causing stale state after restarts.
         info = self._sessions.pop(session_id, {})
+        _save_sessions(self._sessions)
         try:
             await self.clear_block(self._session_block_id(session_id))
         except Exception:
@@ -1074,6 +1104,42 @@ class CodexController:
 
     async def _tool_session_stop(self, args: dict) -> dict:
         asyncio.create_task(self._handle_session_stop(args))
+        return {'ok': True}
+
+    async def _tool_reply(self, args: dict) -> dict:
+        message = args.get('message', '').strip()
+        session_id = args.get('session_id', '')
+        if not message:
+            return {'error': 'message is required'}
+        # Resolve stable session ID
+        if session_id:
+            session_id = self._stable_id(session_id)
+        if not session_id or session_id not in self._sessions:
+            session_id = next(iter(self._sessions), '')
+        if not session_id:
+            return {'error': 'no active session'}
+        await self._tm_send_text(session_id, message)
+        return {'ok': True}
+
+    async def _tool_stop_session(self, args: dict) -> dict:
+        session_id = args.get('session_id', '')
+        if session_id:
+            session_id = self._stable_id(session_id)
+        if not session_id or session_id not in self._sessions:
+            session_id = next(iter(self._sessions), '')
+        if not session_id:
+            return {'error': 'no active session'}
+        info = self._sessions.get(session_id, {})
+        tmux_target = info.get('tmux_target', '')
+        if tmux_target:
+            subprocess.run([TMUX, 'send-keys', '-t', tmux_target, 'C-c'],
+                           capture_output=True, timeout=3)
+            _log(f'stop_session: sent C-c to {tmux_target}')
+        else:
+            await self._tm_send_key(session_id, 'C-c')
+        if session_id in self._sessions:
+            self._sessions[session_id]['is_working'] = False
+            self._schedule_session_tile(session_id)
         return {'ok': True}
 
     async def _tool_notification(self, args: dict) -> dict:
@@ -1655,6 +1721,20 @@ class CodexController:
             self._initialized = True
             _log('MCP initialized')
 
+            # Restore sessions persisted before daemon restart
+            persisted = _load_sessions()
+            for session_id, info in persisted.items():
+                if session_id not in self._sessions:
+                    self._sessions[session_id] = info
+                    _log(f'Restored session {session_id} from disk')
+                    await self._handle_session_active({
+                        'session_id': session_id,
+                        'cwd': info.get('cwd', ''),
+                        'tty': info.get('tty', ''),
+                        'tmux_target': info.get('tmux_target', ''),
+                        'pid': info.get('pid', 0),
+                    })
+
             # Clear any permission blocks orphaned by a previous crash.
             # Must run after MCP init so clear_block calls can reach AskMac.
             stale_blocks = _load_active_blocks()
@@ -1676,6 +1756,16 @@ class CodexController:
             await self._emit_start_session_block(force=True)
             # Discover any Codex sessions already running before we started
             await self._discover_active_sessions()
+            # Check terminal-manager is reachable
+            try:
+                await asyncio.wait_for(self._call_tool('list_sessions', {}), timeout=5.0)
+                _log('terminal-manager: reachable')
+            except Exception as e:
+                _log(f'terminal-manager: unreachable ({e})', 'WARN')
+                await self.emit_block('codex2-tm-diagnostic', 'alert', {
+                    'title': 'terminal-manager not running',
+                    'body': 'TUI detection is unavailable. Start terminal-manager to enable interactive prompts on iPhone.',
+                }, ttl=300, force=True)
         except Exception as e:
             _log(f'MCP initialize error: {e}', 'WARN')
 

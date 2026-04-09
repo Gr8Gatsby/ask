@@ -4,6 +4,7 @@ Codex PreToolUse hook.
 Sends the permission request to codex-controller/main.py via Unix socket
 and blocks until the user responds on iPhone. Waits indefinitely.
 """
+import fnmatch
 import sys
 import json
 import socket
@@ -19,8 +20,14 @@ def _check_allowlist(preview: str) -> bool:
         with open(ALLOWLIST_PATH) as f:
             data = json.load(f)
         for pattern in data.get('patterns', []):
-            if preview == pattern or preview.startswith(pattern + ' ') or preview.startswith(pattern + '\n'):
-                return True
+            # Glob pattern if it contains wildcard characters
+            if '*' in pattern or '?' in pattern:
+                if fnmatch.fnmatch(preview, pattern) or fnmatch.fnmatch(preview.split('\n')[0], pattern):
+                    return True
+            else:
+                # Exact-match or prefix-match (original behavior)
+                if preview == pattern or preview.startswith(pattern + ' ') or preview.startswith(pattern + '\n'):
+                    return True
     except Exception:
         pass
     return False
@@ -66,7 +73,7 @@ elif 'description' in ti:
     preview = ti['description']
 else:
     preview = json.dumps(ti)
-preview = preview[:200]
+preview = preview[:500]
 
 # Auto-approve if the command matches a saved allowlist entry
 if _check_allowlist(preview):

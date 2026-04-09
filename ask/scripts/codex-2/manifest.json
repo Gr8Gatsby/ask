@@ -1,7 +1,7 @@
 {
   "id": "codex-2",
   "name": "Codex",
-  "version": "1.5.20",
+  "version": "1.6.0",
   "description": "Codex CLI session supervisor — uses terminal-manager for TUI detection",
   "entry": "main.py",
   "icon": "sparkles",
@@ -53,6 +53,21 @@
       "description": "Launch a Codex CLI session in tmux. Emits a repo picker when no repo_path given.",
       "params": [
         { "name": "repo_path", "type": "string", "required": false }
+      ]
+    },
+    {
+      "name": "reply",
+      "description": "Send a text message to an active Codex session from iPhone.",
+      "params": [
+        { "name": "message",    "type": "string", "required": true },
+        { "name": "session_id", "type": "string", "required": false }
+      ]
+    },
+    {
+      "name": "stop_session",
+      "description": "Interrupt a running Codex session (sends C-c).",
+      "params": [
+        { "name": "session_id", "type": "string", "required": false }
       ]
     }
   ],
