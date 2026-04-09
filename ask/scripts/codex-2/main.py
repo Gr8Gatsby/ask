@@ -1304,7 +1304,14 @@ class CodexController:
                 # then attach to the session — avoids "can't find window" errors.
                 subprocess.run([TMUX, 'select-window', '-t', win_target],
                                capture_output=True, timeout=3)
-                attach_cmd = f'tmux attach-session -t codex'
+                # Retry loop handles the race between tmux session creation and
+                # Terminal.app launching. 'exit' closes the Terminal window when
+                # the tmux session ends so windows don't accumulate.
+                attach_cmd = (
+                    'for i in 1 2 3 4 5; do '
+                    'tmux attach-session -t codex && break; '
+                    'sleep 1; done; exit'
+                )
                 osascript_script = f'tell application "Terminal" to do script "{attach_cmd}"'
                 subprocess.Popen(['osascript', '-e', osascript_script],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1644,7 +1651,11 @@ class CodexController:
                 # then attach to the session to avoid "can't find window" errors.
                 subprocess.run([TMUX, 'select-window', '-t', win_target],
                                capture_output=True, timeout=3)
-                attach_cmd = f'tmux attach-session -t codex'
+                attach_cmd = (
+                    'for i in 1 2 3 4 5; do '
+                    'tmux attach-session -t codex && break; '
+                    'sleep 1; done; exit'
+                )
                 osascript_script = f'tell application "Terminal" to do script "{attach_cmd}"'
                 subprocess.Popen(['osascript', '-e', osascript_script],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
