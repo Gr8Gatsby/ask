@@ -974,6 +974,56 @@ class CodexController:
                 'action_required': False,
             }, ttl=600)
 
+    async def _capture_tui_result(self, session_id: str):
+        """Capture terminal output after a TUI menu response and surface it as last_message.
+
+        Waits for Codex to finish processing (prompt returns), then grabs the
+        pane text between the last command and the new prompt. Surfaces it in the
+        session tile so it flows into the conversation as an assistant message.
+        """
+        await asyncio.sleep(1.5)  # give Codex time to process and print output
+        info = self._sessions.get(session_id, {})
+        tmux_target = info.get('tmux_target', '')
+        if not tmux_target:
+            return
+        try:
+            r = subprocess.run(
+                [TMUX, 'capture-pane', '-t', tmux_target, '-p', '-S', '-60'],
+                capture_output=True, text=True, timeout=5,
+            )
+        except Exception as e:
+            _log(f'_capture_tui_result: {e}', 'WARN')
+            return
+        if r.returncode != 0:
+            return
+        raw = r.stdout
+        # Strip ANSI escape sequences
+        import re as _re
+        clean = _re.sub(r'\x1b\[[0-9;]*[mGKHF]', '', raw)
+        lines = clean.splitlines()
+        # Walk backwards to find the output between the last two shell prompts
+        # (prompts tend to end with '$', '❯', '▶', '%', or '#')
+        prompt_re = _re.compile(r'[\$❯▶%#]\s*$')
+        # Find the second-to-last prompt (start of the output we want)
+        prompt_indices = [i for i, l in enumerate(lines) if prompt_re.search(l.rstrip())]
+        if len(prompt_indices) >= 2:
+            start = prompt_indices[-2] + 1
+            end = prompt_indices[-1]
+            output_lines = [l for l in lines[start:end] if l.strip()]
+        elif prompt_indices:
+            # Only one prompt found — take everything before it
+            output_lines = [l for l in lines[:prompt_indices[-1]] if l.strip()]
+        else:
+            output_lines = [l for l in lines if l.strip()]
+
+        output = '\n'.join(output_lines).strip()
+        if not output or len(output) < 5:
+            return  # nothing useful
+
+        _log(f'TUI result for {session_id[:12]}: {len(output)} chars')
+        info['last_message'] = output
+        await self._emit_session_tile(session_id)
+
     async def _handle_notification(self, msg: dict):
         title = msg.get('title', 'Codex')
         body = msg.get('body', '')
@@ -1558,9 +1608,11 @@ class CodexController:
             # Value is "N  option text" — extract the leading number to send to tmux
             num = value.split()[0] if value else '1'
             await self._tm_send_text(session_id, num)
+            asyncio.create_task(self._capture_tui_result(session_id))
         elif '-slash-' in block_id:
             # Value is the slash command string (e.g. "/model")
             await self._tm_send_text(session_id, value)
+            asyncio.create_task(self._capture_tui_result(session_id))
         elif '-toggle-' in block_id:
             # Toggle: navigate to item and press space
             await self._tm_send_key(session_id, 'space')
