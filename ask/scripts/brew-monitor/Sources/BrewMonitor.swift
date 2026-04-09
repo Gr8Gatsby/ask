@@ -20,6 +20,7 @@ private let blockStatus   = "brew-monitor-status"
 /// optionally waits for an "Upgrade All" response, then exits.
 actor BrewMonitor {
     private let mcp: MCPClient
+    private let ttl30Days: TimeInterval = 30 * 24 * 3600
 
     init(mcp: MCPClient) {
         self.mcp = mcp
@@ -32,6 +33,12 @@ actor BrewMonitor {
             try await check()
         } catch {
             fputs("[brew-monitor] check error: \(error)\n", stderr)
+            await emitFailureStatus(label: "Homebrew check failed", detail: String(describing: error))
+            try? await emitFeed(
+                headline: "Homebrew check failed",
+                body: String(describing: error),
+                statusColor: "red"
+            )
         }
     }
 
@@ -42,17 +49,19 @@ actor BrewMonitor {
 
         // Clear any stale blocks from previous runs
         await mcp.clearBlock(blockStatus)
+        await emitStatus(label: "Checking Homebrew…", detail: "Looking for outdated packages", color: "blue")
+
+        guard findBrew() != nil else {
+            throw BrewMonitorError.brewNotFound
+        }
 
         let outdated = getOutdated()
-        let ttl30Days: TimeInterval = 30 * 24 * 3600
 
         if outdated.isEmpty {
             fputs("[brew-monitor] all packages up to date\n", stderr)
             await mcp.clearBlock(blockUpdates)
-            try await mcp.emitBlock(blockFeed, type: "feed_item", payload: [
-                "headline":     "Homebrew up to date",
-                "status_color": "green"
-            ], ttl: ttl30Days)
+            await mcp.clearBlock(blockStatus)
+            try await emitFeed(headline: "Homebrew up to date", statusColor: "green")
             return
         }
 
@@ -63,11 +72,12 @@ actor BrewMonitor {
         fputs("[brew-monitor] \(headline)\n", stderr)
 
         // Post feed item (persistent, 30-day TTL)
-        try await mcp.emitBlock(blockFeed, type: "feed_item", payload: [
-            "headline":     headline,
-            "body":         body,
-            "status_color": "orange"
-        ], ttl: ttl30Days)
+        try await emitFeed(headline: headline, body: body, statusColor: "orange")
+        await emitStatus(
+            label: "Homebrew updates available",
+            detail: "Waiting for your response on \(count) package\(count == 1 ? "" : "s")",
+            color: "orange"
+        )
 
         // Also post confirmation so user can act from the home screen
         let stream = await mcp.responseStream(blockID: blockUpdates)
@@ -94,6 +104,11 @@ actor BrewMonitor {
 
         guard response == "Upgrade All" else {
             fputs("[brew-monitor] response: \(response ?? "timeout") — exiting\n", stderr)
+            await emitStatus(
+                label: response == "Later" ? "Upgrade postponed" : "Upgrade request expired",
+                detail: response == "Later" ? "No packages were changed" : "No response received",
+                color: "secondary"
+            )
             return
         }
 
@@ -103,23 +118,30 @@ actor BrewMonitor {
             try await upgrade()
         } catch {
             fputs("[brew-monitor] upgrade error: \(error)\n", stderr)
+            await emitFailureStatus(label: "Homebrew upgrade failed", detail: String(describing: error))
+            try? await emitFeed(
+                headline: "Homebrew upgrade failed",
+                body: String(describing: error),
+                statusColor: "red"
+            )
+            return
         }
 
         // Post result feed item after upgrade
         let remaining = getOutdated()
         if remaining.isEmpty {
-            try await mcp.emitBlock(blockFeed, type: "feed_item", payload: [
-                "headline":     "Homebrew upgraded successfully",
-                "body":         body,
-                "status_color": "green"
-            ], ttl: ttl30Days)
+            try await emitFeed(
+                headline: "Homebrew upgraded successfully",
+                body: body,
+                statusColor: "green"
+            )
         } else {
             let remCount = remaining.count
-            try await mcp.emitBlock(blockFeed, type: "feed_item", payload: [
-                "headline":     "\(remCount) packages still need attention",
-                "body":         remaining.map { "\($0.name)  \($0.installed) → \($0.available)" }.joined(separator: "\n"),
-                "status_color": "orange"
-            ], ttl: ttl30Days)
+            try await emitFeed(
+                headline: "\(remCount) packages still need attention",
+                body: remaining.map { "\($0.name)  \($0.installed) → \($0.available)" }.joined(separator: "\n"),
+                statusColor: "orange"
+            )
         }
     }
 
@@ -128,20 +150,13 @@ actor BrewMonitor {
     private func upgrade() async throws {
         fputs("[brew-monitor] running brew upgrade…\n", stderr)
 
-        try await mcp.emitBlock(blockStatus, type: "status", payload: [
-            "label":  "Upgrading Homebrew packages…",
-            "detail": "Starting…",
-            "icon":   "arrow.down.circle",
-            "color":  "blue"
-        ], ttl: 3 * 60 * 60)
-
         defer {
             Task { await mcp.clearBlock(blockStatus) }
         }
 
         guard let brew = findBrew() else {
             fputs("[brew-monitor] brew not found\n", stderr)
-            return
+            throw BrewMonitorError.brewNotFound
         }
 
         let proc = Process()
@@ -157,9 +172,20 @@ actor BrewMonitor {
 
         var lastUpdate  = Date()
         var currentPkg  = ""
+        var recentLines: [String] = []
+
+        await emitStatus(
+            label: "Upgrading Homebrew packages…",
+            detail: "Starting brew upgrade",
+            color: "blue"
+        )
 
         for await line in BrewMonitor.pipeLines(pipe.fileHandleForReading) {
             fputs("[brew-upgrade] \(line)\n", stderr)
+            if !line.isEmpty {
+                recentLines.append(line)
+                if recentLines.count > 6 { recentLines.removeFirst(recentLines.count - 6) }
+            }
 
             if line.hasPrefix("==> Upgrading ") {
                 currentPkg = String(line.dropFirst("==> Upgrading ".count))
@@ -172,32 +198,58 @@ actor BrewMonitor {
             let now = Date()
             guard !currentPkg.isEmpty, now.timeIntervalSince(lastUpdate) >= 3 else { continue }
             lastUpdate = now
-            try? await mcp.emitBlock(blockStatus, type: "status", payload: [
-                "label":  "Upgrading Homebrew packages…",
-                "detail": "Installing \(currentPkg)",
-                "icon":   "arrow.down.circle",
-                "color":  "blue"
-            ], ttl: 3 * 60 * 60)
+            await emitStatus(
+                label: "Upgrading Homebrew packages…",
+                detail: "Installing \(currentPkg)",
+                color: "blue"
+            )
         }
 
         proc.waitUntilExit()
         fputs("[brew-monitor] brew upgrade exited \(proc.terminationStatus)\n", stderr)
 
         if proc.terminationStatus == 0 {
-            try? await mcp.emitBlock(blockStatus, type: "status", payload: [
-                "label": "Upgrades complete",
-                "icon":  "checkmark.circle",
-                "color": "green"
-            ], ttl: 30)
+            await emitStatus(label: "Upgrades complete", detail: currentPkg.isEmpty ? nil : "Last package: \(currentPkg)", color: "green", ttl: 30)
             try? await Task.sleep(nanoseconds: 5_000_000_000)
         } else {
-            try? await mcp.emitBlock(blockStatus, type: "status", payload: [
-                "label": "Upgrade finished with errors",
-                "icon":  "exclamationmark.triangle",
-                "color": "orange"
-            ], ttl: 60)
-            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            let detail = recentLines.last?.trimmingCharacters(in: .whitespacesAndNewlines)
+            await emitFailureStatus(
+                label: "Upgrade finished with errors",
+                detail: detail?.isEmpty == false ? detail : "brew upgrade exited \(proc.terminationStatus)"
+            )
+            throw BrewMonitorError.upgradeFailed(
+                code: Int(proc.terminationStatus),
+                detail: detail
+            )
         }
+    }
+
+    private func emitStatus(
+        label: String,
+        detail: String? = nil,
+        color: String,
+        ttl: TimeInterval = 3 * 60 * 60
+    ) async {
+        var payload: [String: Any] = [
+            "label": label,
+            "icon": color == "green" ? "checkmark.circle" : color == "red" ? "exclamationmark.triangle" : "arrow.down.circle",
+            "color": color
+        ]
+        if let detail { payload["detail"] = detail }
+        try? await mcp.emitBlock(blockStatus, type: "status", payload: payload, ttl: ttl)
+    }
+
+    private func emitFailureStatus(label: String, detail: String?) async {
+        await emitStatus(label: label, detail: detail, color: "red", ttl: 10 * 60)
+    }
+
+    private func emitFeed(headline: String, body: String? = nil, statusColor: String) async throws {
+        var payload: [String: Any] = [
+            "headline": headline,
+            "status_color": statusColor
+        ]
+        if let body { payload["body"] = body }
+        try await mcp.emitBlock(blockFeed, type: "feed_item", payload: payload, ttl: ttl30Days)
     }
 
     // MARK: - Pipe helper
@@ -286,5 +338,22 @@ actor BrewMonitor {
             "/home/linuxbrew/.linuxbrew/bin/brew"
         ]
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+}
+
+enum BrewMonitorError: Error, CustomStringConvertible {
+    case brewNotFound
+    case upgradeFailed(code: Int, detail: String?)
+
+    var description: String {
+        switch self {
+        case .brewNotFound:
+            return "Homebrew is not installed or not available on PATH."
+        case .upgradeFailed(let code, let detail):
+            if let detail, !detail.isEmpty {
+                return "brew upgrade exited \(code): \(detail)"
+            }
+            return "brew upgrade exited \(code)"
+        }
     }
 }
