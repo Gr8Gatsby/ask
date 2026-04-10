@@ -112,8 +112,6 @@ actor BrewMonitor {
         let dateStr = ISO8601DateFormatter.localDate.string(from: Date())
         let taskID  = "brew-check-\(dateStr)"
         try await mcp.openTask(taskID, title: "Homebrew check · \(nowStr)")
-        try await mcp.appendMessage(taskID, role: "user", text: "Check for outdated Homebrew packages.")
-        try await mcp.appendMessage(taskID, role: "assistant", text: "All packages are up to date. No upgrades needed.")
 
         // Write a brief .md report and attach as artifact
         let report = """
