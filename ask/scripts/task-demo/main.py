@@ -81,29 +81,29 @@ class MCPClient:
 
     async def open_task(self, task_id: str, title: str, status: str = 'working'):
         return await self.call_tool('open_task', {
-            'task_id': task_id,
+            'taskId': task_id,
             'title': title,
             'status': status,
         })
 
     async def append_message(self, task_id: str, role: str, text: str):
-        parts = json.dumps([{'type': 'text', 'text': text}])
+        # parts must be a native list (not a JSON string) — AskMac expects [[String: Any]]
         return await self.call_tool('append_message', {
-            'task_id': task_id,
+            'taskId': task_id,
             'role': role,
-            'parts': parts,
+            'parts': [{'type': 'text', 'text': text}],
         })
 
     async def put_artifact(self, task_id: str, artifact_id: str,
                            filename: str, mime_type: str,
                            description: str, file_path: str):
         return await self.call_tool('put_artifact', {
-            'task_id': task_id,
-            'artifact_id': artifact_id,
+            'taskId': task_id,
+            'artifactId': artifact_id,
             'filename': filename,
-            'mime_type': mime_type,
+            'mimeType': mime_type,
             'description': description,
-            'file_path': file_path,
+            'filePath': file_path,
         })
 
     # ── Demo logic ────────────────────────────────────────────────────────────
@@ -123,7 +123,7 @@ class MCPClient:
                 'Run a quick system health check and produce a report.')
 
             # 3. Agent: starting
-            await self.append_message(task_id, 'agent',
+            await self.append_message(task_id, 'assistant',
                 'Starting system health check...')
             _log('initial messages posted')
 
@@ -143,7 +143,7 @@ class MCPClient:
                 f"**Uptime:**\n```\n{uptime_raw.strip()}\n```\n\n"
                 f"**Disk (`/`):**\n```\n{disk_raw.strip()}\n```"
             )
-            await self.append_message(task_id, 'agent', findings)
+            await self.append_message(task_id, 'assistant', findings)
             _log('findings message posted')
 
             # 6. Write full report to a temp file
@@ -195,11 +195,15 @@ class MCPClient:
             _log('artifact uploaded')
 
             # 8. Agent: done
-            await self.append_message(task_id, 'agent',
+            await self.append_message(task_id, 'assistant',
                 'Report complete. The full system health report is attached above.')
 
             # 9. Mark completed
-            await self.open_task(task_id, f"System Report — {now_str}", status='completed')
+            await self.call_tool('open_task', {
+                'taskId': task_id,
+                'title': f"System Report — {now_str}",
+                'status': 'completed',
+            })
             _log('task completed')
 
         except Exception as e:
