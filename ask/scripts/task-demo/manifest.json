@@ -1,15 +1,9 @@
 {
   "id": "task-demo",
   "name": "Task Demo",
-  "version": "1.0.0",
-  "description": "End-to-end demo of the A2A task protocol: open_task, append_message, put_artifact.",
+  "version": "1.1.0",
+  "description": "End-to-end demo of the A2A task protocol: open_task, append_message, put_artifact. Runs automatically on startup.",
   "entry": "main.py",
   "icon": "checkmark.seal",
-  "tools": [
-    {
-      "name": "run_demo",
-      "description": "Runs the task demo: creates a task, posts messages, uploads a report artifact, then completes.",
-      "params": []
-    }
-  ]
+  "tools": []
 }

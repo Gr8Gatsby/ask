@@ -60,6 +60,8 @@ class MCPClient:
             'clientInfo': {'name': 'task-demo', 'version': '1.0.0'}
         })
         self._write({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+        # Run the demo immediately after handshake
+        asyncio.ensure_future(self.run_demo())
 
     async def call_tool(self, name: str, arguments: dict = None):
         return await self._rpc('tools/call', {
