@@ -88,6 +88,27 @@ final class TaskHistoryStore {
 
     // MARK: - Clear history
 
+    /// Deletes a single task and all of its messages and artifacts.
+    func deleteTask(_ task: TaskRecord) throws {
+        let taskID    = task.taskID
+        let machineID = task.machineID
+        let msgDescriptor = FetchDescriptor<TaskMessage>(
+            predicate: #Predicate { $0.taskID == taskID && $0.machineID == machineID }
+        )
+        let artDescriptor = FetchDescriptor<ArtifactRecord>(
+            predicate: #Predicate { $0.taskID == taskID && $0.machineID == machineID }
+        )
+        let msgs = (try? modelContext.fetch(msgDescriptor)) ?? []
+        let arts = (try? modelContext.fetch(artDescriptor)) ?? []
+        msgs.forEach { modelContext.delete($0) }
+        arts.forEach { art in
+            try? FileManager.default.removeItem(at: art.localCacheURL)
+            modelContext.delete(art)
+        }
+        modelContext.delete(task)
+        try modelContext.save()
+    }
+
     /// Deletes all tasks, messages, and artifacts for a specific machine + script pair.
     func clearHistory(machineID: String, scriptID: String) throws {
         let taskDescriptor = FetchDescriptor<TaskRecord>(

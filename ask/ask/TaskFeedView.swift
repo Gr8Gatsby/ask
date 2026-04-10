@@ -77,6 +77,13 @@ struct TaskFeedView: View {
                         } label: {
                             TaskListRow(task: task)
                         }
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                try? taskHistory.deleteTask(task)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
                     }
                 }
             }
@@ -89,6 +96,13 @@ struct TaskFeedView: View {
                                 .environment(taskHistory)
                         } label: {
                             TaskListRow(task: task)
+                        }
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                try? taskHistory.deleteTask(task)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
                         }
                     }
                     if hiddenOlderCount > 0 && !showOlder {
