@@ -297,10 +297,6 @@ struct HomeView: View {
                     emptyState
                 } else if selectedTab == .feed {
                     TaskFeedView(machines: visibleMachines)
-                        .navigationDestination(for: TaskRecord.self) { task in
-                            TaskThreadView(task: task)
-                                .environment(taskHistory)
-                        }
                 } else {
                     content
                 }

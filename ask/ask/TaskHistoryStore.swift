@@ -95,14 +95,15 @@ final class TaskHistoryStore {
         )
         let tasks = try modelContext.fetch(taskDescriptor)
         for task in tasks {
+            let taskID = task.taskID
             let msgDescriptor = FetchDescriptor<TaskMessage>(
-                predicate: #Predicate { $0.taskID == task.taskID && $0.machineID == machineID }
+                predicate: #Predicate { $0.taskID == taskID && $0.machineID == machineID }
             )
             let msgs = try modelContext.fetch(msgDescriptor)
             msgs.forEach { modelContext.delete($0) }
 
             let artDescriptor = FetchDescriptor<ArtifactRecord>(
-                predicate: #Predicate { $0.taskID == task.taskID && $0.machineID == machineID }
+                predicate: #Predicate { $0.taskID == taskID && $0.machineID == machineID }
             )
             let arts = try modelContext.fetch(artDescriptor)
             arts.forEach { art in

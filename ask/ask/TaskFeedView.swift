@@ -71,7 +71,10 @@ struct TaskFeedView: View {
             if !activeTasks.isEmpty {
                 Section("Active") {
                     ForEach(activeTasks, id: \.recordName) { task in
-                        NavigationLink(value: task) {
+                        NavigationLink {
+                            TaskThreadView(task: task)
+                                .environment(taskHistory)
+                        } label: {
                             TaskListRow(task: task)
                         }
                     }
@@ -81,7 +84,10 @@ struct TaskFeedView: View {
             if !recentTasks.isEmpty {
                 Section("Recent") {
                     ForEach(visibleRecentTasks, id: \.recordName) { task in
-                        NavigationLink(value: task) {
+                        NavigationLink {
+                            TaskThreadView(task: task)
+                                .environment(taskHistory)
+                        } label: {
                             TaskListRow(task: task)
                         }
                     }
@@ -113,13 +119,3 @@ struct TaskFeedView: View {
     }
 }
 
-// MARK: - NavigationPath value conformance
-
-extension TaskRecord: Hashable {
-    public static func == (lhs: TaskRecord, rhs: TaskRecord) -> Bool {
-        lhs.recordName == rhs.recordName
-    }
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(recordName)
-    }
-}
