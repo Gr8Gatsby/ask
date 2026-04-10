@@ -38,6 +38,7 @@ final class MCPConnection: @unchecked Sendable {
     private let entryURL: URL
     private let blockService: BlockService
     private let terminalMonitor: TerminalMonitorService
+    private let taskService: TaskService
 
     private var process: Process?
     private var stdinPipe: Pipe?
@@ -70,11 +71,12 @@ final class MCPConnection: @unchecked Sendable {
     private(set) var exitCode: Int32 = 0
     private(set) var exitedBySignal: Bool = false
 
-    init(scriptID: String, entryURL: URL, blockService: BlockService, terminalMonitor: TerminalMonitorService) {
+    init(scriptID: String, entryURL: URL, blockService: BlockService, terminalMonitor: TerminalMonitorService, taskService: TaskService) {
         self.scriptID = scriptID
         self.entryURL = entryURL
         self.blockService = blockService
         self.terminalMonitor = terminalMonitor
+        self.taskService = taskService
     }
 
     // MARK: - Lifecycle
@@ -319,6 +321,69 @@ final class MCPConnection: @unchecked Sendable {
                 }
             }
 
+        case "open_task":
+            guard let taskID = args["taskId"] as? String,
+                  let title  = args["title"] as? String
+            else {
+                replyError(id: id, code: -32602, message: "open_task requires taskId and title")
+                return
+            }
+            let status = args["status"] as? String ?? "working"
+            Task {
+                do {
+                    try await taskService.openTask(taskID: taskID, title: title, status: status)
+                    reply(id: id, result: ["content": [["type": "text", "text": "ok"]]])
+                } catch {
+                    replyError(id: id, code: -32000, message: "open_task failed: \(error.localizedDescription)")
+                }
+            }
+
+        case "append_message":
+            guard let taskID = args["taskId"] as? String,
+                  let role   = args["role"] as? String,
+                  let parts  = args["parts"] as? [[String: Any]]
+            else {
+                replyError(id: id, code: -32602, message: "append_message requires taskId, role, and parts")
+                return
+            }
+            Task {
+                do {
+                    try await taskService.appendMessage(taskID: taskID, role: role, parts: parts)
+                    reply(id: id, result: ["content": [["type": "text", "text": "ok"]]])
+                } catch {
+                    replyError(id: id, code: -32000, message: "append_message failed: \(error.localizedDescription)")
+                }
+            }
+
+        case "put_artifact":
+            guard let taskID     = args["taskId"] as? String,
+                  let artifactID = args["artifactId"] as? String,
+                  let filename   = args["filename"] as? String,
+                  let mimeType   = args["mimeType"] as? String
+            else {
+                replyError(id: id, code: -32602, message: "put_artifact requires taskId, artifactId, filename, and mimeType")
+                return
+            }
+            let description    = args["description"] as? String
+            let filePath       = args["filePath"] as? String
+            let contentBase64  = args["content"] as? String
+            Task {
+                do {
+                    try await taskService.putArtifact(
+                        taskID: taskID,
+                        artifactID: artifactID,
+                        filename: filename,
+                        mimeType: mimeType,
+                        description: description,
+                        filePath: filePath,
+                        contentBase64: contentBase64
+                    )
+                    reply(id: id, result: ["content": [["type": "text", "text": "ok"]]])
+                } catch {
+                    replyError(id: id, code: -32000, message: "put_artifact failed: \(error.localizedDescription)")
+                }
+            }
+
         case "get_schema":
             reply(id: id, result: ["content": [["type": "text", "text": schemaText]]])
 
@@ -481,6 +546,63 @@ final class MCPConnection: @unchecked Sendable {
                     "properties": [
                         "filter": ["type": "string", "description": "Optional process name filter (case-insensitive substring, e.g. \"claude\" or \"codex\")"]
                     ]
+                ]
+            ],
+            [
+                "name": "open_task",
+                "description": "Create or update a task in the A2A task history. Call once at the start of a job and again on status changes (e.g. working → completed).",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "taskId": ["type": "string", "description": "Stable task identifier (use UUID; same ID reopens the existing task)"],
+                        "title": ["type": "string", "description": "Human-readable task title shown in the iOS task list"],
+                        "status": ["type": "string", "enum": ["working", "completed", "failed", "cancelled"], "description": "Task status (default: working)"]
+                    ],
+                    "required": ["taskId", "title"]
+                ]
+            ],
+            [
+                "name": "append_message",
+                "description": "Append a message (assistant or user turn) to a task's conversation history.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "taskId": ["type": "string", "description": "Task ID from open_task"],
+                        "role": ["type": "string", "enum": ["assistant", "user"], "description": "Message author"],
+                        "parts": [
+                            "type": "array",
+                            "description": "Message content parts",
+                            "items": [
+                                "type": "object",
+                                "properties": [
+                                    "type": ["type": "string", "enum": ["text", "file", "data"]],
+                                    "text": ["type": "string", "description": "For type=text"],
+                                    "mimeType": ["type": "string", "description": "For type=file/data"],
+                                    "uri": ["type": "string", "description": "For type=file"],
+                                    "data": ["type": "string", "description": "For type=data (base64)"]
+                                ],
+                                "required": ["type"]
+                            ]
+                        ]
+                    ],
+                    "required": ["taskId", "role", "parts"]
+                ]
+            ],
+            [
+                "name": "put_artifact",
+                "description": "Attach a file artifact to a task. Use filePath (preferred) for files on disk, or content (base64, max 10 MB) for in-memory data.",
+                "inputSchema": [
+                    "type": "object",
+                    "properties": [
+                        "taskId": ["type": "string", "description": "Task ID from open_task"],
+                        "artifactId": ["type": "string", "description": "Stable artifact identifier (use UUID; same ID replaces the existing artifact)"],
+                        "filename": ["type": "string", "description": "Display filename (e.g. report.pdf)"],
+                        "mimeType": ["type": "string", "description": "MIME type (e.g. application/pdf, image/png)"],
+                        "description": ["type": "string", "description": "Optional human-readable description"],
+                        "filePath": ["type": "string", "description": "Absolute path to the file on disk (preferred — AskMac reads the file directly)"],
+                        "content": ["type": "string", "description": "Base64-encoded file content (max 10 MB decoded). Use filePath for larger files."]
+                    ],
+                    "required": ["taskId", "artifactId", "filename", "mimeType"]
                 ]
             ]
         ]

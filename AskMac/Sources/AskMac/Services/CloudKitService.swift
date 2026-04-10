@@ -283,6 +283,55 @@ final class CloudKitService {
         return found
     }
 
+    // MARK: - Task history (A2A protocol)
+
+    /// Creates or updates an AskTask record. Uses the task's recordName as the CloudKit record ID
+    /// so re-opening the same task is an upsert, not a duplicate insert.
+    func saveTask(_ task: AskTaskRecord) async throws {
+        let record = existingRecord(named: task.recordName, type: CKSchema.RecordType.askTask)
+        // Apply all fields from the struct
+        record[CKSchema.AskTask.taskID]        = task.taskID
+        record[CKSchema.AskTask.machineID]     = task.machineID
+        record[CKSchema.AskTask.scriptID]      = task.scriptID
+        record[CKSchema.AskTask.scriptName]    = task.scriptName
+        record[CKSchema.AskTask.scriptIcon]    = task.scriptIcon as CKRecordValueProtocol?
+        record[CKSchema.AskTask.scriptIconData] = task.scriptIconData as CKRecordValueProtocol?
+        record[CKSchema.AskTask.title]         = task.title
+        record[CKSchema.AskTask.status]        = task.status
+        record[CKSchema.AskTask.lastActivityAt] = task.lastActivityAt
+        record[CKSchema.AskTask.messageCount]  = task.messageCount as CKRecordValue
+        record[CKSchema.AskTask.artifactCount] = task.artifactCount as CKRecordValue
+        let saved = try await save(record)
+        cachedRecords[task.recordName] = saved
+        logger.info("saveTask — \(task.recordName) status: \(task.status)")
+    }
+
+    /// Creates a new AskTaskMessage record. Message IDs are UUIDs; always a fresh insert.
+    func saveTaskMessage(_ message: AskTaskMessageRecord) async throws {
+        let record = message.toCKRecord()
+        let saved = try await save(record)
+        cachedRecords[message.messageID] = saved
+        logger.info("saveTaskMessage — taskID: \(message.taskID) seq: \(message.sequenceNumber)")
+    }
+
+    /// Creates or updates an AskArtifact record, attaching the local file as a CKAsset.
+    func saveArtifact(_ artifact: AskArtifactRecord) async throws {
+        let record = existingRecord(named: artifact.recordName, type: CKSchema.RecordType.askArtifact)
+        record[CKSchema.AskArtifact.artifactID]  = artifact.artifactID
+        record[CKSchema.AskArtifact.taskID]      = artifact.taskID
+        record[CKSchema.AskArtifact.machineID]   = artifact.machineID
+        record[CKSchema.AskArtifact.scriptID]    = artifact.scriptID
+        record[CKSchema.AskArtifact.filename]    = artifact.filename
+        record[CKSchema.AskArtifact.mimeType]    = artifact.mimeType
+        record[CKSchema.AskArtifact.description] = artifact.artifactDescription as CKRecordValueProtocol?
+        record[CKSchema.AskArtifact.sizeBytes]   = artifact.sizeBytes as CKRecordValue
+        record[CKSchema.AskArtifact.content]     = CKAsset(fileURL: artifact.contentURL)
+        record[CKSchema.AskArtifact.updatedAt]   = artifact.updatedAt
+        let saved = try await save(record)
+        cachedRecords[artifact.recordName] = saved
+        logger.info("saveArtifact — \(artifact.recordName) filename: \(artifact.filename) size: \(artifact.sizeBytes)")
+    }
+
     // MARK: - Private helpers
 
     /// Returns the cached CKRecord for this name/type, or creates a fresh one.
