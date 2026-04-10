@@ -109,11 +109,17 @@ struct askApp: App {
     @State private var cloudKit = iOSCloudKitService()
     @State private var push: PushService
     @State private var actionInbox = ActionInboxStore()
+    @State private var taskHistory: TaskHistoryStore
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
         let container = CKContainer(identifier: CKSchema.containerID)
         _push = State(initialValue: PushService(container: container))
+
+        let ck = iOSCloudKitService()
+        let ctx = feedHistoryContainer.mainContext
+        _cloudKit = State(initialValue: ck)
+        _taskHistory = State(initialValue: TaskHistoryStore(cloudKit: ck, modelContext: ctx))
 
         let appearance = UINavigationBarAppearance()
         appearance.configureWithOpaqueBackground()
@@ -129,6 +135,7 @@ struct askApp: App {
             ContentView()
                 .environment(cloudKit)
                 .environment(actionInbox)
+                .environment(taskHistory)
                 .task { await push.setup() }
         }
         .modelContainer(feedHistoryContainer)
