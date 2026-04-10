@@ -208,10 +208,15 @@ struct SessionChatView: View {
                     }
                     .confirmationDialog("Stop Session?", isPresented: $showStopConfirm) {
                         Button("Stop Session", role: .destructive) {
-                            Task { await onRespond(block, "__close_session__") }
+                            Task {
+                                // Clear stale chat history so the next session starts clean.
+                                for entry in entries { modelContext.delete(entry) }
+                                try? modelContext.save()
+                                await onRespond(block, "__close_session__")
+                            }
                         }
                     } message: {
-                        Text("Sends Ctrl+C to the running Codex session.")
+                        Text("Stops the Claude Code session and clears its chat history.")
                     }
                 }
             }
@@ -236,10 +241,15 @@ struct SessionChatView: View {
         }
         .onChange(of: isActive) { wasActive, nowActive in
             if wasActive && !nowActive {
-                modelContext.insert(ChatEntry(
-                    sessionId: sessionId, role: "system", entryKind: "event", text: "Session ended"
-                ))
-                try? modelContext.save()
+                // Deduplicate: don't stack multiple "Session ended" events from repeated
+                // block drops (e.g. daemon restarts while the chat view is open).
+                let lastEvent = entries.last(where: { $0.entryKind == "event" })
+                if lastEvent?.text != "Session ended" {
+                    modelContext.insert(ChatEntry(
+                        sessionId: sessionId, role: "system", entryKind: "event", text: "Session ended"
+                    ))
+                    try? modelContext.save()
+                }
                 // Dismiss after a brief delay so the "Session ended" entry is visible.
                 Task {
                     try? await Task.sleep(for: .milliseconds(600))

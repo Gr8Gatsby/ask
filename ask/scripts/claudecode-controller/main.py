@@ -25,7 +25,9 @@ BLOCK_TILE     = 'claudecode-controller-tile'
 SESSIONS_PATH  = os.environ.get('ASK_SESSIONS_PATH', os.path.expanduser('~/.ask/claudecode_sessions.json'))
 STATUS_PATH    = os.path.expanduser('~/.ask/status/claudecode-controller.json')
 LOG_PATH       = os.path.expanduser('~/.ask/logs/claudecode-controller.log')
-SESSION_TTL    = 3600  # seconds — block TTL and session load cutoff
+SESSION_BLOCK_TTL = 3600   # seconds — how long an agent_session block lives in CloudKit
+SESSION_DISK_TTL  = 86400  # seconds — how long sessions are kept in the on-disk registry
+SESSION_TTL       = SESSION_BLOCK_TTL  # backward-compat alias
 
 
 def _log(msg: str):
@@ -193,6 +195,38 @@ class MCPClient:
                 'title': 'terminal-manager not running',
                 'body': 'TUI detection and keyboard input are unavailable. Start the terminal-manager script to enable interactive prompts.',
             }, ttl=300)
+        asyncio.create_task(self._session_keepalive())
+
+    async def _session_keepalive(self):
+        """Re-emit session blocks and refresh last_seen every 30 minutes.
+
+        Two jobs:
+        1. Disk freshness — updates last_seen so sessions survive daemon restarts
+           across the 24-hour SESSION_DISK_TTL window.
+        2. Block freshness — re-emits any agent_session block whose last_emitted is
+           more than half SESSION_BLOCK_TTL ago, preventing CloudKit TTL expiry from
+           making sessions appear to vanish while the daemon is still running.
+           This also recovers blocks that expired during a previous daemon outage."""
+        while True:
+            await asyncio.sleep(1800)  # 30 minutes
+            if not self._sessions:
+                continue
+            now = time.time()
+            stale_threshold = SESSION_BLOCK_TTL / 2  # re-emit at 50% of TTL remaining
+            refreshed = 0
+            for session_id, info in list(self._sessions.items()):
+                if session_id.startswith('pid-'):
+                    continue
+                info['last_seen'] = now
+                last_emitted = info.get('last_emitted', 0)
+                if now - last_emitted >= stale_threshold:
+                    try:
+                        await self._emit_session_block(session_id)
+                        refreshed += 1
+                    except Exception as e:
+                        _log(f'[claudecode] keepalive re-emit failed for {session_id[:8]}: {e}')
+            self._save_sessions()
+            _log(f'[claudecode] keepalive: refreshed {len(self._sessions)} session(s), re-emitted {refreshed} block(s)')
 
     async def emit_block(self, block_id, block_type, payload, ttl=None, inbox=False):
         args = {'blockId': block_id, 'blockType': block_type, 'payload': payload}
@@ -959,7 +993,11 @@ class MCPClient:
             pass
 
     def _load_sessions(self):
-        """Load persisted sessions, discarding any older than SESSION_TTL.
+        """Load persisted sessions, discarding any older than SESSION_DISK_TTL.
+
+        Uses a 24-hour cutoff (SESSION_DISK_TTL) instead of the 1-hour block TTL
+        so that long-running sessions survive daemon restarts without disappearing.
+        Dead sessions are evicted by _prune_dead_pid_sessions / _prune_dead_real_sessions.
 
         After loading, deduplicate by TTY: only one session per TTY is allowed.
         When multiple sessions share a TTY, the real (non-pid-*) session wins;
@@ -967,7 +1005,7 @@ class MCPClient:
         try:
             with open(SESSIONS_PATH) as f:
                 data = json.load(f)
-            cutoff = time.time() - SESSION_TTL
+            cutoff = time.time() - SESSION_DISK_TTL
             self._sessions = {
                 sid: info for sid, info in data.items()
                 if isinstance(info, dict) and info.get('last_seen', 0) >= cutoff
@@ -1301,16 +1339,8 @@ class MCPClient:
     def _handle_session_stop(self, msg):
         session_id = msg.get('session_id', '')
         cwd = msg.get('cwd', '')
-        last_message = msg.get('last_message', '')
         if not session_id:
             return
-        self._register_session(session_id, cwd)
-        if session_id in self._sessions:
-            if cwd:
-                self._sessions[session_id]['cwd'] = cwd
-                self._sessions[session_id]['project'] = self._project_label(cwd, session_id)
-            self._sessions[session_id]['last_seen'] = time.time()
-        self._working_sessions.discard(session_id)
         # Cancel any pane/TTY monitors for this session
         tmux_target = self._sessions.get(session_id, {}).get('tmux_target')
         if tmux_target:
@@ -1320,10 +1350,18 @@ class MCPClient:
         tty_task = self._tty_monitors.pop(session_id, None)
         if tty_task:
             tty_task.cancel()
-        print(f'[claudecode-controller] session stopped: {session_id}', file=sys.stderr)
+        # Remove the session and clear its iOS block immediately.
+        # Re-emitting with is_working=false left ghost sessions visible for up to
+        # SESSION_TTL (1h), causing duplicates when a new session started in the same repo.
+        info = self._sessions.pop(session_id, {})
+        self._working_sessions.discard(session_id)
+        self._current_tools.pop(session_id, None)
+        self._tool_histories.pop(session_id, None)
+        self._save_sessions()
+        project = info.get('project') or (os.path.basename(cwd) if cwd else 'Claude Code')
+        print(f'[claudecode-controller] session stopped: {session_id} ({project})', file=sys.stderr)
         asyncio.create_task(self._tm_unregister(session_id))
-        asyncio.create_task(self._emit_session_block(session_id, last_message=last_message))
-        project = self._sessions.get(session_id, {}).get('project', 'Claude Code')
+        asyncio.create_task(self.clear_block(self._session_block_id(session_id)))
         asyncio.create_task(self.emit_block(str(uuid.uuid4()), 'session_event', {
             'event': 'stopped', 'project': project, 'cwd': cwd, 'ts': time.time()
         }, ttl=3600))
@@ -2169,10 +2207,11 @@ end tell
         # Evict any other session on this TTY — only one session per terminal.
         if tty:
             self._evict_sessions_for_tty(tty, session_id)
-        # Start TTY prompt monitor if not already running
-        if tty and session_id not in self._tty_monitors:
-            task = asyncio.create_task(self._monitor_tty_session(session_id))
-            self._tty_monitors[session_id] = task
+        # Hook-registered sessions have full hook coverage (PostToolUse, Stop, etc.)
+        # so TTY polling is redundant and causes false-positive prompt detection
+        # when Claude Code's own UI (e.g. "accept edits on (shift+tab to cycle)")
+        # is misidentified as an interactive menu. TTY monitor is only useful for
+        # pid-* sessions (discovered processes without hook control).
         if is_new:
             session = self._sessions.get(session_id, {})
             if session.get('tty') or session.get('tmux_target'):
