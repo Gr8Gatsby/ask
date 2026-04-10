@@ -296,7 +296,11 @@ struct HomeView: View {
                 } else if machines.isEmpty {
                     emptyState
                 } else if selectedTab == .feed {
-                    FeedView(machines: visibleMachines, activeMachineID: machineFilter)
+                    TaskFeedView(machines: visibleMachines)
+                        .navigationDestination(for: TaskRecord.self) { task in
+                            TaskThreadView(task: task)
+                                .environment(taskHistory)
+                        }
                 } else {
                     content
                 }
