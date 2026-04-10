@@ -273,33 +273,18 @@ class MCPClient:
                         fut.set_result(msg.get('result'))
                 continue
 
-            # Incoming tool call from AskMac (block response)
+            # Block responses arrive as notifications/message with type=user_response
             method = msg.get('method', '')
-            if method == 'tools/call':
-                params    = msg.get('params', {})
-                tool_name = params.get('name')
-                args      = params.get('arguments', {})
-
-                if tool_name == 'respond_to_block':
-                    block_id = args.get('blockId') or args.get('block_id')
-                    value    = args.get('value', '')
-                    cb = self._response_callbacks.get(block_id)
+            if method == 'notifications/message':
+                data     = msg.get('params', {}).get('data', {})
+                msg_type = data.get('type')
+                if msg_type == 'user_response':
+                    block_id = data.get('blockId', '')
+                    value    = data.get('value', '')
+                    _log(f'user_response block_id={block_id!r} value={value!r}')
+                    cb = self._response_callbacks.pop(block_id, None)
                     if cb:
-                        self._write({
-                            'jsonrpc': '2.0', 'id': msg_id,
-                            'result': {'content': [{'type': 'text', 'text': 'ok'}]}
-                        })
                         asyncio.ensure_future(cb(value))
-                    else:
-                        self._write({
-                            'jsonrpc': '2.0', 'id': msg_id,
-                            'result': {'content': [{'type': 'text', 'text': 'unknown block'}]}
-                        })
-                else:
-                    self._write({
-                        'jsonrpc': '2.0', 'id': msg_id,
-                        'error': {'code': -32601, 'message': f'Unknown tool: {tool_name}'}
-                    })
 
 
 def _run(cmd: str) -> str:
