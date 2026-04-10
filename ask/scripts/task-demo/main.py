@@ -224,7 +224,7 @@ class MCPClient:
             'title': 'A2A Task Demo',
             'body': 'Tap Run Demo to exercise open_task, append_message, and put_artifact end-to-end.',
             'options': ['Run Demo'],
-            'urgency': 'info',
+            'urgency': 'warning',
         }, ttl=3600, inbox=True)
         _log('trigger block emitted')
 
@@ -232,13 +232,14 @@ class MCPClient:
         _log(f'trigger tapped: {value!r}')
         await self.clear_block(BLOCK_ID)
         await self.run_demo()
-        # Re-emit so it can be run again
+        # Re-emit so it can be run again (small delay lets the clear propagate)
+        await asyncio.sleep(1)
         self._response_callbacks[BLOCK_ID] = self._on_trigger
         await self.emit_block(BLOCK_ID, 'confirmation', {
             'title': 'A2A Task Demo',
             'body': 'Demo complete! Tap Run Demo to run it again.',
             'options': ['Run Demo'],
-            'urgency': 'info',
+            'urgency': 'warning',
         }, ttl=3600, inbox=True)
 
     # ── Main event loop ───────────────────────────────────────────────────────
