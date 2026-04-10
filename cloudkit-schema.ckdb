@@ -1,5 +1,70 @@
 DEFINE SCHEMA
 
+    RECORD TYPE AskArtifact (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE QUERYABLE,
+        artifactID      STRING QUERYABLE,
+        content         ASSET,
+        description     STRING,
+        filename        STRING,
+        machineID       STRING QUERYABLE,
+        mimeType        STRING,
+        scriptID        STRING QUERYABLE,
+        sizeBytes       INT64,
+        taskID          STRING QUERYABLE,
+        updatedAt       TIMESTAMP QUERYABLE SORTABLE,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE AskTask (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE QUERYABLE,
+        artifactCount   INT64,
+        lastActivityAt  TIMESTAMP QUERYABLE SORTABLE,
+        machineID       STRING QUERYABLE,
+        messageCount    INT64,
+        scriptIcon      STRING,
+        scriptIconData  STRING,
+        scriptID        STRING QUERYABLE,
+        scriptName      STRING,
+        status          STRING QUERYABLE,
+        taskID          STRING QUERYABLE,
+        title           STRING,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
+    RECORD TYPE AskTaskMessage (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE QUERYABLE,
+        machineID       STRING QUERYABLE,
+        messageID       STRING QUERYABLE,
+        partsJSON       STRING,
+        role            STRING,
+        scriptID        STRING QUERYABLE,
+        sequenceNumber  INT64 QUERYABLE SORTABLE,
+        taskID          STRING QUERYABLE,
+        timestamp       TIMESTAMP QUERYABLE SORTABLE,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
     RECORD TYPE Agent (
         "___createTime"      TIMESTAMP,
         "___createdBy"       REFERENCE,
