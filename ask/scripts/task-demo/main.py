@@ -24,7 +24,9 @@ from datetime import datetime
 # Force UTF-8 stdout so emoji pass through cleanly
 sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1, closefd=False)
 
-BLOCK_ID = 'task-demo-trigger'
+TRIGGER_BLOCK_ID = 'task-demo-trigger'
+TILE_BLOCK_ID    = 'task-demo-tile'
+STATUS_BLOCK_ID  = 'task-demo-status'
 
 
 def _log(msg: str):
@@ -106,6 +108,28 @@ class MCPClient:
             'filePath': file_path,
         })
 
+    # ── Tile helpers ──────────────────────────────────────────────────────────
+
+    async def set_tile(self, label: str, detail: str = '', color: str = 'gray'):
+        """Update the persistent home-screen tile."""
+        await self.emit_block(TILE_BLOCK_ID, 'tile', {
+            'label': label,
+            'body': detail,
+            'status_color': color,
+            'action_required': False,
+        })
+
+    async def set_status(self, label: str, detail: str = '', color: str = 'blue'):
+        """Show a status block in the script detail view."""
+        await self.emit_block(STATUS_BLOCK_ID, 'status', {
+            'label': label,
+            'detail': detail,
+            'color': color,
+        })
+
+    async def clear_status(self):
+        await self.clear_block(STATUS_BLOCK_ID)
+
     # ── Demo logic ────────────────────────────────────────────────────────────
 
     async def run_demo(self):
@@ -114,8 +138,10 @@ class MCPClient:
         _log(f'Starting demo, task_id={task_id}')
 
         try:
-            # 1. Open the task
+            # 1. Open the task + update tile to show we're working
             await self.open_task(task_id, f"System Report — {now_str}")
+            await self.set_tile('Running health check…', 'Collecting system info', 'blue')
+            await self.set_status('Collecting system info', color='blue')
             _log('open_task done')
 
             # 2. Simulated user prompt
@@ -128,6 +154,7 @@ class MCPClient:
             _log('initial messages posted')
 
             # 4. Collect real system data
+            await self.set_status('Running system checks…', color='blue')
             hostname  = platform.node()
             os_info   = f"{platform.system()} {platform.release()} ({platform.machine()})"
             python_ver = platform.python_version()
@@ -147,6 +174,7 @@ class MCPClient:
             _log('findings message posted')
 
             # 6. Write full report to a temp file
+            await self.set_status('Writing report…', color='blue')
             report_lines = [
                 f"# System Report — {now_str}",
                 f"",
@@ -198,12 +226,15 @@ class MCPClient:
             await self.append_message(task_id, 'assistant',
                 'Report complete. The full system health report is attached above.')
 
-            # 9. Mark completed
+            # 9. Mark completed + update tile to idle state
             await self.call_tool('open_task', {
                 'taskId': task_id,
                 'title': f"System Report — {now_str}",
                 'status': 'completed',
             })
+            await self.clear_status()
+            last_run = datetime.now().strftime('%H:%M')
+            await self.set_tile('Ready', f'Last run: {last_run}', 'green')
             _log('task completed')
 
         except Exception as e:
@@ -220,26 +251,29 @@ class MCPClient:
             'clientInfo': {'name': 'task-demo', 'version': '1.1.0'}
         })
         self._write({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
-        _log('MCP initialized — emitting trigger block')
+        _log('MCP initialized — emitting blocks')
 
-        # Emit a confirmation block so the user can tap "Run Demo" from iOS
-        self._response_callbacks[BLOCK_ID] = self._on_trigger
-        await self.emit_block(BLOCK_ID, 'confirmation', {
+        # Persistent tile — always visible on the home screen
+        await self.set_tile('Ready', 'Tap Run Demo to start', 'gray')
+
+        # Confirmation block in the inbox so the user can trigger the demo
+        self._response_callbacks[TRIGGER_BLOCK_ID] = self._on_trigger
+        await self.emit_block(TRIGGER_BLOCK_ID, 'confirmation', {
             'title': 'A2A Task Demo',
             'body': 'Tap Run Demo to exercise open_task, append_message, and put_artifact end-to-end.',
             'options': ['Run Demo'],
             'urgency': 'warning',
         }, ttl=3600, inbox=True)
-        _log('trigger block emitted')
+        _log('blocks emitted')
 
     async def _on_trigger(self, value: str):
         _log(f'trigger tapped: {value!r}')
-        await self.clear_block(BLOCK_ID)
+        await self.clear_block(TRIGGER_BLOCK_ID)
         await self.run_demo()
-        # Re-emit so it can be run again (small delay lets the clear propagate)
+        # Re-emit trigger so it can be run again
         await asyncio.sleep(1)
-        self._response_callbacks[BLOCK_ID] = self._on_trigger
-        await self.emit_block(BLOCK_ID, 'confirmation', {
+        self._response_callbacks[TRIGGER_BLOCK_ID] = self._on_trigger
+        await self.emit_block(TRIGGER_BLOCK_ID, 'confirmation', {
             'title': 'A2A Task Demo',
             'body': 'Demo complete! Tap Run Demo to run it again.',
             'options': ['Run Demo'],
@@ -290,6 +324,8 @@ class MCPClient:
                     cb = self._response_callbacks.pop(block_id, None)
                     if cb:
                         asyncio.ensure_future(cb(value))
+                    else:
+                        _log(f'no callback registered for block_id={block_id!r}')
 
 
 def _run(cmd: str) -> str:
