@@ -108,7 +108,9 @@ actor BrewMonitor {
     // MARK: - A2A: check task (up-to-date)
 
     private func emitCheckTask(nowStr: String) async throws {
-        let taskID = "brew-check-\(UUID().uuidString.prefix(8).lowercased())"
+        // Stable daily ID so multiple same-day checks update one task instead of spawning new ones.
+        let dateStr = ISO8601DateFormatter.localDate.string(from: Date())
+        let taskID  = "brew-check-\(dateStr)"
         try await mcp.openTask(taskID, title: "Homebrew check · \(nowStr)")
         try await mcp.appendMessage(taskID, role: "user", text: "Check for outdated Homebrew packages.")
         try await mcp.appendMessage(taskID, role: "assistant", text: "All packages are up to date. No upgrades needed.")
@@ -126,7 +128,7 @@ actor BrewMonitor {
             let filename = "brew-check-\(nowStr.replacingOccurrences(of: ":", with: "").replacingOccurrences(of: " ", with: "-")).md"
             try await mcp.putArtifact(
                 taskID,
-                artifactID: "brew-check-\(UUID().uuidString.prefix(8).lowercased())",
+                artifactID: "brew-check-report-\(dateStr)",  // stable — replaces previous report
                 filename: filename,
                 mimeType: "text/markdown",
                 description: "Homebrew check — all packages up to date",
@@ -379,10 +381,18 @@ actor BrewMonitor {
 // MARK: - Date helpers
 
 private extension ISO8601DateFormatter {
-    /// "2026-04-10 17:05" — compact local-time string used in task titles and report headers.
+    /// "2026-04-10 17:05" — compact local-time string for task titles and report headers.
     static let localShort: ISO8601DateFormatter = {
         let fmt = ISO8601DateFormatter()
         fmt.formatOptions = [.withFullDate, .withTime, .withColonSeparatorInTime, .withSpaceBetweenDateAndTime]
+        fmt.timeZone = .current
+        return fmt
+    }()
+
+    /// "2026-04-10" — date-only string used as stable daily task/artifact IDs.
+    static let localDate: ISO8601DateFormatter = {
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withFullDate]
         fmt.timeZone = .current
         return fmt
     }()

@@ -88,10 +88,12 @@ final class TaskHistoryStore {
 
     // MARK: - Clear history
 
-    /// Deletes a single task and all of its messages and artifacts.
+    /// Deletes a single task and all of its messages and artifacts — locally and from CloudKit.
     func deleteTask(_ task: TaskRecord) throws {
         let taskID    = task.taskID
         let machineID = task.machineID
+        let recordName = task.recordName
+
         let msgDescriptor = FetchDescriptor<TaskMessage>(
             predicate: #Predicate { $0.taskID == taskID && $0.machineID == machineID }
         )
@@ -107,6 +109,12 @@ final class TaskHistoryStore {
         }
         modelContext.delete(task)
         try modelContext.save()
+
+        // Also delete from CloudKit so the task doesn't reappear on next refresh.
+        // Use the CloudKit recordName (not just taskID) so we target the exact record.
+        Task {
+            await cloudKit.deleteTask(taskID: recordName, machineID: machineID)
+        }
     }
 
     /// Deletes all tasks, messages, and artifacts for a specific machine + script pair.

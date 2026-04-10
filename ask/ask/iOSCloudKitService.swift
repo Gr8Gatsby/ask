@@ -233,6 +233,42 @@ final class iOSCloudKitService {
         }
     }
 
+    /// Deletes an AskTask record plus all of its messages and artifacts from CloudKit.
+    func deleteTask(taskID: String, machineID: String) async {
+        // Delete the task record itself (best-effort)
+        _ = try? await database.deleteRecord(withID: CKRecord.ID(recordName: taskID))
+
+        // Batch-delete all messages for this task (filter in-memory since taskID may not be indexed)
+        let msgPredicate = NSPredicate(format: "%K == %@", CKSchema.AskTaskMessage.machineID, machineID)
+        let msgQuery = CKQuery(recordType: CKSchema.RecordType.askTaskMessage, predicate: msgPredicate)
+        if let (results, _) = try? await database.records(matching: msgQuery, resultsLimit: 500) {
+            let ids = results.compactMap { _, r -> CKRecord.ID? in
+                guard let record = try? r.get(),
+                      record[CKSchema.AskTaskMessage.taskID] as? String == taskID
+                else { return nil }
+                return record.recordID
+            }
+            if !ids.isEmpty {
+                _ = try? await database.modifyRecords(saving: [], deleting: ids, savePolicy: .allKeys, atomically: false)
+            }
+        }
+
+        // Batch-delete all artifacts for this task
+        let artPredicate = NSPredicate(format: "%K == %@", CKSchema.AskArtifact.machineID, machineID)
+        let artQuery = CKQuery(recordType: CKSchema.RecordType.askArtifact, predicate: artPredicate)
+        if let (results, _) = try? await database.records(matching: artQuery, resultsLimit: 200) {
+            let ids = results.compactMap { _, r -> CKRecord.ID? in
+                guard let record = try? r.get(),
+                      record[CKSchema.AskArtifact.taskID] as? String == taskID
+                else { return nil }
+                return record.recordID
+            }
+            if !ids.isEmpty {
+                _ = try? await database.modifyRecords(saving: [], deleting: ids, savePolicy: .allKeys, atomically: false)
+            }
+        }
+    }
+
     /// Fetches all AskTaskMessage records for a task, sorted by sequence number.
     func fetchMessages(taskID: String, machineID: String) async throws -> [TaskMessage] {
         // Query by machineID (guaranteed queryable) and filter taskID in memory
