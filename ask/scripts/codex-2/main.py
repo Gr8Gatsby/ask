@@ -736,6 +736,22 @@ class CodexController:
 
         while session_id in self._sessions:
             try:
+                info = self._sessions.get(session_id, {})
+
+                # Skip TUI detection while Codex is actively working — streaming
+                # output can false-positive against numbered/arrow menu patterns.
+                # Clear any stale TUI block so it doesn't linger during work.
+                if info.get('is_working'):
+                    if active_tui_block:
+                        try:
+                            await self.clear_block(active_tui_block)
+                        except Exception:
+                            pass
+                        active_tui_block = None
+                        last_pattern_id = None
+                    await asyncio.sleep(0.5)
+                    continue
+
                 result = await self._tm_detect(session_id)
                 pattern_id = result.get('pattern_id')
                 tui_result = result.get('result') or {}
@@ -866,8 +882,11 @@ class CodexController:
                     tmux_target = info.get('tmux_target', '')
                     if tmux_target:
                         pane_cmd = _get_pane_command(tmux_target)
-                        if pane_cmd and pane_cmd.lower() not in ('node', 'codex'):
-                            _log(f'Pane {tmux_target} running {pane_cmd!r} — Codex exited, cleaning up')
+                        # Empty pane_cmd means tmux is gone or the pane no longer exists.
+                        # Either way, Codex is dead — clean up so iOS doesn't keep showing it.
+                        if not pane_cmd or pane_cmd.lower() not in ('node', 'codex'):
+                            reason = 'tmux gone' if not pane_cmd else pane_cmd
+                            _log(f'Pane {tmux_target} ({reason!r}) — Codex exited, cleaning up')
                             asyncio.create_task(self._handle_session_stop(
                                 {'session_id': session_id, 'last_message': 'Session ended'}))
                             continue

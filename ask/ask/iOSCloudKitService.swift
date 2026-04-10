@@ -327,34 +327,22 @@ final class iOSCloudKitService {
         _ = try await database.save(record)
     }
 
-    /// Returns feed-type scripts discovered from active RKBlock records across the given machines.
-    func fetchFeedScripts(machines: [AskMachine]) async -> [AskFeedScript] {
-        var result: [AskFeedScript] = []
+    /// Fetches all AskScript records for the given machines from CloudKit.
+    func fetchScripts(machines: [AskMachine]) async -> [AskScript] {
+        var result: [AskScript] = []
         for machine in machines {
-            let predicate = NSPredicate(format: "%K == %@ AND %K == %@",
-                CKSchema.RKBlock.machineID, machine.id,
-                CKSchema.RKBlock.scriptType, "feed")
-            let query = CKQuery(recordType: CKSchema.RecordType.rkBlock, predicate: predicate)
-            guard let (records, _) = try? await database.records(matching: query, resultsLimit: 50)
+            let predicate = NSPredicate(format: "%K == %@", CKSchema.AskScript.machineID, machine.id)
+            let query = CKQuery(recordType: CKSchema.RecordType.askScript, predicate: predicate)
+            guard let (records, _) = try? await database.records(matching: query, resultsLimit: 100)
             else { continue }
-            var seen = Set<String>()
             for (_, r) in records {
                 guard let record = try? r.get(),
-                      let scriptID = record[CKSchema.RKBlock.scriptID] as? String,
-                      seen.insert(scriptID).inserted
+                      let script = AskScript(record: record, machineName: machine.name)
                 else { continue }
-                let scriptName = record[CKSchema.RKBlock.scriptName] as? String ?? scriptID
-                let icon = record[CKSchema.RKBlock.scriptIcon] as? String
-                result.append(AskFeedScript(
-                    scriptID: scriptID,
-                    scriptName: scriptName,
-                    machineID: machine.id,
-                    machineName: machine.name,
-                    icon: icon
-                ))
+                result.append(script)
             }
         }
-        return result
+        return result.sorted { $0.scriptName < $1.scriptName }
     }
 
     private static var stableDeviceID: String {

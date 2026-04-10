@@ -1,5 +1,6 @@
 import Foundation
 import CloudKit
+import SwiftUI
 
 // MARK: - Schema constants (mirrors AskMac CloudKitSchema.swift)
 
@@ -20,6 +21,7 @@ enum CKSchema {
         static let device = "AskDevice"
         static let feedSchedule = "FeedSchedule"
         static let askInvokeRequest = "AskInvokeRequest"
+        static let askScript        = "AskScript"
         // Task history (A2A protocol)
         static let askTask        = "AskTask"
         static let askTaskMessage = "AskTaskMessage"
@@ -98,6 +100,19 @@ enum CKSchema {
         static let machineID   = "machineID"
         static let scriptID    = "scriptID"
         static let requestedAt = "requestedAt"
+    }
+
+    enum AskScript {
+        static let machineID  = "machineID"
+        static let scriptID   = "scriptID"
+        static let scriptName = "scriptName"
+        static let scriptType = "scriptType"
+        static let scriptIcon = "scriptIcon"
+        static let version    = "version"
+        static let status     = "status"
+        static let lastRunAt  = "lastRunAt"
+        static let nextRunAt  = "nextRunAt"
+        static let updatedAt  = "updatedAt"
     }
 
     enum FeedSchedule {
@@ -215,15 +230,63 @@ extension Date {
     }
 }
 
-// MARK: - Feed script (for invoke menu)
+// MARK: - Script registry
 
-struct AskFeedScript: Identifiable {
+struct AskScript: Identifiable {
     var id: String { "\(machineID)/\(scriptID)" }
-    let scriptID: String
+    let machineID:  String
+    let scriptID:   String
     let scriptName: String
-    let machineID: String
-    let machineName: String
-    let icon: String?
+    let scriptType: String   // "feed", "tile", "system"
+    let scriptIcon: String?
+    let version:    String?
+    let status:     String   // "running", "idle", "disabled", "crashed"
+    let lastRunAt:  Date?
+    let nextRunAt:  Date?
+    let updatedAt:  Date
+    var machineName: String  // joined from AskMachine, not stored in record
+
+    var isFeed: Bool { scriptType == "feed" }
+    var statusColor: Color {
+        switch status {
+        case "running":  return .blue
+        case "idle":     return .secondary
+        case "crashed":  return .red
+        case "disabled": return .secondary
+        default:         return .secondary
+        }
+    }
+    var statusIcon: String {
+        switch status {
+        case "running":  return "circle.fill"
+        case "idle":     return "circle"
+        case "crashed":  return "exclamationmark.circle.fill"
+        case "disabled": return "minus.circle"
+        default:         return "circle"
+        }
+    }
+
+    init?(record: CKRecord, machineName: String) {
+        guard
+            let machineID  = record[CKSchema.AskScript.machineID]  as? String,
+            let scriptID   = record[CKSchema.AskScript.scriptID]   as? String,
+            let scriptName = record[CKSchema.AskScript.scriptName] as? String,
+            let scriptType = record[CKSchema.AskScript.scriptType] as? String,
+            let status     = record[CKSchema.AskScript.status]     as? String,
+            let updatedAt  = record[CKSchema.AskScript.updatedAt]  as? Date
+        else { return nil }
+        self.machineID  = machineID
+        self.scriptID   = scriptID
+        self.scriptName = scriptName
+        self.scriptType = scriptType
+        self.scriptIcon = record[CKSchema.AskScript.scriptIcon] as? String
+        self.version    = record[CKSchema.AskScript.version]    as? String
+        self.status     = status
+        self.lastRunAt  = record[CKSchema.AskScript.lastRunAt]  as? Date
+        self.nextRunAt  = record[CKSchema.AskScript.nextRunAt]  as? Date
+        self.updatedAt  = updatedAt
+        self.machineName = machineName
+    }
 }
 
 // MARK: - Machine

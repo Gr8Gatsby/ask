@@ -19,6 +19,8 @@ enum CKSchema {
         static let askArtifact    = "AskArtifact"
         // Script invoke requests — written by iOS, drained by AskMac ResponsePoller.
         static let askInvokeRequest = "AskInvokeRequest"
+        // Script registry — one record per script per machine, always up to date.
+        static let askScript = "AskScript"
         // Deprecated — dead code, no longer written or read.
         // CloudKit record types cannot be deleted from production containers;
         // these constants are kept only so purgeOldRecords can clean up stale records.
@@ -100,6 +102,19 @@ enum CKSchema {
         static let machineID   = "machineID"
         static let scriptID    = "scriptID"
         static let requestedAt = "requestedAt"
+    }
+
+    enum AskScript {
+        static let machineID   = "machineID"
+        static let scriptID    = "scriptID"
+        static let scriptName  = "scriptName"
+        static let scriptType  = "scriptType"   // "feed", "tile", "system"
+        static let scriptIcon  = "scriptIcon"
+        static let version     = "version"
+        static let status      = "status"       // "running", "idle", "disabled", "crashed"
+        static let lastRunAt   = "lastRunAt"
+        static let nextRunAt   = "nextRunAt"
+        static let updatedAt   = "updatedAt"
     }
 
     enum FeedSchedule {
@@ -390,5 +405,38 @@ struct DeviceRecord: Sendable {
         // Default true when field is absent (new records from iOS don't set it)
         let enabledInt = record[CKSchema.Device.enabled] as? Int64 ?? 1
         self.enabled = enabledInt != 0
+    }
+}
+
+// MARK: - AskScript record
+
+struct AskScriptRecord: Sendable {
+    let machineID:  String
+    let scriptID:   String
+    let scriptName: String
+    let scriptType: String   // "feed", "tile", "system"
+    let scriptIcon: String?
+    let version:    String?
+    var status:     String   // "running", "idle", "disabled", "crashed"
+    var lastRunAt:  Date?
+    var nextRunAt:  Date?
+    let updatedAt:  Date
+
+    var recordName: String { "script-\(machineID)-\(scriptID)" }
+
+    func toCKRecord() -> CKRecord {
+        let record = CKRecord(recordType: CKSchema.RecordType.askScript,
+                              recordID: CKRecord.ID(recordName: recordName))
+        record[CKSchema.AskScript.machineID]  = machineID
+        record[CKSchema.AskScript.scriptID]   = scriptID
+        record[CKSchema.AskScript.scriptName] = scriptName
+        record[CKSchema.AskScript.scriptType] = scriptType
+        record[CKSchema.AskScript.scriptIcon] = scriptIcon as CKRecordValueProtocol?
+        record[CKSchema.AskScript.version]    = version as CKRecordValueProtocol?
+        record[CKSchema.AskScript.status]     = status
+        record[CKSchema.AskScript.lastRunAt]  = lastRunAt as CKRecordValueProtocol?
+        record[CKSchema.AskScript.nextRunAt]  = nextRunAt as CKRecordValueProtocol?
+        record[CKSchema.AskScript.updatedAt]  = updatedAt
+        return record
     }
 }

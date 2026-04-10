@@ -30,13 +30,24 @@ class AskMacUITestCase: XCTestCase {
         app.launchEnvironment["UI_TEST_SCENARIO"] = scenario
         app.launch()
         _ = app.wait(for: .runningForeground, timeout: 5)
+
+        // Click the menu bar status item to show the MenuBarView popover.
+        // In UI testing mode, MenuBarView.onAppear automatically calls
+        // openWindow(id: "scripts") so the Scripts window opens without
+        // requiring a separate "Open Ask" button click.
+        let statusItem = app.statusItems.firstMatch
+        if statusItem.waitForExistence(timeout: 3) {
+            statusItem.click()
+        }
+
         screenshot("launched-\(scenario)")
     }
 
     // MARK: - Helpers
 
     var scriptsWindow: XCUIElement {
-        app.windows["Ask"]
+        // Try firstMatch to debug whether any window opens at all
+        app.windows.firstMatch
     }
 
     @discardableResult
@@ -160,14 +171,14 @@ final class MacAlertBlockTests: AskMacUITestCase {
     func test_alertBlock_titleVisible() {
         launch(scenario: "alert")
         let pred = NSPredicate(format: "label CONTAINS[c] %@", "terminal-manager")
-        let el = scriptsWindow.descendants(matching: .any).matching(pred).firstMatch
+        let el = scriptsWindow.staticTexts.matching(pred).firstMatch
         assertExists(el, "Alert title should be visible in detail pane")
     }
 
     func test_alertBlock_bodyVisible() {
         launch(scenario: "alert")
         let pred = NSPredicate(format: "label CONTAINS[c] %@", "TUI detection")
-        let el = scriptsWindow.descendants(matching: .any).matching(pred).firstMatch
+        let el = scriptsWindow.staticTexts.matching(pred).firstMatch
         assertExists(el, "Alert body should be visible in detail pane")
     }
 

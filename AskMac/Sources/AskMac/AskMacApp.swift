@@ -101,7 +101,6 @@ struct AskMacApp: App {
 
 struct MenuBarLabel: View {
     let hasActiveScripts: Bool
-    @Environment(\.openWindow) private var openWindow
 
     private var isDevBuild: Bool {
         let exe = CommandLine.arguments.first ?? ""
@@ -111,13 +110,5 @@ struct MenuBarLabel: View {
     var body: some View {
         Image(systemName: isDevBuild ? "icloud" : "icloud.fill")
             .symbolEffect(.pulse, isActive: hasActiveScripts)
-            .onAppear {
-                // In UI testing mode the menu bar icon is the first SwiftUI view rendered,
-                // so we trigger the Scripts window open here — tests can then access it
-                // directly via app.windows["Ask"] without clicking the menu bar icon.
-                if MacUITestingSupport.isUITesting {
-                    openWindow(id: "scripts")
-                }
-            }
     }
 }

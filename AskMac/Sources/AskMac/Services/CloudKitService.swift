@@ -283,6 +283,30 @@ final class CloudKitService {
         return found
     }
 
+    /// Upserts an AskScript record representing the current state of one script on this machine.
+    func upsertScript(_ script: AskScriptRecord) async throws {
+        let record = existingRecord(named: script.recordName, type: CKSchema.RecordType.askScript)
+        record[CKSchema.AskScript.machineID]  = script.machineID
+        record[CKSchema.AskScript.scriptID]   = script.scriptID
+        record[CKSchema.AskScript.scriptName] = script.scriptName
+        record[CKSchema.AskScript.scriptType] = script.scriptType
+        record[CKSchema.AskScript.scriptIcon] = script.scriptIcon as CKRecordValueProtocol?
+        record[CKSchema.AskScript.version]    = script.version as CKRecordValueProtocol?
+        record[CKSchema.AskScript.status]     = script.status
+        record[CKSchema.AskScript.lastRunAt]  = script.lastRunAt as CKRecordValueProtocol?
+        record[CKSchema.AskScript.nextRunAt]  = script.nextRunAt as CKRecordValueProtocol?
+        record[CKSchema.AskScript.updatedAt]  = script.updatedAt
+        let saved = try await database.save(record)
+        cachedRecords[script.recordName] = saved
+    }
+
+    /// Deletes the AskScript record for a script that has been uninstalled or permanently disabled.
+    func deleteScript(machineID: String, scriptID: String) async {
+        let recordName = "script-\(machineID)-\(scriptID)"
+        cachedRecords.removeValue(forKey: recordName)
+        try? await database.deleteRecord(withID: CKRecord.ID(recordName: recordName))
+    }
+
     /// Fetches and deletes all AskInvokeRequest records addressed to this machine.
     /// Returns the list of scriptIDs to invoke.
     func drainInvokeRequests(machineID: String) async throws -> [String] {

@@ -814,6 +814,22 @@ class MCPClient:
                     break
                 continue
 
+            # Don't scan for TUI prompts while Claude is actively streaming a
+            # response — markdown output (numbered lists, ❯ arrows) false-positives.
+            if session_id in self._working_sessions:
+                if last_hash:
+                    # Clear any stale pending_confirmation from before work started.
+                    last_hash = ''
+                    active_options = []
+                    session = self._sessions.get(session_id, {})
+                    session.pop('pending_confirmation', None)
+                    session_block_id = self._session_block_id(session_id)
+                    self._response_callbacks[session_block_id] = (
+                        lambda v, sid=session_id: self._on_session_reply(sid, v)
+                    )
+                    await self._emit_session_block(session_id)
+                continue
+
             parsed = self._parse_tmux_prompt(content)
             content_hash = _hl.md5(content.encode()).hexdigest()[:8]
 
@@ -1066,24 +1082,43 @@ class MCPClient:
         return dead
 
     async def _prune_dead_real_sessions(self):
-        """Remove hook-registered sessions that are no longer registered in terminal-manager.
-        Only prunes when list_sessions returns at least one result — if it returns empty we
-        can't tell 'no processes' from 'tool unavailable', so we skip pruning."""
-        active = await self.list_terminal_sessions()
-        if not active:
-            return []
-        active_ids = {s.get('session_id') for s in active if s.get('session_id')}
+        """Remove hook-registered sessions whose claude process has died.
+
+        Two-pass approach:
+        1. Always prune sessions whose stored claude_pid is no longer alive.
+        2. If TM returns a non-empty session list, also prune any real session
+           absent from TM (TM returning empty just means it restarted and lost
+           state — we can't use that as a signal that all sessions are dead)."""
         dead = []
+
+        # Pass 1: PID-based liveness — works even when TM has no state.
         for session_id, info in list(self._sessions.items()):
             if session_id.startswith('pid-'):
                 continue
-            if session_id not in active_ids:
+            claude_pid = info.get('claude_pid')
+            if claude_pid and not self._is_pid_alive(claude_pid):
                 self._sessions.pop(session_id, None)
                 self._working_sessions.discard(session_id)
                 dead.append(session_id)
                 asyncio.create_task(self._tm_unregister(session_id))
                 cwd = info.get('cwd', '')
-                print(f'[claudecode-controller] pruned dead session {session_id[:8]} ({cwd})', file=sys.stderr)
+                print(f'[claudecode-controller] pruned dead session {session_id[:8]} pid={claude_pid} ({cwd})', file=sys.stderr)
+
+        # Pass 2: TM-based cross-check (only when TM has sessions to report).
+        active = await self.list_terminal_sessions()
+        if active:
+            active_ids = {s.get('session_id') for s in active if s.get('session_id')}
+            for session_id, info in list(self._sessions.items()):
+                if session_id.startswith('pid-') or session_id in dead:
+                    continue
+                if session_id not in active_ids:
+                    self._sessions.pop(session_id, None)
+                    self._working_sessions.discard(session_id)
+                    dead.append(session_id)
+                    asyncio.create_task(self._tm_unregister(session_id))
+                    cwd = info.get('cwd', '')
+                    print(f'[claudecode-controller] pruned dead session {session_id[:8]} (not in TM, {cwd})', file=sys.stderr)
+
         if dead:
             self._save_sessions()
         return dead
@@ -1230,6 +1265,12 @@ class MCPClient:
             if self._normalize_tty(self._sessions[sid].get('tty', '')) == tty:
                 _log(f'[claudecode] evicting {sid} — TTY {tty} superseded by {keep_session_id[:8]}')
                 asyncio.create_task(self.clear_block(self._session_block_id(sid)))
+                # Also clear any pending confirmation blocks linked to this session
+                # so the ghost session card with orange badge disappears on iOS.
+                for block_ids in list(self._tool_block_map.keys()):
+                    if block_ids[0] == sid:
+                        for bid in self._tool_block_map.pop(block_ids, []):
+                            asyncio.create_task(self.clear_block(bid))
                 del self._sessions[sid]
         self._save_sessions()
 
@@ -1513,11 +1554,14 @@ class MCPClient:
                 'name': 'wait_for_idle',
                 'arguments': {
                     'session_id': session_id,
-                    'timeout': 300,
-                    'poll_interval': 1,
+                    'timeout': 1800,
+                    'poll_interval': 2,
                     'stable_count': 2,
+                    # Match Claude's idle '>' prompt OR the diff-viewer '>> accept edits'
+                    # line — both mean Claude has finished streaming and is waiting for input.
+                    'prompt_pattern': r'^\s*(>\s*$|>>\s)',
                 }
-            }, timeout=320.0)
+            }, timeout=1820.0)
             if isinstance(result, dict) and result.get('idle') and result.get('output'):
                 response = result['output']
                 _log(f'[claudecode] TTY response captured for {session_id[:8]} ({len(response)} chars)')
@@ -1559,48 +1603,70 @@ class MCPClient:
 
         # ── TTY sessions ─────────────────────────────────────────────────────
         if not tmux_target:
-            # Priority 1: inject_tty — TIOCSTI, no clipboard, no focus needed
-            try:
-                result = await self._rpc('tools/call', {
-                    'name': 'inject_tty',
-                    'arguments': {'session_id': session_id, 'text': text}
-                }, timeout=3.0)
-                if isinstance(result, dict) and result.get('ok'):
-                    _log(f'[claudecode] routed via inject_tty: {session_id[:8]}')
-                    asyncio.create_task(self._capture_tty_response(session_id))
-                    return
-            except Exception as e:
-                _log(f'[claudecode] inject_tty failed, falling back: {e}')
+            # Priority 1: inject_tty — TIOCSTI, no clipboard, no focus needed.
+            # Retry once with re-registration: TM may have restarted and lost
+            # its session registry, causing "Unknown session" → -32601.
+            for attempt in range(2):
+                try:
+                    result = await self._rpc('tools/call', {
+                        'name': 'inject_tty',
+                        'arguments': {'session_id': session_id, 'text': text}
+                    }, timeout=3.0)
+                    if isinstance(result, dict) and result.get('ok'):
+                        _log(f'[claudecode] routed via inject_tty: {session_id[:8]}')
+                        asyncio.create_task(self._capture_tty_response(session_id))
+                        return
+                    break  # got a valid response (ok=False), no point retrying
+                except Exception as e:
+                    if attempt == 0:
+                        _log(f'[claudecode] inject_tty failed, re-registering and retrying: {e}')
+                        await self._tm_register(session_id)
+                    else:
+                        _log(f'[claudecode] inject_tty failed after re-register, falling back: {e}')
 
-            # Priority 2: send_text via terminal-manager (osascript, focuses window)
-            try:
-                result = await self._rpc('tools/call', {
-                    'name': 'send_text',
-                    'arguments': {'session_id': session_id, 'text': text}
-                }, timeout=3.0)
-                if isinstance(result, dict) and result.get('ok'):
-                    _log(f'[claudecode] routed via send_text: {session_id[:8]}')
-                    asyncio.create_task(self._capture_tty_response(session_id))
-                    return
-            except Exception as e:
-                _log(f'[claudecode] send_text failed, falling back to osascript: {e}')
+            # Priority 2: send_text via terminal-manager (osascript, focuses window).
+            # Same retry-with-reregister pattern.
+            for attempt in range(2):
+                try:
+                    result = await self._rpc('tools/call', {
+                        'name': 'send_text',
+                        'arguments': {'session_id': session_id, 'text': text}
+                    }, timeout=3.0)
+                    if isinstance(result, dict) and result.get('ok'):
+                        _log(f'[claudecode] routed via send_text: {session_id[:8]}')
+                        asyncio.create_task(self._capture_tty_response(session_id))
+                        return
+                    break
+                except Exception as e:
+                    if attempt == 0:
+                        _log(f'[claudecode] send_text failed, re-registering and retrying: {e}')
+                        await self._tm_register(session_id)
+                    else:
+                        _log(f'[claudecode] send_text failed after re-register, falling back to osascript: {e}')
 
             # Priority 3 handled below (pbcopy + osascript)
 
         # ── tmux sessions ─────────────────────────────────────────────────────
         else:
-            # Primary: terminal-manager send_text
-            try:
-                result = await self._rpc('tools/call', {
-                    'name': 'send_text',
-                    'arguments': {'session_id': session_id, 'text': text}
-                }, timeout=3.0)
-                if isinstance(result, dict) and result.get('ok'):
-                    _log(f'[claudecode] routed via terminal-manager send_text: {session_id[:8]}')
-                    asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
-                    return
-            except Exception as e:
-                _log(f'[claudecode] send_text failed, falling back: {e}')
+            # Primary: terminal-manager send_text.
+            # Retry once with re-registration on error (TM may have restarted).
+            for attempt in range(2):
+                try:
+                    result = await self._rpc('tools/call', {
+                        'name': 'send_text',
+                        'arguments': {'session_id': session_id, 'text': text}
+                    }, timeout=3.0)
+                    if isinstance(result, dict) and result.get('ok'):
+                        _log(f'[claudecode] routed via terminal-manager send_text: {session_id[:8]}')
+                        asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
+                        return
+                    break
+                except Exception as e:
+                    if attempt == 0:
+                        _log(f'[claudecode] send_text failed, re-registering and retrying: {e}')
+                        await self._tm_register(session_id)
+                    else:
+                        _log(f'[claudecode] send_text failed after re-register, falling back: {e}')
 
             # Fallback: direct tmux send-keys
             try:
@@ -2236,10 +2302,11 @@ async def _session_heartbeat(client):
                 await client.clear_block(client._session_block_id(session_id))
             except Exception:
                 pass
-        # Deduplicate: one session per TTY — newer (most-recently-seen) wins.
+        # Deduplicate: one session per TTY — hook-registered (UUID) sessions beat
+        # pid-discovered sessions; within the same type, newer (most-recently-seen) wins.
         seen_ttys: dict = {}
         for sid, info in sorted(client._sessions.items(),
-                                key=lambda x: -x[1].get('last_seen', 0)):
+                                key=lambda x: (x[0].startswith('pid-'), -x[1].get('last_seen', 0))):
             tty = client._normalize_tty(info.get('tty', ''))
             if not tty:
                 continue

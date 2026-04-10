@@ -173,11 +173,6 @@ struct SessionChatView: View {
             if isActive, let pc = livePayload?.pendingConfirmation, let block = liveBlock {
                 pendingConfirmationBar(pc: pc, block: block)
             }
-            ForEach(pendingLinkedConfirmations, id: \.id) { block in
-                if let cp = block.confirmationPayload {
-                    pendingLinkedConfirmationBar(block: block, cp: cp)
-                }
-            }
             Divider()
             composeBar
             if isActive, scriptID == "codex-controller", let block = liveBlock {
@@ -245,12 +240,13 @@ struct SessionChatView: View {
                     sessionId: sessionId, role: "system", entryKind: "event", text: "Session ended"
                 ))
                 try? modelContext.save()
-                // Stay in conversation so the user can see the last message and any
-                // pending action blocks; they can navigate back with the back button.
+                // Dismiss after a brief delay so the "Session ended" entry is visible.
+                Task {
+                    try? await Task.sleep(for: .milliseconds(600))
+                    dismiss()
+                }
             }
         }
-        // Reconnecting banner handles the disconnected UI state.
-        // History is preserved through script restarts.
     }
 
     // MARK: - Reconnecting banner
@@ -491,20 +487,18 @@ struct SessionChatView: View {
     // MARK: - History helpers
 
     private func seedInitialEntries() {
-        guard entries.isEmpty else {
-            for block in linkedConfirmations { appendInlineBlockEntry(block) }
-            return
-        }
-        modelContext.insert(ChatEntry(
-            sessionId: sessionId, role: "system", entryKind: "event", text: "Session started"
-        ))
-        if let msg = livePayload?.lastMessage, !msg.isEmpty {
+        if entries.isEmpty {
             modelContext.insert(ChatEntry(
-                sessionId: sessionId, role: "assistant", entryKind: "message", text: msg
+                sessionId: sessionId, role: "system", entryKind: "event", text: "Session started"
             ))
+            try? modelContext.save()
+        }
+        // Always catch up on lastMessage — handles reopening the view after Claude
+        // responded while it was closed (onChange never fires for a value already set).
+        if let msg = livePayload?.lastMessage, !msg.isEmpty {
+            appendAssistantEntry(msg)
         }
         for block in linkedConfirmations { appendInlineBlockEntry(block) }
-        try? modelContext.save()
     }
 
     private func captureActivityGroup() {

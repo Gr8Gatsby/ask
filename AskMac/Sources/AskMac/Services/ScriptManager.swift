@@ -320,6 +320,7 @@ final class ScriptManager: @unchecked Sendable {
             guard isEnabled else {
                 upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon,
                              iconImage: iconImage, status: .stopped, isEnabled: false)
+                publishScript(manifest, status: "disabled")
                 continue
             }
 
@@ -336,6 +337,8 @@ final class ScriptManager: @unchecked Sendable {
                         self?.launchFeedRunWithDepCheck(manifest: m, scriptDir: d)
                     }
                 }
+                // Publish idle state with next scheduled run time before launching
+                publishScript(manifest, status: "idle", nextRunAt: computeNextRun(for: manifest))
                 // Trigger an immediate run
                 launchFeedRunWithDepCheck(manifest: manifest, scriptDir: dir)
             } else {
@@ -345,6 +348,7 @@ final class ScriptManager: @unchecked Sendable {
                     connections.removeValue(forKey: manifest.id)
                     activeBlocks.removeValue(forKey: manifest.id)
                 }
+                publishScript(manifest, status: "running")
                 launchWithDepCheck(manifest: manifest, scriptDir: dir)
             }
             print("[ScriptManager] \(isNew ? "Loaded" : "Refreshed") script: \(manifest.id)")
@@ -370,6 +374,7 @@ final class ScriptManager: @unchecked Sendable {
         restartDelays.removeValue(forKey: id)
         activeBlocks.removeValue(forKey: id)
         feedScheduler.cancel(scriptID: id)
+        if let m = manifests[id]?.manifest { publishScript(m, status: "disabled") }
         Task {
             let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: id)
             try? await blockService.clearAllBlocks()
@@ -403,10 +408,11 @@ final class ScriptManager: @unchecked Sendable {
         // Remove from disabled-scripts list (cleanup, the script is gone)
         settings.setScriptEnabled(id, enabled: true)
 
-        // Clear CloudKit blocks
+        // Clear CloudKit blocks and remove script registry record
         Task {
             let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: id)
             try? await blockService.clearAllBlocks()
+            await cloudKit.deleteScript(machineID: machineID, scriptID: id)
         }
 
         // Capture directory before removing from cache
@@ -504,6 +510,35 @@ final class ScriptManager: @unchecked Sendable {
         } else {
             launchWithDepCheck(manifest: cached.manifest, scriptDir: cached.dir)
         }
+    }
+
+    // MARK: - AskScript registry (CloudKit)
+
+    /// Publishes the current state of a script to CloudKit so iOS can enumerate and monitor it.
+    private func publishScript(_ manifest: ScriptManifest, status: String,
+                               lastRunAt: Date? = nil, nextRunAt: Date? = nil) {
+        let scriptType = manifest.isSystem ? "system" : (manifest.isFeed ? "feed" : "tile")
+        let record = AskScriptRecord(
+            machineID:  machineID,
+            scriptID:   manifest.id,
+            scriptName: manifest.name,
+            scriptType: scriptType,
+            scriptIcon: manifest.icon,
+            version:    manifest.version,
+            status:     status,
+            lastRunAt:  lastRunAt,
+            nextRunAt:  nextRunAt,
+            updatedAt:  Date()
+        )
+        Task { try? await cloudKit.upsertScript(record) }
+    }
+
+    /// Computes the next scheduled run time for a feed script from its cron expression.
+    private func computeNextRun(for manifest: ScriptManifest) -> Date? {
+        let cronExpr = settings.feedScheduleOverride(for: manifest.id)
+            ?? manifest.schedule
+            ?? "0 * * * *"
+        return CronExpression.nextFireDate(from: cronExpr)
     }
 
     /// Manually triggers a feed script run. Called when iOS sends an AskInvokeRequest.
@@ -830,6 +865,7 @@ final class ScriptManager: @unchecked Sendable {
 
         connections[manifest.id] = conn
         upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .running, isEnabled: true)
+        publishScript(manifest, status: "running")
         conn.start()
 
         // Feed execution timeout: kill the run if it exceeds the configured limit.
@@ -866,10 +902,16 @@ final class ScriptManager: @unchecked Sendable {
         if exitCode == 0 {
             print("[ScriptManager] \(manifest.id): feed run completed cleanly")
             upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: manifests[manifest.id]?.icon, status: .stopped, isEnabled: true)
+            if let m = manifests[manifest.id]?.manifest {
+                publishScript(m, status: "idle", lastRunAt: Date(), nextRunAt: computeNextRun(for: m))
+            }
         } else {
             let reason = bySignal ? "signal \(exitCode)" : "exit \(exitCode)"
             print("[ScriptManager] \(manifest.id): feed run failed (\(reason)) — last stderr: \(stderr)")
             upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: manifests[manifest.id]?.icon, status: .crashed, isEnabled: true)
+            if let m = manifests[manifest.id]?.manifest {
+                publishScript(m, status: "crashed", lastRunAt: Date())
+            }
             let feedIconData  = manifests[manifest.id]?.icon.flatMap { ScriptManager.iconPNGBase64($0) }
             let feedSvgString = manifests[manifest.id]?.svgString
             Task {
@@ -896,6 +938,7 @@ final class ScriptManager: @unchecked Sendable {
 
         let iconImage = manifests[manifest.id]?.icon
         upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .crashed, isEnabled: true)
+        publishScript(manifest, status: "crashed")
         connections.removeValue(forKey: manifest.id)
         activeBlocks.removeValue(forKey: manifest.id)
 

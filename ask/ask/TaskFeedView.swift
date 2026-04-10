@@ -156,7 +156,7 @@ private struct InvokeScriptSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(iOSCloudKitService.self) private var cloudKit
 
-    @State private var feedScripts: [AskFeedScript] = []
+    @State private var feedScripts: [AskScript] = []
     @State private var isLoading = true
     @State private var invokedIDs = Set<String>()
 
@@ -170,12 +170,12 @@ private struct InvokeScriptSheet: View {
                     ContentUnavailableView {
                         Label("No Feed Scripts", systemImage: "bolt.slash")
                     } description: {
-                        Text("Feed scripts appear here when they are running on a connected Mac.")
+                        Text("Feed scripts appear here once AskMac has registered them.")
                     }
                 } else {
                     List(feedScripts) { script in
                         HStack {
-                            if let icon = script.icon {
+                            if let icon = script.scriptIcon {
                                 Image(systemName: icon)
                                     .font(.title3)
                                     .foregroundStyle(.secondary)
@@ -218,7 +218,7 @@ private struct InvokeScriptSheet: View {
                 }
             }
             .task {
-                feedScripts = await cloudKit.fetchFeedScripts(machines: machines)
+                feedScripts = await cloudKit.fetchScripts(machines: machines).filter(\.isFeed)
                 isLoading = false
             }
         }

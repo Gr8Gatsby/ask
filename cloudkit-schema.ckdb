@@ -1,5 +1,27 @@
 DEFINE SCHEMA
 
+    RECORD TYPE AskScript (
+        "___createTime" TIMESTAMP,
+        "___createdBy"  REFERENCE,
+        "___etag"       STRING,
+        "___modTime"    TIMESTAMP,
+        "___modifiedBy" REFERENCE,
+        "___recordID"   REFERENCE QUERYABLE,
+        lastRunAt       TIMESTAMP QUERYABLE SORTABLE,
+        machineID       STRING QUERYABLE,
+        nextRunAt       TIMESTAMP QUERYABLE SORTABLE,
+        scriptIcon      STRING,
+        scriptID        STRING QUERYABLE,
+        scriptName      STRING QUERYABLE SORTABLE,
+        scriptType      STRING QUERYABLE,
+        status          STRING QUERYABLE,
+        updatedAt       TIMESTAMP QUERYABLE SORTABLE,
+        version         STRING,
+        GRANT WRITE TO "_creator",
+        GRANT CREATE TO "_icloud",
+        GRANT READ TO "_world"
+    );
+
     RECORD TYPE AskInvokeRequest (
         "___createTime" TIMESTAMP,
         "___createdBy"  REFERENCE,

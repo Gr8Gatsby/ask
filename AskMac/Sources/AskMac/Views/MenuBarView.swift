@@ -57,6 +57,11 @@ struct MenuBarView: View {
             .padding(12)
         }
         .frame(width: 270)
+        .onAppear {
+            if MacUITestingSupport.isUITesting {
+                openWindow(id: "scripts")
+            }
+        }
     }
 
     // MARK: - Header
