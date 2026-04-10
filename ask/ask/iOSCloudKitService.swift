@@ -371,6 +371,66 @@ final class iOSCloudKitService {
         _ = try await database.save(record)
     }
 
+    // MARK: - Task history (A2A protocol)
+
+    /// Fetches all AskTask records for a machine, most recently active first.
+    func fetchTasks(machineID: String) async throws -> [TaskRecord] {
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.AskTask.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.askTask, predicate: predicate)
+        query.sortDescriptors = [NSSortDescriptor(key: CKSchema.AskTask.lastActivityAt, ascending: false)]
+        let (results, _) = try await database.records(matching: query, resultsLimit: 100)
+        return results.compactMap { _, result in
+            guard let record = try? result.get() else { return nil }
+            return TaskRecord(ckRecord: record)
+        }
+    }
+
+    /// Fetches all AskTaskMessage records for a task, sorted by sequence number.
+    func fetchMessages(taskID: String, machineID: String) async throws -> [TaskMessage] {
+        // Query by machineID (guaranteed queryable) and filter taskID in memory
+        // to avoid compound-predicate failures if taskID isn't indexed.
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.AskTaskMessage.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.askTaskMessage, predicate: predicate)
+        let (results, _) = try await database.records(matching: query, resultsLimit: 500)
+        return results.compactMap { _, result in
+            guard let record = try? result.get(),
+                  record[CKSchema.AskTaskMessage.taskID] as? String == taskID
+            else { return nil }
+            return TaskMessage(ckRecord: record)
+        }.sorted { $0.sequenceNumber < $1.sequenceNumber }
+    }
+
+    /// Fetches all AskArtifact metadata records for a task (no content download).
+    func fetchArtifacts(taskID: String, machineID: String) async throws -> [ArtifactRecord] {
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.AskArtifact.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.askArtifact, predicate: predicate)
+        let (results, _) = try await database.records(matching: query, resultsLimit: 200)
+        return results.compactMap { _, result in
+            guard let record = try? result.get(),
+                  record[CKSchema.AskArtifact.taskID] as? String == taskID
+            else { return nil }
+            return ArtifactRecord(ckRecord: record)
+        }.sorted { $0.updatedAt < $1.updatedAt }
+    }
+
+    /// Downloads a single artifact's CKAsset content and writes it to the local cache directory.
+    /// Returns the local URL on success.
+    func downloadArtifactContent(recordName: String, destinationURL: URL) async throws -> URL {
+        let recordID = CKRecord.ID(recordName: recordName)
+        let record = try await database.record(for: recordID)
+        guard let asset = record[CKSchema.AskArtifact.content] as? CKAsset,
+              let assetURL = asset.fileURL
+        else { throw iOSCloudKitError.invalidRecord }
+
+        let dir = destinationURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+        try FileManager.default.copyItem(at: assetURL, to: destinationURL)
+        return destinationURL
+    }
+
     // MARK: - Device heartbeat
 
     /// Writes or updates a device presence record for each machine so the Mac companion

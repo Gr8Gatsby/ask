@@ -6,7 +6,11 @@ import SwiftData
 
 private let feedHistoryContainer: ModelContainer = {
     let config = ModelConfiguration(cloudKitDatabase: .none)
-    return try! ModelContainer(for: FeedHistoryEntry.self, ChatSession.self, ChatEntry.self, configurations: config)
+    return try! ModelContainer(
+        for: FeedHistoryEntry.self, ChatSession.self, ChatEntry.self,
+            TaskRecord.self, TaskMessage.self, ArtifactRecord.self,
+        configurations: config
+    )
 }()
 
 extension Notification.Name {

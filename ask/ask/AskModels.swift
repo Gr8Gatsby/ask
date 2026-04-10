@@ -19,6 +19,54 @@ enum CKSchema {
         static let rkResponse = "RKResponse"
         static let device = "AskDevice"
         static let feedSchedule = "FeedSchedule"
+        // Task history (A2A protocol)
+        static let askTask        = "AskTask"
+        static let askTaskMessage = "AskTaskMessage"
+        static let askArtifact    = "AskArtifact"
+    }
+
+    // MARK: - AskTask
+
+    enum AskTask {
+        static let taskID         = "taskID"
+        static let machineID      = "machineID"
+        static let scriptID       = "scriptID"
+        static let scriptName     = "scriptName"
+        static let scriptIcon     = "scriptIcon"
+        static let scriptIconData = "scriptIconData"
+        static let title          = "title"
+        static let status         = "status"
+        static let lastActivityAt = "lastActivityAt"
+        static let messageCount   = "messageCount"
+        static let artifactCount  = "artifactCount"
+    }
+
+    // MARK: - AskTaskMessage
+
+    enum AskTaskMessage {
+        static let messageID      = "messageID"
+        static let taskID         = "taskID"
+        static let machineID      = "machineID"
+        static let scriptID       = "scriptID"
+        static let role           = "role"
+        static let partsJSON      = "partsJSON"
+        static let timestamp      = "timestamp"
+        static let sequenceNumber = "sequenceNumber"
+    }
+
+    // MARK: - AskArtifact
+
+    enum AskArtifact {
+        static let artifactID   = "artifactID"
+        static let taskID       = "taskID"
+        static let machineID    = "machineID"
+        static let scriptID     = "scriptID"
+        static let filename     = "filename"
+        static let mimeType     = "mimeType"
+        static let description  = "description"
+        static let sizeBytes    = "sizeBytes"
+        static let content      = "content"
+        static let updatedAt    = "updatedAt"
     }
 
     enum Device {

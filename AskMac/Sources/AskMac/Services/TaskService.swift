@@ -1,7 +1,9 @@
 import Foundation
 import CloudKit
 import OSLog
+#if canImport(AskMacCore)
 import AskMacCore
+#endif
 
 private let logger = Logger(subsystem: "com.kevinhill.askmac", category: "TaskService")
 
