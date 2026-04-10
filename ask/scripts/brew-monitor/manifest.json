@@ -1,7 +1,7 @@
 {
   "id": "brew-monitor",
   "name": "Homebrew",
-  "version": "2.6",
+  "version": "2.7",
   "type": "feed",
   "schedule": "0 9 * * *",
   "description": "Checks for outdated Homebrew packages and lets you upgrade from iPhone",
