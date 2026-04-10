@@ -141,58 +141,6 @@ final class iOSCloudKitService {
         }.sorted { $0.sequence < $1.sequence }
     }
 
-    // MARK: - Events
-
-    /// Fetches pending AskEvent records for a machine, newest first.
-    /// Stale notification-only events (no options, older than 1 hour) are deleted silently.
-    func fetchPendingEvents(machineID: String) async throws -> [AskEvent] {
-        let predicate = NSPredicate(format: "%K == %@", CKSchema.Event.machineID, machineID)
-        let query = CKQuery(recordType: CKSchema.RecordType.event, predicate: predicate)
-        let (results, _) = try await database.records(matching: query, resultsLimit: 50)
-
-        var events: [AskEvent] = []
-        var toDelete: [CKRecord.ID] = []
-        let notificationCutoff = Date().addingTimeInterval(-3600)  // 1 hr for notification-only
-        let hookCutoff = Date().addingTimeInterval(-360)            // 6 min for permission requests (hook timeout is 5 min)
-
-        for (recordID, result) in results {
-            guard let record = try? result.get() else { continue }
-            guard let event = AskEvent(record: record) else {
-                toDelete.append(recordID)
-                continue
-            }
-            if !event.requiresResponse && event.timestamp < notificationCutoff {
-                toDelete.append(recordID)
-            } else if event.requiresResponse && event.timestamp < hookCutoff {
-                // Hook already timed out — response is impossible; clean up
-                toDelete.append(recordID)
-            } else {
-                events.append(event)
-            }
-        }
-
-        if !toDelete.isEmpty {
-            _ = try? await database.modifyRecords(saving: [], deleting: toDelete, savePolicy: .allKeys, atomically: false)
-        }
-
-        return events.sorted { $0.timestamp > $1.timestamp }
-    }
-
-    /// Writes an AskResponse to CloudKit so the Mac can pick it up.
-    func saveResponse(eventID: String, machineID: String, choice: String) async throws {
-        let record = CKRecord(recordType: CKSchema.RecordType.response)
-        record[CKSchema.Response.eventID] = eventID
-        record[CKSchema.Response.machineID] = machineID
-        record[CKSchema.Response.choice] = choice
-        record[CKSchema.Response.timestamp] = Date()
-        _ = try await database.save(record)
-    }
-
-    /// Deletes an AskEvent record from CloudKit.
-    func deleteEvent(_ event: AskEvent) async throws {
-        try await database.deleteRecord(withID: event.ckRecordID)
-    }
-
     // MARK: - Messages
 
     /// Sends a message from the iPhone to the Mac.
@@ -228,101 +176,6 @@ final class iOSCloudKitService {
         _ = try? await database.deleteRecord(withID: CKRecord.ID(recordName: messageID))
     }
 
-    // MARK: - Sessions
-
-    /// Fetches all sessions for a machine, most recently active first.
-    /// Waiting sessions whose hook already timed out are auto-resolved to "active".
-    func fetchSessions(machineID: String) async throws -> [AskSession] {
-        let predicate = NSPredicate(format: "%K == %@", CKSchema.Session.machineID, machineID)
-        let query = CKQuery(recordType: CKSchema.RecordType.session, predicate: predicate)
-        query.sortDescriptors = [NSSortDescriptor(key: CKSchema.Session.lastActivityAt, ascending: false)]
-        let (results, _) = try await database.records(matching: query, resultsLimit: 10)
-
-        let hookCutoff = Date().addingTimeInterval(-360)
-        // Only surface sessions active in the last 24 hours
-        let displayCutoff = Date().addingTimeInterval(-86400)
-        var sessions: [AskSession] = []
-
-        var toDelete: [CKRecord.ID] = []
-
-        for (recordID, result) in results {
-            guard let record = try? result.get(),
-                  let session = AskSession(record: record) else { continue }
-            if session.lastActivityAt < displayCutoff || session.status == .completed {
-                // Older than 24 h or completed — delete from CloudKit to prevent accumulation
-                toDelete.append(recordID)
-                continue
-            }
-            if session.status.isWaiting && session.lastActivityAt < hookCutoff {
-                // Stale waiting session — correct status without touching lastActivityAt
-                await fixSessionStatus(sessionID: session.id, status: "active")
-                sessions.append(AskSession(correcting: session, status: .active))
-            } else {
-                sessions.append(session)
-            }
-        }
-
-        if !toDelete.isEmpty {
-            _ = try? await database.modifyRecords(saving: [], deleting: toDelete)
-        }
-
-        return sessions
-    }
-
-    /// Updates session status AND bumps lastActivityAt (use after user interaction).
-    func updateSessionStatus(sessionID: String, status: String) async {
-        let recordID = CKRecord.ID(recordName: sessionID)
-        guard let record = try? await database.record(for: recordID) else { return }
-        record[CKSchema.Session.status] = status
-        record[CKSchema.Session.lastActivityAt] = Date()
-        _ = try? await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys)
-    }
-
-    /// Deletes a session record from CloudKit.
-    func deleteSession(_ session: AskSession) async throws {
-        let recordID = CKRecord.ID(recordName: session.id)
-        _ = try await database.modifyRecords(saving: [], deleting: [recordID])
-    }
-
-    /// Corrects a session's status without changing lastActivityAt (used for stale-session cleanup).
-    private func fixSessionStatus(sessionID: String, status: String) async {
-        let recordID = CKRecord.ID(recordName: sessionID)
-        guard let record = try? await database.record(for: recordID) else { return }
-        record[CKSchema.Session.status] = status
-        _ = try? await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys)
-    }
-
-    /// Fetches pending events for a specific session, cleaning up stale ones.
-    func fetchEvents(sessionID: String, machineID: String) async throws -> [AskEvent] {
-        let predicate = NSPredicate(format: "%K == %@ AND %K == %@",
-                                    CKSchema.Event.sessionID, sessionID,
-                                    CKSchema.Event.machineID, machineID)
-        let query = CKQuery(recordType: CKSchema.RecordType.event, predicate: predicate)
-        let (results, _) = try await database.records(matching: query, resultsLimit: 20)
-
-        let hookCutoff = Date().addingTimeInterval(-360)
-        var events: [AskEvent] = []
-        var toDelete: [CKRecord.ID] = []
-
-        for (recordID, result) in results {
-            guard let record = try? result.get(),
-                  let event = AskEvent(record: record) else {
-                toDelete.append(recordID); continue
-            }
-            if event.requiresResponse && event.timestamp < hookCutoff {
-                toDelete.append(recordID)
-            } else {
-                events.append(event)
-            }
-        }
-
-        if !toDelete.isEmpty {
-            _ = try? await database.modifyRecords(saving: [], deleting: toDelete, savePolicy: .allKeys, atomically: false)
-        }
-
-        return events
-    }
-
     // MARK: - RKBlocks
 
     /// Fetches all active RKBlock records for a machine, sorted by type priority then createdAt.
@@ -345,11 +198,6 @@ final class iOSCloudKitService {
             // Skip expired blocks — Mac's HeartbeatService owns cleanup
             if let exp = block.expiresAt, exp < now { continue }
             blocks.append(block)
-        }
-
-        let feedItems = blocks.filter { $0.blockType == .feedItem }
-        if !feedItems.isEmpty {
-            FeedStore.shared.upsert(feedItems)
         }
 
         return blocks.sorted {
