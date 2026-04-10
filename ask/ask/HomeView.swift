@@ -176,6 +176,7 @@ struct ScriptGroup: Identifiable {
 struct HomeView: View {
     @Environment(iOSCloudKitService.self) private var cloudKit
     @Environment(ActionInboxStore.self) private var actionInbox
+    @Environment(TaskHistoryStore.self) private var taskHistory
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var machines: [AskMachine] = []
@@ -394,6 +395,7 @@ struct HomeView: View {
         .sheet(isPresented: $showSettings) {
             SettingsSheetView()
                 .environment(cloudKit)
+                .environment(taskHistory)
         }
         .sheet(
             isPresented: Binding(
@@ -1333,6 +1335,22 @@ struct ScriptDetailView: View {
         }
     }
 
+    /// Persists an assistant message into ChatEntry so history is available even when
+    /// SessionChatView was not open when the message arrived.
+    private func seedAssistantMessageToChatEntry(msg: String, sessionId: String) {
+        let descriptor = FetchDescriptor<ChatEntry>(
+            predicate: #Predicate { $0.sessionId == sessionId && $0.role == "assistant" && $0.text == msg }
+        )
+        guard (try? modelContext.fetch(descriptor))?.isEmpty ?? true else { return }
+        modelContext.insert(ChatEntry(
+            sessionId: sessionId,
+            role: "assistant",
+            entryKind: "message",
+            text: msg
+        ))
+        try? modelContext.save()
+    }
+
     /// Persists a session-linked confirmation block into ChatEntry so it's visible in Chat
     /// even after the block is cleared from CloudKit before the user navigates there.
     private func seedConfirmationToChatEntry(block: RKBlock, sessionId: String) {
@@ -1419,6 +1437,16 @@ struct ScriptDetailView: View {
                 for block in group.blocks where block.blockType == .confirmation {
                     guard let sessionId = block.confirmationPayload?.sessionId else { continue }
                     seedConfirmationToChatEntry(block: block, sessionId: sessionId)
+                }
+            }
+            .onChange(of: sessionBlocks.compactMap { $0.agentSessionPayload?.lastMessage }) { _, messages in
+                // Persist assistant messages immediately when they arrive, even if SessionChatView
+                // is not open. This prevents blank chat history when the user opens the view later.
+                for block in sessionBlocks {
+                    guard let payload = block.agentSessionPayload,
+                          let msg = payload.lastMessage, !msg.isEmpty
+                    else { continue }
+                    seedAssistantMessageToChatEntry(msg: msg, sessionId: payload.sessionId)
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
@@ -1757,6 +1785,8 @@ private func blockStatusColor(_ colorString: String?) -> Color {
 
 struct SettingsSheetView: View {
     @Environment(iOSCloudKitService.self) private var cloudKit
+    @Environment(TaskHistoryStore.self) private var taskHistory
+    @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
 
     @AppStorage("showBlockDebugInfo") private var showDebugInfo: Bool = false
@@ -1768,6 +1798,10 @@ struct SettingsSheetView: View {
     @State private var machineToDelete: AskMachine?
     @State private var showDeleteConfirm = false
     @State private var isDeleting = false
+    @State private var showClearAllTasksConfirm = false
+
+    @Query(sort: \TaskRecord.lastActivityAt, order: .reverse)
+    private var taskRecords: [TaskRecord]
 
     private var hiddenMachineIDs: Set<String> {
         Set(hiddenMachineIDsRaw.split(separator: ",").map(String.init))
@@ -1813,6 +1847,68 @@ struct SettingsSheetView: View {
     }
 
     private var queue: OfflineQueue { .shared }
+
+    // MARK: - Task History section
+
+    /// Groups task records by (machineID, scriptID) for display.
+    private var taskHistoryGroups: [(machineID: String, scriptID: String, scriptName: String, count: Int, latest: Date)] {
+        var groups: [String: (machineID: String, scriptID: String, scriptName: String, count: Int, latest: Date)] = [:]
+        for task in taskRecords {
+            let key = "\(task.machineID)/\(task.scriptID)"
+            if var g = groups[key] {
+                g.count += 1
+                if task.lastActivityAt > g.latest { g.latest = task.lastActivityAt }
+                groups[key] = g
+            } else {
+                groups[key] = (task.machineID, task.scriptID, task.scriptName, 1, task.lastActivityAt)
+            }
+        }
+        return groups.values.sorted { $0.latest > $1.latest }
+    }
+
+    @ViewBuilder
+    private var taskHistorySection: some View {
+        if !taskRecords.isEmpty {
+            Section {
+                ForEach(taskHistoryGroups, id: \.scriptID) { group in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(group.scriptName)
+                                .font(.subheadline)
+                            Text("\(group.count) task\(group.count == 1 ? "" : "s") · \(group.latest.briefRelative)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            try? taskHistory.clearHistory(machineID: group.machineID, scriptID: group.scriptID)
+                        } label: {
+                            Label("Clear", systemImage: "trash")
+                        }
+                    }
+                }
+                Button(role: .destructive) {
+                    showClearAllTasksConfirm = true
+                } label: {
+                    Label("Clear All Task History", systemImage: "trash")
+                }
+            } header: {
+                Text("Task History")
+            } footer: {
+                Text("Stored locally. Swipe a script to clear its task history.")
+            }
+            .confirmationDialog("Clear All Task History?", isPresented: $showClearAllTasksConfirm, titleVisibility: .visible) {
+                Button("Clear All", role: .destructive) {
+                    try? taskHistory.clearAllHistory()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This removes all stored task history and downloaded files from this device.")
+            }
+        }
+    }
 
     private var appVersion: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
@@ -1907,6 +2003,8 @@ struct SettingsSheetView: View {
                         }
                     }
                 }
+
+                taskHistorySection
 
                 Section("Appearance") {
                     Toggle("Script Brand Colors", isOn: $useBrandColors)
