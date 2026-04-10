@@ -314,38 +314,47 @@ final class iOSCloudKitService {
         return enabledInt != 0
     }
 
-    // MARK: - Feed schedules
+    // MARK: - Feed script invoke
 
-    /// Upserts a schedule override for a feed script. The Mac polls these records
-    /// and reschedules the script's cron task accordingly.
-    func saveFeedSchedule(machineID: String, scriptID: String, schedule: String) async throws {
-        let recordName = "feedschedule-\(machineID)-\(scriptID)"
-        let recordID = CKRecord.ID(recordName: recordName)
-        let record: CKRecord
-        if let existing = try? await database.record(for: recordID) {
-            record = existing
-        } else {
-            record = CKRecord(recordType: CKSchema.RecordType.feedSchedule, recordID: recordID)
-            record[CKSchema.FeedSchedule.machineID] = machineID
-            record[CKSchema.FeedSchedule.scriptID]  = scriptID
-        }
-        record[CKSchema.FeedSchedule.schedule]  = schedule
-        record[CKSchema.FeedSchedule.updatedAt] = Date()
+    /// Writes an AskInvokeRequest record so AskMac triggers the given feed script immediately.
+    func writeInvokeRequest(machineID: String, scriptID: String) async throws {
+        let recordName = "invoke-\(machineID)-\(scriptID)-\(UUID().uuidString)"
+        let record = CKRecord(recordType: CKSchema.RecordType.askInvokeRequest,
+                              recordID: CKRecord.ID(recordName: recordName))
+        record[CKSchema.AskInvokeRequest.machineID]   = machineID
+        record[CKSchema.AskInvokeRequest.scriptID]    = scriptID
+        record[CKSchema.AskInvokeRequest.requestedAt] = Date()
         _ = try await database.save(record)
     }
 
-    /// Returns the current schedule override per script for a given machine.
-    func fetchFeedSchedules(machineID: String) async throws -> [(scriptID: String, schedule: String)] {
-        let predicate = NSPredicate(format: "%K == %@", CKSchema.FeedSchedule.machineID, machineID)
-        let query = CKQuery(recordType: CKSchema.RecordType.feedSchedule, predicate: predicate)
-        let (results, _) = try await database.records(matching: query, resultsLimit: 100)
-        return results.compactMap { _, result in
-            guard let record = try? result.get(),
-                  let scriptID = record[CKSchema.FeedSchedule.scriptID] as? String,
-                  let schedule = record[CKSchema.FeedSchedule.schedule] as? String
-            else { return nil }
-            return (scriptID: scriptID, schedule: schedule)
+    /// Returns feed-type scripts discovered from active RKBlock records across the given machines.
+    func fetchFeedScripts(machines: [AskMachine]) async -> [AskFeedScript] {
+        var result: [AskFeedScript] = []
+        for machine in machines {
+            let predicate = NSPredicate(format: "%K == %@ AND %K == %@",
+                CKSchema.RKBlock.machineID, machine.id,
+                CKSchema.RKBlock.scriptType, "feed")
+            let query = CKQuery(recordType: CKSchema.RecordType.rkBlock, predicate: predicate)
+            guard let (records, _) = try? await database.records(matching: query, resultsLimit: 50)
+            else { continue }
+            var seen = Set<String>()
+            for (_, r) in records {
+                guard let record = try? r.get(),
+                      let scriptID = record[CKSchema.RKBlock.scriptID] as? String,
+                      seen.insert(scriptID).inserted
+                else { continue }
+                let scriptName = record[CKSchema.RKBlock.scriptName] as? String ?? scriptID
+                let icon = record[CKSchema.RKBlock.scriptIcon] as? String
+                result.append(AskFeedScript(
+                    scriptID: scriptID,
+                    scriptName: scriptName,
+                    machineID: machine.id,
+                    machineName: machine.name,
+                    icon: icon
+                ))
+            }
         }
+        return result
     }
 
     private static var stableDeviceID: String {

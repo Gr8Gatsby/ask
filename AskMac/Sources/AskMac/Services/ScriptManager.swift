@@ -506,6 +506,20 @@ final class ScriptManager: @unchecked Sendable {
         }
     }
 
+    /// Manually triggers a feed script run. Called when iOS sends an AskInvokeRequest.
+    func invokeScript(id: String) {
+        guard let cached = manifests[id] else {
+            print("[ScriptManager] invokeScript: \(id) not found in manifests")
+            return
+        }
+        guard cached.manifest.isFeed else {
+            print("[ScriptManager] invokeScript: \(id) is not a feed script, ignoring")
+            return
+        }
+        print("[ScriptManager] invokeScript: launching feed run for \(id)")
+        launchFeedRunWithDepCheck(manifest: cached.manifest, scriptDir: cached.dir)
+    }
+
     // MARK: - Install lock
 
     /// Stop a running script's connection before its files are replaced on disk.

@@ -36,7 +36,6 @@ def find_brew() -> Optional[str]:
 
 CHECK_INTERVAL = 4 * 60 * 60   # seconds between checks
 
-BLOCK_TILE     = 'brew-monitor-tile'
 BLOCK_UPDATES  = 'brew-monitor-updates'
 BLOCK_STATUS   = 'brew-monitor-status'
 BLOCK_NEXT_SYNC = 'brew-monitor-next-sync'
@@ -267,12 +266,6 @@ class BrewMonitor:
         if not outdated:
             print('[brew-monitor] all packages up to date', file=sys.stderr)
             await self.mcp.clear_block(BLOCK_UPDATES)
-            await self.mcp.emit_block(BLOCK_TILE, 'tile', {
-                'label': 'All up to date',
-                'body': f'Checked {now_str}',
-                'status_color': 'green',
-                'action_required': False,
-            })
         else:
             self._pending_outdated = outdated
             count = len(outdated)
@@ -281,13 +274,6 @@ class BrewMonitor:
             body  = '\n'.join(f'{name}  {inst} → {avail}' for name, inst, avail in outdated)
 
             print(f'[brew-monitor] {title}', file=sys.stderr)
-
-            await self.mcp.emit_block(BLOCK_TILE, 'tile', {
-                'label': title,
-                'body': f'Checked {now_str}',
-                'status_color': 'yellow',
-                'action_required': True,
-            })
 
             self.mcp._response_cbs[BLOCK_UPDATES] = self._on_response
             await self.mcp.emit_block(BLOCK_UPDATES, 'confirmation', {
@@ -353,13 +339,6 @@ class BrewMonitor:
             await self.mcp.append_message(task_id, 'assistant',
                 f'Upgrading {count} {noun}:\n\n{pkg_table}')
 
-            # Update tile
-            await self.mcp.emit_block(BLOCK_TILE, 'tile', {
-                'label': f'Upgrading {count} {noun}…',
-                'body':  'Running brew upgrade',
-                'status_color': 'blue',
-                'action_required': False,
-            })
             await self.mcp.emit_block(BLOCK_STATUS, 'status', {
                 'label':  'Upgrading Homebrew packages…',
                 'detail': 'Starting…',
@@ -443,8 +422,8 @@ class BrewMonitor:
             artifact_id = f'brew-report-{uuid.uuid4().hex[:8]}'
 
             if rc == 0:
-                result_text = f'Upgrade complete. {count} {noun} updated successfully.'
-                await self.mcp.append_message(task_id, 'assistant', result_text)
+                await self.mcp.append_message(task_id, 'assistant',
+                    f'Upgrade complete. {count} {noun} updated successfully.')
                 await self.mcp.put_artifact(
                     task_id=task_id,
                     artifact_id=artifact_id,
@@ -454,9 +433,6 @@ class BrewMonitor:
                     file_path=tmp.name,
                 )
                 await self.mcp.open_task(task_id, f'Homebrew upgrade · {now_str}', status='completed')
-
-                tile_label = f'{count} {noun} upgraded'
-                tile_color = 'green'
                 await self.mcp.emit_block(BLOCK_STATUS, 'status', {
                     'label': 'Upgrades complete',
                     'icon':  'checkmark.circle',
@@ -475,9 +451,6 @@ class BrewMonitor:
                     file_path=tmp.name,
                 )
                 await self.mcp.open_task(task_id, f'Homebrew upgrade · {now_str}', status='failed')
-
-                tile_label = 'Upgrade failed'
-                tile_color = 'red'
                 await self.mcp.emit_block(BLOCK_STATUS, 'status', {
                     'label': 'Upgrade finished with errors',
                     'icon':  'exclamationmark.triangle',
@@ -486,14 +459,6 @@ class BrewMonitor:
                 await asyncio.sleep(10)
 
             os.unlink(tmp.name)
-
-            finish_str = datetime.now().strftime('%H:%M')
-            await self.mcp.emit_block(BLOCK_TILE, 'tile', {
-                'label': tile_label,
-                'body':  f'Finished {finish_str}',
-                'status_color': tile_color,
-                'action_required': False,
-            })
 
         except asyncio.CancelledError:
             print('[brew-monitor] upgrade cancelled', file=sys.stderr)
@@ -520,14 +485,6 @@ async def main():
     except Exception as e:
         print(f'[brew-monitor] init error: {type(e).__name__}: {e}', file=sys.stderr)
         return
-
-    # Persistent tile on startup
-    await mcp.emit_block(BLOCK_TILE, 'tile', {
-        'label': 'Homebrew',
-        'body':  'Checking for updates…',
-        'status_color': 'gray',
-        'action_required': False,
-    })
 
     monitor_task = asyncio.create_task(monitor.run())
     done, pending = await asyncio.wait(

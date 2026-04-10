@@ -19,6 +19,7 @@ enum CKSchema {
         static let rkResponse = "RKResponse"
         static let device = "AskDevice"
         static let feedSchedule = "FeedSchedule"
+        static let askInvokeRequest = "AskInvokeRequest"
         // Task history (A2A protocol)
         static let askTask        = "AskTask"
         static let askTaskMessage = "AskTaskMessage"
@@ -91,6 +92,12 @@ enum CKSchema {
         static let expiresAt = "expiresAt"
         static let scriptType = "scriptType"
         static let showsInInbox = "showsInInbox"
+    }
+
+    enum AskInvokeRequest {
+        static let machineID   = "machineID"
+        static let scriptID    = "scriptID"
+        static let requestedAt = "requestedAt"
     }
 
     enum FeedSchedule {
@@ -192,15 +199,31 @@ enum CKSchema {
 // MARK: - Date formatting
 
 extension Date {
-    /// Coarse relative time: "just now", "2 min ago", "1 hr ago". Does not live-tick.
+    /// Compact relative time: "now", "5m", "2h", "3d", "Apr 3". Does not live-tick.
     var briefRelative: String {
         let seconds = Int(Date().timeIntervalSince(self))
-        if seconds < 60 { return "just now" }
+        if seconds < 60 { return "now" }
         let minutes = seconds / 60
-        if minutes < 60 { return "\(minutes) min ago" }
+        if minutes < 60 { return "\(minutes)m" }
         let hours = minutes / 60
-        return "\(hours) hr ago"
+        if hours < 24 { return "\(hours)h" }
+        let days = hours / 24
+        if days < 7 { return "\(days)d" }
+        let f = DateFormatter()
+        f.dateFormat = "MMM d"
+        return f.string(from: self)
     }
+}
+
+// MARK: - Feed script (for invoke menu)
+
+struct AskFeedScript: Identifiable {
+    var id: String { "\(machineID)/\(scriptID)" }
+    let scriptID: String
+    let scriptName: String
+    let machineID: String
+    let machineName: String
+    let icon: String?
 }
 
 // MARK: - Machine

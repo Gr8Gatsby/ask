@@ -17,6 +17,8 @@ enum CKSchema {
         static let askTask        = "AskTask"
         static let askTaskMessage = "AskTaskMessage"
         static let askArtifact    = "AskArtifact"
+        // Script invoke requests — written by iOS, drained by AskMac ResponsePoller.
+        static let askInvokeRequest = "AskInvokeRequest"
         // Deprecated — dead code, no longer written or read.
         // CloudKit record types cannot be deleted from production containers;
         // these constants are kept only so purgeOldRecords can clean up stale records.
@@ -92,6 +94,12 @@ enum CKSchema {
         static let scriptType = "scriptType"  // "tile" (default) or "feed"
         static let requiresResponse = "requiresResponse"  // 1 if the block needs user input, 0 otherwise
         static let showsInInbox = "showsInInbox"  // 1 if the block should appear in the in-app inbox
+    }
+
+    enum AskInvokeRequest {
+        static let machineID   = "machineID"
+        static let scriptID    = "scriptID"
+        static let requestedAt = "requestedAt"
     }
 
     enum FeedSchedule {

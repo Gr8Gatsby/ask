@@ -33,21 +33,29 @@ final class ResponsePoller {
     // MARK: - Private
 
     private func poll(scriptManager: ScriptManager) async {
-        guard let responses = try? await cloudKit.drainRKResponses(machineID: machineID) else { return }
-        for response in responses {
-            print("[ResponsePoller] blockID=\(response.blockID) scriptID=\(response.scriptID) value=\(response.value)")
+        // Drain block responses
+        if let responses = try? await cloudKit.drainRKResponses(machineID: machineID) {
+            for response in responses {
+                print("[ResponsePoller] blockID=\(response.blockID) scriptID=\(response.scriptID) value=\(response.value)")
 
-            // Look up the script name for history logging
-            let scriptName = scriptManager.scripts.first(where: { $0.id == response.scriptID })?.name
-                ?? response.scriptID
+                let scriptName = scriptManager.scripts.first(where: { $0.id == response.scriptID })?.name
+                    ?? response.scriptID
+                actionHistory.recordBlockResponse(scriptName: scriptName, value: response.value, blockID: response.blockID)
 
-            actionHistory.recordBlockResponse(scriptName: scriptName, value: response.value, blockID: response.blockID)
-
-            guard let conn = scriptManager.connection(for: response.scriptID) else {
-                print("[ResponsePoller] No connection for scriptID=\(response.scriptID)")
-                continue
+                guard let conn = scriptManager.connection(for: response.scriptID) else {
+                    print("[ResponsePoller] No connection for scriptID=\(response.scriptID)")
+                    continue
+                }
+                conn.deliverResponse(blockID: response.blockID, value: response.value)
             }
-            conn.deliverResponse(blockID: response.blockID, value: response.value)
+        }
+
+        // Drain iOS invoke requests
+        if let scriptIDs = try? await cloudKit.drainInvokeRequests(machineID: machineID) {
+            for scriptID in scriptIDs {
+                print("[ResponsePoller] invoke request for scriptID=\(scriptID)")
+                scriptManager.invokeScript(id: scriptID)
+            }
         }
     }
 }

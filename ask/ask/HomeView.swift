@@ -1794,7 +1794,6 @@ struct SettingsSheetView: View {
     @AppStorage("hiddenMachineIDs") private var hiddenMachineIDsRaw: String = ""
     @State private var machines: [AskMachine] = []
     @State private var showQueueReview = false
-    @State private var feedSchedules: [String: String] = [:]
     @State private var machineToDelete: AskMachine?
     @State private var showDeleteConfirm = false
     @State private var isDeleting = false
@@ -1830,20 +1829,6 @@ struct SettingsSheetView: View {
         hiddenMachineIDsRaw = ids.joined(separator: ",")
         isDeleting = false
         machineToDelete = nil
-    }
-
-    @Query(sort: \FeedHistoryEntry.createdAt, order: .reverse)
-    private var feedHistory: [FeedHistoryEntry]
-
-    private var feedScripts: [(id: String, name: String)] {
-        var seen = Set<String>()
-        var result: [(id: String, name: String)] = []
-        for entry in feedHistory {
-            if seen.insert(entry.scriptID).inserted {
-                result.append((id: entry.scriptID, name: entry.scriptName ?? entry.scriptID))
-            }
-        }
-        return result
     }
 
     private var queue: OfflineQueue { .shared }
@@ -1979,31 +1964,6 @@ struct SettingsSheetView: View {
                     }
                 }
 
-                if !feedScripts.isEmpty {
-                    Section("Feed Schedules") {
-                        ForEach(feedScripts, id: \.id) { script in
-                            FeedScheduleRow(
-                                scriptName: script.name,
-                                schedule: Binding(
-                                    get: { feedSchedules[script.id] ?? "0 * * * *" },
-                                    set: { newSchedule in
-                                        feedSchedules[script.id] = newSchedule
-                                        if let machine = machines.first {
-                                            Task {
-                                                try? await cloudKit.saveFeedSchedule(
-                                                    machineID: machine.id,
-                                                    scriptID: script.id,
-                                                    schedule: newSchedule
-                                                )
-                                            }
-                                        }
-                                    }
-                                )
-                            )
-                        }
-                    }
-                }
-
                 taskHistorySection
 
                 Section("Appearance") {
@@ -2037,12 +1997,6 @@ struct SettingsSheetView: View {
             }
             .task {
                 machines = (try? await cloudKit.fetchMachines()) ?? []
-                if let machine = machines.first,
-                   let schedules = try? await cloudKit.fetchFeedSchedules(machineID: machine.id) {
-                    var map: [String: String] = [:]
-                    for (scriptID, schedule) in schedules { map[scriptID] = schedule }
-                    feedSchedules = map
-                }
             }
             .sheet(isPresented: $showQueueReview) {
                 QueueReviewSheet(isPresented: $showQueueReview)
@@ -2071,53 +2025,7 @@ struct SettingsSheetView: View {
     }
 }
 
-// MARK: - Feed schedule row
 
-private struct FeedScheduleRow: View {
-    let scriptName: String
-    @Binding var schedule: String
-
-    private let presets: [(label: String, cron: String)] = [
-        ("Every Hour",   "0 * * * *"),
-        ("Daily 9am",    "0 9 * * *"),
-        ("Daily 6pm",    "0 18 * * *"),
-        ("Weekly Mon",   "0 9 * * 1"),
-    ]
-
-    private var presetLabel: String {
-        presets.first(where: { $0.cron == schedule })?.label ?? "Custom"
-    }
-
-    var body: some View {
-        HStack {
-            Text(scriptName)
-                .lineLimit(1)
-            Spacer()
-            Menu {
-                ForEach(presets, id: \.cron) { preset in
-                    Button {
-                        schedule = preset.cron
-                    } label: {
-                        if preset.cron == schedule {
-                            Label(preset.label, systemImage: "checkmark")
-                        } else {
-                            Text(preset.label)
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(presetLabel)
-                        .font(.subheadline)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                .foregroundStyle(Color.accentColor)
-            }
-        }
-    }
-}
 
 // MARK: - Queue Review Sheet
 

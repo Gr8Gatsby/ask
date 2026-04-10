@@ -438,50 +438,54 @@ struct TaskListRow: View {
     let task: TaskRecord
 
     var body: some View {
-        HStack(spacing: 12) {
-            statusDot
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(task.title)
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .lineLimit(1)
-                    Spacer()
-                    Text(task.lastActivityAt.briefRelative)
+        let status = task.statusEnum
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(task.title)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                Text(task.lastActivityAt.briefRelative)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize()
+            }
+            HStack(spacing: 4) {
+                Text(task.scriptName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("·")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                if status == .working {
+                    ProgressView()
+                        .scaleEffect(0.55)
+                        .tint(.blue)
+                } else {
+                    Image(systemName: status.systemImage)
+                        .font(.system(size: 9))
+                        .foregroundStyle(statusColor(status))
+                }
+                if task.artifactCount > 0 {
+                    Text("·")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
-                }
-                HStack(spacing: 4) {
-                    Text(task.scriptName)
-                        .font(.caption)
+                    Label("\(task.artifactCount)", systemImage: "paperclip")
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
-                    if task.artifactCount > 0 {
-                        Text("·")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                        Label("\(task.artifactCount)", systemImage: "paperclip")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
                 }
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 1)
     }
 
-    private var statusDot: some View {
-        let status = task.statusEnum
-        return ZStack {
-            if status == .working {
-                Circle()
-                    .fill(Color.blue)
-                    .frame(width: 8, height: 8)
-            } else {
-                Image(systemName: status.systemImage)
-                    .font(.system(size: 9))
-                    .foregroundStyle(status == .completed ? .green : .secondary)
-            }
+    private func statusColor(_ status: TaskStatus) -> Color {
+        switch status {
+        case .working:   .blue
+        case .completed: .green
+        case .failed:    .red
+        case .cancelled: .secondary
         }
-        .frame(width: 12)
     }
 }

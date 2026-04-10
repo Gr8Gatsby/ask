@@ -283,6 +283,30 @@ final class CloudKitService {
         return found
     }
 
+    /// Fetches and deletes all AskInvokeRequest records addressed to this machine.
+    /// Returns the list of scriptIDs to invoke.
+    func drainInvokeRequests(machineID: String) async throws -> [String] {
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.AskInvokeRequest.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.askInvokeRequest, predicate: predicate)
+        let (results, _) = try await database.records(matching: query, resultsLimit: 50)
+
+        var scriptIDs: [String] = []
+        var toDelete: [CKRecord.ID] = []
+
+        for (recordID, result) in results {
+            guard let record = try? result.get(),
+                  let scriptID = record[CKSchema.AskInvokeRequest.scriptID] as? String
+            else { continue }
+            scriptIDs.append(scriptID)
+            toDelete.append(recordID)
+        }
+
+        if !toDelete.isEmpty {
+            _ = try? await database.modifyRecords(saving: [], deleting: toDelete, savePolicy: .allKeys, atomically: false)
+        }
+        return scriptIDs
+    }
+
     // MARK: - Task history (A2A protocol)
 
     /// Creates or updates an AskTask record. Uses the task's recordName as the CloudKit record ID

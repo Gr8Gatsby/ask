@@ -9,11 +9,13 @@ struct TaskFeedView: View {
     let machines: [AskMachine]
 
     @Environment(TaskHistoryStore.self) private var taskHistory
+    @Environment(iOSCloudKitService.self) private var cloudKit
 
     @Query(sort: \TaskRecord.lastActivityAt, order: .reverse)
     private var allTasks: [TaskRecord]
 
     @State private var showOlder = false
+    @State private var showInvokeSheet = false
 
     private let olderCutoff = Date().addingTimeInterval(-30 * 24 * 3600)
 
@@ -61,6 +63,19 @@ struct TaskFeedView: View {
         .task {
             guard !machines.isEmpty else { return }
             await taskHistory.refresh(machineIDs: machines.map(\.id))
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showInvokeSheet = true
+                } label: {
+                    Image(systemName: "bolt")
+                }
+            }
+        }
+        .sheet(isPresented: $showInvokeSheet) {
+            InvokeScriptSheet(machines: machines)
+                .environment(cloudKit)
         }
     }
 
@@ -129,6 +144,83 @@ struct TaskFeedView: View {
             Label("No Tasks Yet", systemImage: "tray")
         } description: {
             Text("Tasks created by scripts will appear here.")
+        }
+    }
+}
+
+// MARK: - Invoke Script Sheet
+
+private struct InvokeScriptSheet: View {
+    let machines: [AskMachine]
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(iOSCloudKitService.self) private var cloudKit
+
+    @State private var feedScripts: [AskFeedScript] = []
+    @State private var isLoading = true
+    @State private var invokedIDs = Set<String>()
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView("Loading scripts…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if feedScripts.isEmpty {
+                    ContentUnavailableView {
+                        Label("No Feed Scripts", systemImage: "bolt.slash")
+                    } description: {
+                        Text("Feed scripts appear here when they are running on a connected Mac.")
+                    }
+                } else {
+                    List(feedScripts) { script in
+                        HStack {
+                            if let icon = script.icon {
+                                Image(systemName: icon)
+                                    .font(.title3)
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 28)
+                            }
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(script.scriptName)
+                                    .font(.subheadline)
+                                Text(script.machineName)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if invokedIDs.contains(script.id) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                            } else {
+                                Button("Run") {
+                                    invokedIDs.insert(script.id)
+                                    Task {
+                                        try? await cloudKit.writeInvokeRequest(
+                                            machineID: script.machineID,
+                                            scriptID: script.scriptID
+                                        )
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                        }
+                    }
+                    .listStyle(.insetGrouped)
+                }
+            }
+            .navigationTitle("Run a Script")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .task {
+                feedScripts = await cloudKit.fetchFeedScripts(machines: machines)
+                isLoading = false
+            }
         }
     }
 }
