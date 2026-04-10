@@ -200,6 +200,12 @@ struct ArtifactCard: View {
 
     @Environment(TaskHistoryStore.self) private var taskHistory
     @State private var isDownloading = false
+    @State private var showMarkdown = false
+    @State private var isSharing = false
+
+    private var isMarkdown: Bool {
+        artifact.filename.hasSuffix(".md") || artifact.filename.hasSuffix(".markdown")
+    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -226,13 +232,31 @@ struct ArtifactCard: View {
             Spacer()
 
             if artifact.isDownloaded {
+                // Share / save to Files
                 Button {
-                    onPreview(artifact.localCacheURL)
+                    isSharing = true
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.subheadline)
+                }
+                .buttonStyle(.borderless)
+                .shareSheet(isPresented: $isSharing, url: artifact.localCacheURL)
+
+                // Preview — rich markdown for .md, QuickLook for everything else
+                Button {
+                    if isMarkdown {
+                        showMarkdown = true
+                    } else {
+                        onPreview(artifact.localCacheURL)
+                    }
                 } label: {
                     Image(systemName: "eye")
                         .font(.subheadline)
                 }
                 .buttonStyle(.borderless)
+                .sheet(isPresented: $showMarkdown) {
+                    MarkdownPreviewSheet(artifact: artifact)
+                }
             } else {
                 Button {
                     Task { await download() }
@@ -259,6 +283,7 @@ struct ArtifactCard: View {
     }
 
     private var fileIcon: String {
+        if isMarkdown { return "doc.text" }
         switch artifact.mimeType {
         case "application/pdf": return "doc.richtext"
         case "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp": return "photo"
@@ -280,6 +305,68 @@ struct ArtifactCard: View {
         isDownloading = true
         await taskHistory.downloadArtifact(artifact)
         isDownloading = false
+    }
+}
+
+// MARK: - Markdown Preview Sheet
+
+private struct MarkdownPreviewSheet: View {
+    let artifact: ArtifactRecord
+    @Environment(\.dismiss) private var dismiss
+    @State private var isSharing = false
+
+    private var markdownText: String {
+        (try? String(contentsOf: artifact.localCacheURL, encoding: .utf8)) ?? ""
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                ClaudeMarkdownView(text: markdownText)
+                    .padding(16)
+            }
+            .navigationTitle(artifact.filename)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        isSharing = true
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .shareSheet(isPresented: $isSharing, url: artifact.localCacheURL)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Share sheet helper
+
+private extension View {
+    func shareSheet(isPresented: Binding<Bool>, url: URL) -> some View {
+        background(
+            ShareSheetPresenter(isPresented: isPresented, url: url)
+        )
+    }
+}
+
+private struct ShareSheetPresenter: UIViewControllerRepresentable {
+    @Binding var isPresented: Bool
+    let url: URL
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        UIViewController()
+    }
+
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
+        guard isPresented, uiViewController.presentedViewController == nil else { return }
+        let ac = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        ac.completionWithItemsHandler = { _, _, _, _ in isPresented = false }
+        uiViewController.present(ac, animated: true)
     }
 }
 
