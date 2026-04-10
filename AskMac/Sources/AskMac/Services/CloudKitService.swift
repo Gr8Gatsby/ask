@@ -304,7 +304,7 @@ final class CloudKitService {
     func deleteScript(machineID: String, scriptID: String) async {
         let recordName = "script-\(machineID)-\(scriptID)"
         cachedRecords.removeValue(forKey: recordName)
-        try? await database.deleteRecord(withID: CKRecord.ID(recordName: recordName))
+        _ = try? await database.deleteRecord(withID: CKRecord.ID(recordName: recordName))
     }
 
     /// Fetches and deletes all AskInvokeRequest records addressed to this machine.

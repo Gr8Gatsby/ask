@@ -10,7 +10,7 @@ public struct TaskRegistryEntry: Codable, Sendable {
     public var artifactCount: Int
     public var nextSequenceNumber: Int
 
-    public init(title: String, status: String) {
+    public nonisolated init(title: String, status: String) {
         self.title = title
         self.status = status
         self.messageCount = 0

@@ -173,7 +173,7 @@ final class TaskMessage {
         guard let data = partsJSON.data(using: .utf8),
               let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
         else { return [] }
-        return raw.compactMap(TaskPart.init(dict:))
+        return raw.compactMap { TaskPart(dict: $0) }
     }
 }
 
