@@ -201,13 +201,14 @@ class MCPClient:
     # ── Main event loop ───────────────────────────────────────────────────────
 
     async def run(self):
-        await self.initialize()
-
         loop = asyncio.get_running_loop()
         reader = asyncio.StreamReader()
         await loop.connect_read_pipe(
             lambda: asyncio.StreamReaderProtocol(reader), sys.stdin
         )
+
+        # Initialize concurrently with the reader so responses can be processed
+        asyncio.ensure_future(self.initialize())
 
         async for line in reader:
             line = line.decode('utf-8', errors='replace').strip()
