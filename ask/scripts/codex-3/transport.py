@@ -102,6 +102,8 @@ def send_text(target: str, text: str) -> bool:
     if not target:
         return False
     try:
+        # Normalize the prompt line first so replies do not append to partial input.
+        subprocess.run([TMUX, 'send-keys', '-t', target, 'C-u'], capture_output=True, timeout=3, check=False)
         subprocess.run([TMUX, 'send-keys', '-t', target, '-l', text], capture_output=True, timeout=3, check=False)
         subprocess.run([TMUX, 'send-keys', '-t', target, 'Enter'], capture_output=True, timeout=3, check=False)
         return True
