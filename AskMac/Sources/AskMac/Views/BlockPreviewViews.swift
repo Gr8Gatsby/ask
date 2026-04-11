@@ -479,7 +479,7 @@ private struct AgentSessionPreview: View {
     @State private var replyText = ""
     @State private var responded = false
 
-    private var agentName: String { payload["agent_name"] as? String ?? "Claude" }
+    private var agentName: String { payload["agent_name"] as? String ?? "Agent" }
     private var isWorking: Bool   { payload["is_working"] as? Bool ?? false }
     private var lastMessage: String? { payload["last_message"] as? String }
     private var placeholder: String { payload["placeholder"] as? String ?? "Reply to \(agentName)…" }
@@ -616,11 +616,11 @@ private struct StartSessionPreview: View {
 
     @State private var expanded = false
 
-    private var repos: [(name: String, path: String)] {
+    private var repos: [(name: String, path: String, value: String)] {
         guard let raw = payload["repos"] as? [[String: Any]] else { return [] }
         return raw.compactMap { d in
             guard let n = d["name"] as? String, let p = d["path"] as? String else { return nil }
-            return (n, p)
+            return (n, p, (d["value"] as? String) ?? p)
         }
     }
 
@@ -658,7 +658,7 @@ private struct StartSessionPreview: View {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(repos.enumerated()), id: \.offset) { idx, repo in
                         RepoRowView(name: repo.name, path: repo.path) {
-                            onRespond?(repo.path)
+                            onRespond?(repo.value)
                             expanded = false
                         }
                         .disabled(onRespond == nil)

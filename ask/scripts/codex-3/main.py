@@ -290,6 +290,9 @@ class Codex3:
     async def _emit_session_block(self, session):
         payload = {
             'session_id': session.session_id,
+            'agent_name': 'Codex 3',
+            'brand_color': '#111111',
+            'placeholder': 'Message Codex 3…',
             'project': session.project,
             'cwd': session.cwd,
             'is_working': session.state in ('starting', 'awaiting_user', 'running_tool', 'waiting_permission'),
@@ -557,6 +560,7 @@ class Codex3:
         return {'ok': True}
 
     async def _handle_block_response(self, block_id: str, value: str):
+        _log(f'block response block_id={block_id!r} value={value[:80]!r}')
         if block_id == START_SESSION_BLOCK_ID:
             if value.startswith('adopt:'):
                 pane = self._start_choices.get(value, {})
@@ -583,14 +587,16 @@ class Codex3:
                 await self._emit_session_block(current)
             return
         if value == '__interrupt__':
-            send_interrupt(session.tmux_target)
+            ok = send_interrupt(session.tmux_target)
+            _log(f'interrupt session={session.session_id!r} tmux={session.tmux_target!r} ok={ok}')
             await self._append_structured_message(session, 'Interrupted', 'Sent Ctrl-C to the session.')
             session.state = 'idle'
             await self._emit_session_block(session)
             _save_registry(self._registry)
             return
         if value == '__close_session__':
-            send_quit(session.tmux_target)
+            ok = send_quit(session.tmux_target)
+            _log(f'close session={session.session_id!r} tmux={session.tmux_target!r} ok={ok}')
             await self._append_structured_message(session, 'Stop requested', 'Sent quit sequence to Codex.')
             session.state = 'stopping'
             await self._emit_session_block(session)
@@ -603,6 +609,7 @@ class Codex3:
             return
         if value:
             ok = send_text(session.tmux_target, value)
+            _log(f'reply session={session.session_id!r} tmux={session.tmux_target!r} ok={ok} text={value[:80]!r}')
             if ok:
                 await self.append_message(session.task_id, 'user', value)
                 session.state = 'running_tool'

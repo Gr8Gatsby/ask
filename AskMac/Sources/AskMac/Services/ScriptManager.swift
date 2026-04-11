@@ -464,7 +464,9 @@ final class ScriptManager: @unchecked Sendable {
     /// Deliver a user response to a block directly from the Mac UI.
     func respondToBlock(scriptID: String, blockID: String, value: String) {
         connections[scriptID]?.deliverResponse(blockID: blockID, value: value)
-        activeBlocks[scriptID]?.removeValue(forKey: blockID)
+        if activeBlocks[scriptID]?[blockID]?.blockType != "agent_session" {
+            activeBlocks[scriptID]?.removeValue(forKey: blockID)
+        }
         if MacUITestingSupport.isUITesting {
             MacUITestingSupport.markResponded(blockID)
         }
