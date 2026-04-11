@@ -1482,7 +1482,7 @@ struct ScriptDetailView: View {
                 if let block = startSessionBlock, let payload = block.startSessionPayload {
                     RepoPickerSheet(repos: payload.repos) { repo in
                         showRepoPicker = false
-                        Task { await onRespond(block, repo.path) }
+                        Task { await onRespond(block, repo.value ?? repo.path) }
                     }
                 }
             }

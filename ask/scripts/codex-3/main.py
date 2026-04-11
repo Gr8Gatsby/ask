@@ -10,6 +10,7 @@ import uuid
 from registry import PendingPermission, SessionRegistry
 from transport import (
     TMUX,
+    discover_codex_panes,
     find_repos,
     get_pane_pid,
     launch_codex,
@@ -149,7 +150,7 @@ class Codex3:
         self._registry = _load_registry()
         self._settings = _load_settings()
         self._pending_permission_futures: dict[str, asyncio.Future] = {}
-        self._start_repos: dict[str, str] = {}
+        self._start_choices: dict[str, dict] = {}
         self._initialized = False
 
     def _id(self):
@@ -234,11 +235,30 @@ class Codex3:
         }, ttl=600)
 
     async def _emit_start_session_block(self):
+        choices = []
+        self._start_choices = {}
+
+        managed_targets = {
+            session.tmux_target for session in self._registry.sessions.values()
+            if session.tmux_target and session.state != 'stopped'
+        }
+        for pane in discover_codex_panes(exclude_targets=managed_targets):
+            value = f'adopt:{pane["tmux_target"]}'
+            self._start_choices[value] = pane
+            choices.append({
+                'name': f'Resume {pane["project"]}',
+                'path': pane['cwd'] or pane['tmux_target'],
+                'value': value,
+            })
+
         repos = find_repos()
         recent = self._settings.get('recent_repos', [])
         repos.sort(key=lambda item: recent.index(item[1]) if item[1] in recent else len(recent))
-        self._start_repos = {name: path for name, path in repos}
-        payload = {'repos': [{'name': name, 'path': path} for name, path in repos] or [{'name': '(no repos found)', 'path': ''}]}
+        for name, path in repos:
+            self._start_choices[path] = {'repo_path': path}
+            choices.append({'name': name, 'path': path, 'value': path})
+
+        payload = {'repos': choices or [{'name': '(no repos found)', 'path': '', 'value': ''}]}
         await self.emit_block(START_SESSION_BLOCK_ID, 'start_session', payload, ttl=600)
 
     async def _set_task_status(self, session, status: str):
@@ -470,10 +490,37 @@ class Codex3:
         await self._emit_tile()
         _save_registry(self._registry)
 
+    async def _adopt_tmux_session(self, tmux_target: str, cwd: str = '', project: str = ''):
+        if not tmux_target or not pane_exists(tmux_target):
+            return
+        session = self._registry.ensure(
+            raw_id=tmux_target,
+            tmux_target=tmux_target,
+            cwd=cwd,
+            project=project or os.path.basename(cwd.rstrip('/')) or tmux_target.rsplit(':', 1)[-1],
+        )
+        session.tmux_target = tmux_target
+        session.state = 'idle'
+        session.is_headless = False
+        session.touch()
+        await self._set_task_status(session, 'working')
+        await self._append_structured_message(session, 'Session adopted', f'Attached to existing tmux pane `{tmux_target}`.')
+        await self.clear_block(START_SESSION_BLOCK_ID)
+        await self._emit_session_block(session)
+        await self._emit_tile()
+        _save_registry(self._registry)
+
     async def _tool_start_session(self, args: dict) -> dict:
-        repo_path = args.get('repo_path', '')
-        if repo_path:
-            asyncio.create_task(self._launch(repo_path))
+        selection = args.get('repo_path', '')
+        if selection.startswith('adopt:'):
+            pane = self._start_choices.get(selection, {})
+            asyncio.create_task(self._adopt_tmux_session(
+                pane.get('tmux_target', selection.split(':', 1)[1]),
+                cwd=pane.get('cwd', ''),
+                project=pane.get('project', ''),
+            ))
+        elif selection:
+            asyncio.create_task(self._launch(selection))
         else:
             await self._emit_start_session_block()
         return {'ok': True}
@@ -511,9 +558,17 @@ class Codex3:
 
     async def _handle_block_response(self, block_id: str, value: str):
         if block_id == START_SESSION_BLOCK_ID:
-            repo_path = self._start_repos.get(value, value)
-            if repo_path:
-                asyncio.create_task(self._launch(repo_path))
+            if value.startswith('adopt:'):
+                pane = self._start_choices.get(value, {})
+                asyncio.create_task(self._adopt_tmux_session(
+                    pane.get('tmux_target', value.split(':', 1)[1]),
+                    cwd=pane.get('cwd', ''),
+                    project=pane.get('project', ''),
+                ))
+            else:
+                repo_path = self._start_choices.get(value, {}).get('repo_path', value)
+                if repo_path:
+                    asyncio.create_task(self._launch(repo_path))
             return
 
         session = next((s for s in self._registry.sessions.values() if self._session_block_id(s.session_id) == block_id), None)

@@ -273,7 +273,8 @@ struct RKInfoCardPayload: Codable {
 struct RKRepo: Codable, Identifiable {
     let name: String
     let path: String
-    var id: String { path }
+    let value: String?
+    var id: String { value ?? path }
 }
 
 struct RKStartSessionPayload: Codable {

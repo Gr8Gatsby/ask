@@ -2,6 +2,7 @@
 import os
 import shlex
 import subprocess
+from typing import Optional, Set
 
 
 REPO_SEARCH_DIRS = [
@@ -22,6 +23,55 @@ def find_tmux_bin() -> str:
 
 
 TMUX = find_tmux_bin()
+
+
+def _is_codex_pane(current_command: str, start_command: str, title: str) -> bool:
+    for value in (current_command or '', start_command or '', title or ''):
+        if 'codex' in value.lower():
+            return True
+    return False
+
+
+def discover_codex_panes(exclude_targets: Optional[Set[str]] = None) -> list[dict]:
+    exclude_targets = exclude_targets or set()
+    try:
+        result = subprocess.run(
+            [
+                TMUX,
+                'list-panes',
+                '-a',
+                '-F',
+                '#{session_name}:#{window_name}.#{pane_index}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_pid}\t#{pane_title}\t#{pane_start_command}',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except Exception:
+        return []
+    if result.returncode != 0:
+        return []
+
+    panes = []
+    seen = set()
+    for raw in result.stdout.splitlines():
+        parts = raw.split('\t')
+        if len(parts) != 6:
+            continue
+        target, cwd, current_command, pid, title, start_command = parts
+        if target in exclude_targets or target in seen:
+            continue
+        if not _is_codex_pane(current_command, start_command, title):
+            continue
+        seen.add(target)
+        panes.append({
+            'tmux_target': target,
+            'cwd': cwd,
+            'project': os.path.basename((cwd or '').rstrip('/')) or target.rsplit(':', 1)[-1],
+            'pid': int(pid) if str(pid).isdigit() else 0,
+        })
+    panes.sort(key=lambda item: (item['project'].lower(), item['tmux_target']))
+    return panes
 
 
 def get_pane_pid(target: str) -> int:

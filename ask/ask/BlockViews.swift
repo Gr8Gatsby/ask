@@ -1361,7 +1361,7 @@ struct StartSessionBlockView: View {
                 showPicker = false
                 launching = true
                 Task {
-                    await onRespond(repo.path)
+                    await onRespond(repo.value ?? repo.path)
                     try? await Task.sleep(for: .seconds(2))
                     launching = false
                 }
