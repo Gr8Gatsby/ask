@@ -10,6 +10,8 @@
 		AA1B2C3D4E5F6789ABCD0003 /* AskMacUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1B2C3D4E5F6789ABCD0002 /* AskMacUITests.swift */; };
 		AA1B2C3D4E5F6789ABCD0005 /* MacUITestingSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1B2C3D4E5F6789ABCD0004 /* MacUITestingSupport.swift */; };
 		0675DD58EE11FCC5FB9C0FE9 /* MCPConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D62BC3ACCF548A6926C83A4 /* MCPConnection.swift */; };
+		06C485A3E2C74E3C9F1A0001 /* TaskService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06C485A3E2C74E3C9F1A0000 /* TaskService.swift */; };
+		06C485A3E2C74E3C9F1A0003 /* TaskRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06C485A3E2C74E3C9F1A0002 /* TaskRegistry.swift */; };
 		0D696DD556936DCEC1997BEB /* TerminalMonitorServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F05D2937205C7D5DED51EEA /* TerminalMonitorServiceTests.swift */; };
 		2A8C999FCCA1DDA22786079F /* BlockService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 944903959A55B26822A4701D /* BlockService.swift */; };
 		2DDF70E89F94833C7837389B /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504764CE87B4791BDD3ABFD8 /* KeychainService.swift */; };
@@ -93,6 +95,8 @@
 		AA1B2C3D4E5F6789ABCD0004 /* MacUITestingSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacUITestingSupport.swift; sourceTree = "<group>"; };
 		00C7F95F08E74502C870234D /* AskMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AskMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0D62BC3ACCF548A6926C83A4 /* MCPConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPConnection.swift; sourceTree = "<group>"; };
+		06C485A3E2C74E3C9F1A0000 /* TaskService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskService.swift; sourceTree = "<group>"; };
+		06C485A3E2C74E3C9F1A0002 /* TaskRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskRegistry.swift; sourceTree = "<group>"; };
 		125B8BABE336DAA2EEDBC261 /* ScriptUpdateService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptUpdateService.swift; sourceTree = "<group>"; };
 		28BCC8842C2E63700381890C /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		2E4D0C6DDB6891CB03EA9572 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
@@ -151,6 +155,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				318C46CF42445B388B5E6739 /* libAskMacCore.a in Frameworks */,
 				D867C4A0F3AC8C6C77C16CC6 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -186,6 +191,7 @@
 				0D62BC3ACCF548A6926C83A4 /* MCPConnection.swift */,
 				834313B9757B652D0DB8E349 /* MessageWatcherService.swift */,
 				4067387D7D1B4F65BAB0B74F /* ResponsePoller.swift */,
+				06C485A3E2C74E3C9F1A0000 /* TaskService.swift */,
 				DDBAEE7F7B9B1616758FEDE2 /* ScriptInstaller.swift */,
 				CA1CC49C770BDCD1EB75B351 /* ScriptManager.swift */,
 				125B8BABE336DAA2EEDBC261 /* ScriptUpdateService.swift */,
@@ -255,6 +261,7 @@
 				AA000001CATALOG00ENTRY000 /* CatalogEntry.swift */,
 				AA000002INSTALLED0SCRIPT0 /* InstalledScript.swift */,
 				3D24A318DEBECC653846BFA7 /* ScriptCatalogService.swift */,
+				06C485A3E2C74E3C9F1A0002 /* TaskRegistry.swift */,
 				CFD416A6077DEA3848608AB1 /* TerminalMonitorService.swift */,
 				3F2A338EFC99F8D874DB40EE /* VersionComparison.swift */,
 			);
@@ -350,6 +357,7 @@
 			buildRules = (
 			);
 			dependencies = (
+				F26C336A914F9A57FA1A7195 /* PBXTargetDependency */,
 			);
 			name = AskMac;
 			packageProductDependencies = (
@@ -481,6 +489,7 @@
 				337B871BCC56D6AD61869B87 /* MenuBarView.swift in Sources */,
 				44001CADDFE8D87EC9DC698D /* MessageWatcherService.swift in Sources */,
 				7A4B52614E8031E1D2E8710F /* ResponsePoller.swift in Sources */,
+				06C485A3E2C74E3C9F1A0001 /* TaskService.swift in Sources */,
 				CC000006CATALOG00ENTRY000 /* CatalogEntry.swift in Sources */,
 				CC000007INSTALLED0SCRIPT0 /* InstalledScript.swift in Sources */,
 				CC000008CATALOG0SERVICE00 /* ScriptCatalogService.swift in Sources */,
@@ -502,6 +511,7 @@
 				BB000003CATALOG0ENTRY0000 /* CatalogEntry.swift in Sources */,
 				BB000004INSTALLED0SCRIPT0 /* InstalledScript.swift in Sources */,
 				BB000001CATALOG0SERVICE00 /* ScriptCatalogService.swift in Sources */,
+				06C485A3E2C74E3C9F1A0003 /* TaskRegistry.swift in Sources */,
 				BAE4E67E06F337A2A3722087 /* TerminalMonitorService.swift in Sources */,
 				BB000002VERSION0COMPARE00 /* VersionComparison.swift in Sources */,
 			);

@@ -589,6 +589,7 @@ private struct AgentSessionPreview: View {
                                 .buttonStyle(.borderedProminent)
                                 .tint(option.lowercased().contains("deny") ? .red : brandColor)
                                 .controlSize(.small)
+                                .accessibilityIdentifier("agent-session-option-\(option)")
                             }
                         }
                     }
@@ -606,6 +607,7 @@ private struct AgentSessionPreview: View {
                     TextField(placeholder, text: $replyText)
                         .textFieldStyle(.roundedBorder)
                         .font(.caption)
+                        .accessibilityIdentifier("agent-session-reply")
                         .onSubmit {
                             guard !replyText.isEmpty else { return }
                             let value = replyText
@@ -622,6 +624,7 @@ private struct AgentSessionPreview: View {
                             .font(.title3)
                             .foregroundStyle(replyText.isEmpty ? Color.secondary : brandColor)
                     }
+                    .accessibilityIdentifier("agent-session-send")
                     .buttonStyle(.plain)
                     .disabled(replyText.isEmpty)
                 }

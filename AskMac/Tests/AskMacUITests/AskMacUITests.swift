@@ -190,3 +190,23 @@ final class MacAlertBlockTests: AskMacUITestCase {
         XCTAssertFalse(confirmBtn.exists, "Alert blocks must not have confirmation buttons")
     }
 }
+
+// MARK: - Codex agent session permission
+
+final class MacCodexAgentSessionTests: AskMacUITestCase {
+
+    func test_codexPermission_rendersInlineOptions() {
+        launch(scenario: "codex_permission")
+        assertExists(scriptsWindow.buttons["agent-session-option-Allow"], "Allow should be visible on the Codex session card")
+        assertExists(scriptsWindow.buttons["agent-session-option-Always Allow"], "Always Allow should be visible on the Codex session card")
+        assertExists(scriptsWindow.buttons["agent-session-option-Deny"], "Deny should be visible on the Codex session card")
+    }
+
+    func test_codexPermission_approvalClearsInlineButtons() {
+        launch(scenario: "codex_permission")
+        let allow = scriptsWindow.buttons["agent-session-option-Allow"]
+        assertExists(allow)
+        allow.click()
+        assertGone(allow, timeout: 3, "Inline permission controls should clear after responding")
+    }
+}

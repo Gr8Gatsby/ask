@@ -37,6 +37,8 @@ enum MacUITestingSupport {
 
     static func scripts(for scenario: String) -> [ManagedScript] {
         switch scenario {
+        case "codex_permission":
+            return [mockScript(id: "codex-3", name: "Codex 3")]
         case "multiple_scripts":
             return [
                 mockScript(id: "claudecode-controller", name: "Claude Code"),
@@ -108,6 +110,16 @@ enum MacUITestingSupport {
                     blockType: "alert",
                     payloadJSON: #"{"title":"terminal-manager not running","body":"TUI detection is unavailable. Start terminal-manager to enable interactive prompts on iPhone.","urgency":"warning"}"#
                 ),
+            ]
+
+        case "codex_permission":
+            return [
+                MockBlock(
+                    id: "mock-codex-session-1",
+                    scriptID: "codex-3",
+                    blockType: "agent_session",
+                    payloadJSON: #"{"agent_name":"Codex 3","project":"ask","is_working":true,"last_message":"Working…","current_preview":"git commit -m \"Fix routing\"","status_text":"Waiting Permission","placeholder":"Message Codex 3…","pending_confirmation":{"title":"Allow Bash?","options":["Allow","Always Allow","Deny"]}}"#
+                )
             ]
 
         case "multiple_scripts":
