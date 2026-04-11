@@ -74,11 +74,12 @@ private extension Color {
 // MARK: - Top-level tab
 
 private enum MacTab: String, CaseIterable {
-    case scripts, feed, blocks, machine
+    case scripts, iphone, feed, blocks, machine
 
     var icon: String {
         switch self {
         case .scripts:  "terminal"
+        case .iphone:   "iphone"
         case .feed:     "scroll"
         case .blocks:   "rectangle.stack"
         case .machine:  "desktopcomputer"
@@ -88,6 +89,7 @@ private enum MacTab: String, CaseIterable {
     var label: String {
         switch self {
         case .scripts:  "Scripts"
+        case .iphone:   "iPhone"
         case .feed:     "Feed"
         case .blocks:   "Blocks"
         case .machine:  "Machine"
@@ -112,6 +114,9 @@ struct MacScriptsView: View {
             switch activeTab {
             case .scripts:
                 ScriptsTabView()
+                    .environment(scriptManager)
+            case .iphone:
+                MacIPhoneMockView()
                     .environment(scriptManager)
             case .feed:
                 MacFeedView()
@@ -149,6 +154,243 @@ struct MacScriptsView: View {
             // without accent color until the user clicks. Force activation so
             // the window becomes key immediately on first open.
             NSApplication.shared.activate(ignoringOtherApps: true)
+        }
+    }
+}
+
+private struct MacIPhoneMockView: View {
+    @Environment(ScriptManager.self) private var scriptManager
+    @State private var selectedScriptID: String?
+
+    var body: some View {
+        NavigationSplitView {
+            List(selection: $selectedScriptID) {
+                let sorted = scriptManager.scripts.sorted { a, b in
+                    if a.isSystem != b.isSystem { return !a.isSystem }
+                    return a.name < b.name
+                }
+                ForEach(sorted) { script in
+                    ScriptSidebarRow(script: script, scriptManager: scriptManager)
+                        .tag(script.id)
+                }
+            }
+            .listStyle(.sidebar)
+            .navigationTitle("iPhone Mock")
+            .navigationSplitViewColumnWidth(min: 220, ideal: 240)
+            .onAppear {
+                if selectedScriptID == nil {
+                    selectedScriptID = scriptManager.scripts.first(where: { !$0.isSystem })?.id
+                        ?? scriptManager.scripts.first?.id
+                }
+            }
+        } detail: {
+            if let id = selectedScriptID,
+               let script = scriptManager.scripts.first(where: { $0.id == id }) {
+                MacIPhoneScriptMockDetail(script: script, scriptManager: scriptManager)
+            } else {
+                ContentUnavailableView(
+                    "Select a Script",
+                    systemImage: "iphone",
+                    description: Text("Choose a script to preview its local iPhone-style surface.")
+                )
+            }
+        }
+    }
+}
+
+private struct MacIPhoneScriptMockDetail: View {
+    let script: ManagedScript
+    let scriptManager: ScriptManager
+
+    private var liveBlocks: [LiveBlock] {
+        Array((scriptManager.activeBlocks[script.id] ?? [:]).values)
+            .sorted { $0.id < $1.id }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 10) {
+                scriptIcon
+                    .frame(width: 28, height: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(script.name)
+                        .font(.headline)
+                    Text("Desktop iPhone mock powered by local blocks")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            HStack(alignment: .top, spacing: 24) {
+                MacIPhoneChrome {
+                    MacIPhoneBlocksScreen(
+                        script: script,
+                        liveBlocks: liveBlocks,
+                        onRespond: { blockID, value in
+                            scriptManager.respondToBlock(scriptID: script.id, blockID: blockID, value: value)
+                        }
+                    )
+                }
+                .frame(maxWidth: 430)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Notes")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .textCase(.uppercase)
+                    Text("This view reuses the local desktop blocks and responses, but presents them in an iPhone-style shell. It is intended as a fast local harness for session adoption, replies, and permission prompts before validating the same flow on iOS.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    if liveBlocks.isEmpty {
+                        Text("No active blocks for this script yet.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("\(liveBlocks.count) live block\(liveBlocks.count == 1 ? "" : "s")")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: 320, alignment: .leading)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(20)
+        .navigationTitle(script.name)
+    }
+
+    @ViewBuilder
+    private var scriptIcon: some View {
+        if let img = effectiveIconImage {
+            Image(nsImage: img)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+        } else if let sf = script.icon {
+            Image(systemName: sf)
+                .font(.title3)
+                .foregroundStyle(.primary)
+        } else {
+            Image(systemName: "app")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var effectiveIconImage: NSImage? {
+        guard let img = script.iconImage else { return nil }
+        guard let svg = script.svgString else { return img }
+        return svgToWhite(svg) ?? img
+    }
+}
+
+private struct MacIPhoneChrome<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 46, style: .continuous)
+                .fill(Color.black)
+                .shadow(color: .black.opacity(0.18), radius: 24, x: 0, y: 16)
+            VStack(spacing: 0) {
+                Capsule()
+                    .fill(.black.opacity(0.9))
+                    .frame(width: 126, height: 36)
+                    .padding(.top, 12)
+                    .padding(.bottom, 8)
+                content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 12)
+            }
+        }
+        .frame(width: 390, height: 844)
+    }
+}
+
+private struct MacIPhoneBlocksScreen: View {
+    let script: ManagedScript
+    let liveBlocks: [LiveBlock]
+    let onRespond: (String, String) -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(script.name)
+                    .font(.headline)
+                Spacer()
+                Image(systemName: "rectangle.on.rectangle")
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 12)
+
+            Divider()
+
+            if liveBlocks.isEmpty {
+                Spacer()
+                VStack(spacing: 8) {
+                    scriptHeaderIcon
+                    Text("No active blocks")
+                        .font(.headline)
+                    Text("This script hasn’t emitted any local blocks yet.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(liveBlocks) { block in
+                            BlockPreviewView(block: block) { value in
+                                onRespond(block.id, value)
+                            }
+                        }
+                    }
+                    .padding(16)
+                }
+            }
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Text("Local Preview")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                Spacer()
+            }
+            .padding(.vertical, 12)
+        }
+    }
+
+    @ViewBuilder
+    private var scriptHeaderIcon: some View {
+        if let img = script.iconImage {
+            Image(nsImage: img)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 40, height: 40)
+        } else if let sf = script.icon {
+            Image(systemName: sf)
+                .font(.system(size: 34))
+                .foregroundStyle(.primary)
+        } else {
+            Image(systemName: "app")
+                .font(.system(size: 34))
+                .foregroundStyle(.secondary)
         }
     }
 }
