@@ -1,0 +1,48 @@
+{
+  "id": "codex-3",
+  "name": "Codex 3",
+  "version": "0.1.0",
+  "description": "Feed-first Codex session supervisor with tmux transport and task-backed history",
+  "entry": "main.py",
+  "icon": "sparkles",
+  "tools": [
+    {
+      "name": "start_session",
+      "description": "Launch a new Codex session in tmux, or show the repo picker when no path is provided.",
+      "params": [
+        { "name": "repo_path", "type": "string", "required": false }
+      ]
+    },
+    {
+      "name": "reply",
+      "description": "Send a message to a live Codex-3 session.",
+      "params": [
+        { "name": "message", "type": "string", "required": true },
+        { "name": "session_id", "type": "string", "required": true }
+      ]
+    },
+    {
+      "name": "stop_session",
+      "description": "Interrupt a live Codex-3 session.",
+      "params": [
+        { "name": "session_id", "type": "string", "required": true }
+      ]
+    }
+  ],
+  "requires": [
+    {
+      "id": "tmux",
+      "name": "tmux",
+      "check": "test -f /opt/homebrew/bin/tmux || test -f /usr/local/bin/tmux || command -v tmux >/dev/null 2>&1",
+      "install": "brew install tmux",
+      "install_url": "https://github.com/tmux/tmux"
+    },
+    {
+      "id": "codex",
+      "name": "OpenAI Codex CLI",
+      "check": "PATH=$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ 2>/dev/null | sort -V | tail -1)/bin:$HOME/.local/bin:$HOME/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH command -v codex >/dev/null 2>&1",
+      "install": "npm install -g @openai/codex",
+      "install_url": "https://github.com/openai/codex"
+    }
+  ]
+}
