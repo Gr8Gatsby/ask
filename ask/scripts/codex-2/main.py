@@ -1572,6 +1572,13 @@ class CodexController:
                     cwd=msg.get('cwd', ''),
                     tmux_target=msg.get('tmux_target', ''),
                 ) if raw_id else ''
+                if not session_id and raw_id:
+                    await self._handle_session_active(msg)
+                    session_id = self._lookup_session_id(
+                        raw_id=raw_id,
+                        cwd=msg.get('cwd', ''),
+                        tmux_target=msg.get('tmux_target', ''),
+                    )
                 if session_id and session_id in self._sessions:
                     info = self._sessions[session_id]
                     info['is_working'] = True

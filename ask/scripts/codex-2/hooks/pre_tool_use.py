@@ -50,6 +50,29 @@ def _get_tmux_target():
         return ''
 
 
+def _get_tty():
+    """Walk the process parent chain to find the TTY of the terminal."""
+    try:
+        pid = os.getpid()
+        for _ in range(8):
+            r = subprocess.run(
+                ['ps', '-p', str(pid), '-o', 'ppid=,tty='],
+                capture_output=True, text=True, timeout=2
+            )
+            parts = r.stdout.strip().split()
+            if len(parts) < 2:
+                break
+            ppid_str, tty = parts[0], parts[1]
+            if tty not in ('??', ''):
+                return tty
+            pid = int(ppid_str)
+            if pid <= 1:
+                break
+    except Exception:
+        pass
+    return None
+
+
 data = json.load(sys.stdin)
 
 # Check our local permission mode override first.
@@ -107,6 +130,7 @@ try:
         'preview': preview,
         'options': ['Allow', 'Always Allow', 'Deny'],
         'session_id': session,
+        'tty': _get_tty(),
         'cwd': data.get('cwd', '') or os.getcwd(),
         'tmux_target': _get_tmux_target(),
     }).encode()

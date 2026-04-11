@@ -521,6 +521,27 @@ def test_prompt_surfaced_on_session_tile(harness):
         'Session tile should include current_prompt after user_prompt_submit'
 
 
+def test_user_prompt_submit_registers_unknown_session(harness):
+    """A prompt hook should create a session when SessionStart was missed."""
+    harness.socket_send({
+        'type': 'user_prompt_submit',
+        'session_id': 'raw-codex-session',
+        'cwd': '/tmp/ask',
+        'tty': 's003',
+        'prompt': 'continue implementing the fix',
+    })
+    time.sleep(0.5)
+
+    tile = harness.wait_for(
+        lambda m: (
+            is_emit(m, 'agent_session') and
+            m.get('params', {}).get('arguments', {}).get('payload', {}).get('cwd') == '/tmp/ask'
+        ),
+        timeout=3.0,
+    )
+    assert tile is not None, 'user_prompt_submit should register and emit a session block'
+
+
 # Fix 12: Orphaned blocks cleared on startup ──────────────────────────────────
 
 def test_orphaned_blocks_cleared_on_startup(tmp_path):
