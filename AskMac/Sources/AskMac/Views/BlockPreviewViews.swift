@@ -477,13 +477,24 @@ private struct AgentSessionPreview: View {
     var onRespond: ((String) -> Void)?
 
     @State private var replyText = ""
-    @State private var responded = false
+    @State private var respondedText: String? = nil
+    @State private var confirmationResponse: String? = nil
 
     private var agentName: String { payload["agent_name"] as? String ?? "Agent" }
     private var isWorking: Bool   { payload["is_working"] as? Bool ?? false }
     private var lastMessage: String? { payload["last_message"] as? String }
     private var placeholder: String { payload["placeholder"] as? String ?? "Reply to \(agentName)…" }
     private var project: String?  { payload["project"] as? String }
+    private var currentPreview: String? { payload["current_preview"] as? String ?? payload["preview"] as? String }
+    private var statusText: String? { payload["status_text"] as? String }
+
+    private var pendingConfirmation: (title: String, options: [String])? {
+        guard let pending = payload["pending_confirmation"] as? [String: Any],
+              let title = pending["title"] as? String
+        else { return nil }
+        let options = pending["options"] as? [String] ?? []
+        return (title, options)
+    }
 
     private var brandColor: Color {
         hexColor(payload["brand_color"] as? String) ?? .accentColor
@@ -509,7 +520,23 @@ private struct AgentSessionPreview: View {
 
             // Message / working state
             Group {
-                if isWorking, let msg = lastMessage, !msg.isEmpty {
+                if let pending = pendingConfirmation {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(pending.title)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        if let preview = currentPreview, !preview.isEmpty {
+                            markdownText(preview)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(4)
+                        } else if let status = statusText, !status.isEmpty {
+                            Text(status)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } else if isWorking, let msg = lastMessage, !msg.isEmpty {
                     markdownText(msg)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -517,7 +544,7 @@ private struct AgentSessionPreview: View {
                         .lineLimit(4)
                 } else if isWorking {
                     HStack(spacing: 4) {
-                        Text("Working…").font(.caption).foregroundStyle(.secondary).italic()
+                        Text(statusText ?? "Working…").font(.caption).foregroundStyle(.secondary).italic()
                     }
                 } else if let msg = lastMessage, !msg.isEmpty {
                     markdownText(msg)
@@ -525,6 +552,11 @@ private struct AgentSessionPreview: View {
                         .foregroundStyle(.primary)
                         .lineLimit(6)
                         .textSelection(.enabled)
+                } else if let preview = currentPreview, !preview.isEmpty {
+                    markdownText(preview)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(4)
                 } else {
                     Text("Waiting for input…")
                         .font(.caption).foregroundStyle(.secondary).italic()
@@ -535,11 +567,39 @@ private struct AgentSessionPreview: View {
             .background(Color.secondary.opacity(0.1))
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
+            if let pending = pendingConfirmation, let respond = onRespond {
+                VStack(alignment: .leading, spacing: 8) {
+                    if let confirmationResponse {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                            Text(confirmationResponse)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    } else {
+                        HStack(spacing: 8) {
+                            ForEach(pending.options, id: \.self) { option in
+                                Button(option) {
+                                    confirmationResponse = option
+                                    respond(option)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(option.lowercased().contains("deny") ? .red : brandColor)
+                                .controlSize(.small)
+                            }
+                        }
+                    }
+                }
+            }
+
             // Reply row
-            if responded {
+            if let respondedText {
                 HStack(spacing: 4) {
                     Image(systemName: "checkmark.circle.fill").font(.caption).foregroundStyle(.secondary)
-                    Text(replyText).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(respondedText).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             } else if let respond = onRespond {
                 HStack(spacing: 6) {
@@ -548,11 +608,15 @@ private struct AgentSessionPreview: View {
                         .font(.caption)
                         .onSubmit {
                             guard !replyText.isEmpty else { return }
-                            respond(replyText); responded = true
+                            let value = replyText
+                            respond(value)
+                            respondedText = value
                         }
                     Button {
                         guard !replyText.isEmpty else { return }
-                        respond(replyText); responded = true
+                        let value = replyText
+                        respond(value)
+                        respondedText = value
                     } label: {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.title3)

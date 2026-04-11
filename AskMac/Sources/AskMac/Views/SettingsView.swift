@@ -178,9 +178,12 @@ private struct LocalTilePayload {
 }
 
 private struct LocalAgentSessionSummary {
+    let blockID: String
     let lastMessage: String?
     let currentPreview: String?
     let isWorking: Bool
+    let pendingConfirmationTitle: String?
+    let hasPendingConfirmation: Bool
 }
 
 private struct LocalAppScriptGroup: Identifiable {
@@ -208,26 +211,34 @@ private struct LocalAppScriptGroup: Identifiable {
     private var agentSessions: [LocalAgentSessionSummary] {
         blocks.compactMap { block in
             guard block.blockType == "agent_session", let dict = block.payloadDict else { return nil }
+            let pending = dict["pending_confirmation"] as? [String: Any]
             return LocalAgentSessionSummary(
+                blockID: block.id,
                 lastMessage: dict["last_message"] as? String,
                 currentPreview: dict["current_preview"] as? String,
-                isWorking: dict["is_working"] as? Bool ?? false
+                isWorking: dict["is_working"] as? Bool ?? false,
+                pendingConfirmationTitle: pending?["title"] as? String,
+                hasPendingConfirmation: pending != nil
             )
         }
     }
 
     var isActionRequired: Bool { tilePayload?.actionRequired == true }
 
+    private var pendingSessionBlockIDs: Set<String> {
+        Set(agentSessions.filter(\.hasPendingConfirmation).map(\.blockID))
+    }
+
     var needsResponse: Bool {
-        blocks.contains(where: \.showsInInbox) || isActionRequired
+        blocks.contains(where: \.showsInInbox) || isActionRequired || !pendingSessionBlockIDs.isEmpty
     }
 
     var inboxBlocks: [LiveBlock] {
-        blocks.filter(\.showsInInbox)
+        blocks.filter { $0.showsInInbox || pendingSessionBlockIDs.contains($0.id) }
     }
 
     var recentBlocks: [LiveBlock] {
-        blocks.filter { !$0.showsInInbox && $0.blockType != "tile" }
+        blocks.filter { !$0.showsInInbox && !pendingSessionBlockIDs.contains($0.id) && $0.blockType != "tile" }
     }
 
     var tileLabel: String? {
@@ -243,11 +254,15 @@ private struct LocalAppScriptGroup: Identifiable {
 
     var tileStatusColor: String? {
         if let color = tilePayload?.statusColor { return color }
+        if agentSessions.contains(where: \.hasPendingConfirmation) { return "orange" }
         return agentSessions.contains(where: \.isWorking) ? "blue" : "gray"
     }
 
     var tileBody: String? {
         if let body = tilePayload?.body, !body.isEmpty { return body }
+        if let pending = agentSessions.first(where: \.hasPendingConfirmation)?.pendingConfirmationTitle {
+            return pending
+        }
         let active = agentSessions.first(where: \.isWorking) ?? agentSessions.first
         let text = active?.lastMessage ?? active?.currentPreview
         guard let text, !text.isEmpty else { return nil }
