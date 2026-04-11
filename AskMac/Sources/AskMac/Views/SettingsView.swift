@@ -71,6 +71,17 @@ private extension Color {
     }
 }
 
+private func blockStatusColor(_ colorString: String?) -> Color {
+    switch colorString {
+    case "green":  .green
+    case "blue":   .blue
+    case "orange": .orange
+    case "red":    .red
+    case "yellow": .yellow
+    default:       .secondary
+    }
+}
+
 // MARK: - Top-level tab
 
 private enum MacTab: String, CaseIterable {
@@ -261,22 +272,40 @@ private enum AppMockScreen: Hashable {
 private struct MacAppMockView: View {
     @Environment(ScriptManager.self) private var scriptManager
     @State private var screen: AppMockScreen = .home
+    @State private var selectedScriptID: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Picker("", selection: $screen) {
-                Text("Home").tag(AppMockScreen.home)
-                Text("Feed").tag(AppMockScreen.feed)
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 220)
+            if let selectedScriptID,
+               let script = scriptManager.scripts.first(where: { $0.id == selectedScriptID }) {
+                let blocks = Array((scriptManager.activeBlocks[script.id] ?? [:]).values)
+                    .sorted { $0.createdAt > $1.createdAt }
+                MacAppScriptScreen(
+                    script: script,
+                    liveBlocks: blocks,
+                    onBack: { self.selectedScriptID = nil },
+                    onRespond: { blockID, value in
+                        scriptManager.respondToBlock(scriptID: script.id, blockID: blockID, value: value)
+                    }
+                )
+            } else {
+                Picker("", selection: $screen) {
+                    Text("Home").tag(AppMockScreen.home)
+                    Text("Feed").tag(AppMockScreen.feed)
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 220)
 
-            Group {
-                switch screen {
-                case .home:
-                    MacAppHomeScreen(scriptManager: scriptManager)
-                case .feed:
-                    MacAppFeedScreen(scriptManager: scriptManager)
+                Group {
+                    switch screen {
+                    case .home:
+                        MacAppHomeScreen(
+                            scriptManager: scriptManager,
+                            onOpenScript: { selectedScriptID = $0 }
+                        )
+                    case .feed:
+                        MacAppFeedScreen(scriptManager: scriptManager)
+                    }
                 }
             }
         }
@@ -287,6 +316,7 @@ private struct MacAppMockView: View {
 
 private struct MacAppHomeScreen: View {
     let scriptManager: ScriptManager
+    let onOpenScript: (String) -> Void
 
     private var groups: [LocalAppScriptGroup] {
         scriptManager.scripts
@@ -337,6 +367,8 @@ private struct MacAppHomeScreen: View {
                         ForEach(needsResponseGroups) { group in
                             MacAppActionCard(group: group) { blockID, value in
                                 scriptManager.respondToBlock(scriptID: group.script.id, blockID: blockID, value: value)
+                            } onOpen: {
+                                onOpenScript(group.script.id)
                             }
                         }
                     }
@@ -344,7 +376,9 @@ private struct MacAppHomeScreen: View {
                     if !recentGroups.isEmpty {
                         appSectionHeader("Recent", count: nil)
                         ForEach(recentGroups) { group in
-                            MacAppTileCard(group: group)
+                            MacAppTileCard(group: group) {
+                                onOpenScript(group.script.id)
+                            }
                         }
                     }
                 }
@@ -435,35 +469,44 @@ private struct MacAppFeedScreen: View {
 private struct MacAppActionCard: View {
     let group: LocalAppScriptGroup
     let onRespond: (String, String) -> Void
+    let onOpen: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                scriptIcon
-                    .frame(width: 26, height: 26)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(group.script.name)
-                        .font(.headline)
-                    if let label = group.tileLabel {
-                        HStack(spacing: 5) {
-                            Circle()
-                                .fill(blockStatusColor(group.tileStatusColor))
-                                .frame(width: 7, height: 7)
-                            Text(label)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+            Button(action: onOpen) {
+                HStack(spacing: 10) {
+                    scriptIcon
+                        .frame(width: 26, height: 26)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(group.script.name)
+                            .font(.headline)
+                        if let label = group.tileLabel {
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(blockStatusColor(group.tileStatusColor))
+                                    .frame(width: 7, height: 7)
+                                Text(label)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
                         }
                     }
+                    Spacer()
+                    Text("\(group.inboxBlocks.count) pending")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(Color.orange.opacity(0.12)))
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
                 }
-                Spacer()
-                Text("\(group.inboxBlocks.count) pending")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Capsule().fill(Color.orange.opacity(0.12)))
             }
+            .buttonStyle(.plain)
 
             if let body = group.tileBody {
                 Text(body)
@@ -507,40 +550,49 @@ private struct MacAppActionCard: View {
     private var effectiveIconImage: NSImage? {
         guard let img = group.script.iconImage else { return nil }
         guard let svg = group.script.svgString else { return img }
-        return svgToWhite(svg) ?? img
+        return colorScheme == .dark ? (svgToWhite(svg) ?? img) : img
     }
 }
 
 private struct MacAppTileCard: View {
     let group: LocalAppScriptGroup
+    let onOpen: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        HStack(spacing: 10) {
-            scriptIcon
-                .frame(width: 26, height: 26)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(group.script.name)
-                    .font(.headline)
-                if let label = group.tileLabel {
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(blockStatusColor(group.tileStatusColor))
-                            .frame(width: 7, height: 7)
-                        Text(label)
+        Button(action: onOpen) {
+            HStack(spacing: 10) {
+                scriptIcon
+                    .frame(width: 26, height: 26)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(group.script.name)
+                        .font(.headline)
+                    if let label = group.tileLabel {
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(blockStatusColor(group.tileStatusColor))
+                                .frame(width: 7, height: 7)
+                            Text(label)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    if let body = group.tileBody {
+                        Text(body)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
                 }
-                if let body = group.tileBody {
-                    Text(body)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
-            Spacer()
         }
+        .buttonStyle(.plain)
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
         .background(RoundedRectangle(cornerRadius: 18).fill(Color.secondary.opacity(0.07)))
@@ -566,7 +618,49 @@ private struct MacAppTileCard: View {
     private var effectiveIconImage: NSImage? {
         guard let img = group.script.iconImage else { return nil }
         guard let svg = group.script.svgString else { return img }
-        return svgToWhite(svg) ?? img
+        return colorScheme == .dark ? (svgToWhite(svg) ?? img) : img
+    }
+}
+
+private struct MacAppScriptScreen: View {
+    let script: ManagedScript
+    let liveBlocks: [LiveBlock]
+    let onBack: () -> Void
+    let onRespond: (String, String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 10) {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.headline)
+                }
+                .buttonStyle(.plain)
+                Text(script.name)
+                    .font(.title2.weight(.semibold))
+                Spacer()
+            }
+
+            if liveBlocks.isEmpty {
+                ContentUnavailableView(
+                    "No Active Blocks",
+                    systemImage: "rectangle.stack",
+                    description: Text("This script has no active local blocks right now.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(liveBlocks) { block in
+                            BlockPreviewView(block: block) { value in
+                                onRespond(block.id, value)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
