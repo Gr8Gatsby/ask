@@ -175,7 +175,7 @@ struct SessionChatView: View {
             }
             Divider()
             composeBar
-            if isActive, scriptID == "codex-controller", let block = liveBlock {
+            if isActive, scriptID == "codex-2", let block = liveBlock {
                 modeToggle(block: block)
             }
         }
@@ -216,7 +216,7 @@ struct SessionChatView: View {
                             }
                         }
                     } message: {
-                        Text("Stops the Claude Code session and clears its chat history.")
+                        Text("Stops the active session and clears its chat history.")
                     }
                 }
             }
