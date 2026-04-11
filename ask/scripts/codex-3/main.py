@@ -427,7 +427,7 @@ class Codex3:
         fut = asyncio.get_running_loop().create_future()
         self._pending_permission_futures[request.request_id] = fut
 
-        await self._set_task_status(session, 'input-required')
+        await self._set_task_status(session, 'working')
         await self._append_structured_message(
             session,
             'Permission needed',
@@ -660,7 +660,22 @@ class Codex3:
         _install_hooks()
         await self._start_socket_server()
         asyncio.create_task(self._heartbeat())
-        await self._read_stdin()
+        stdin_task = asyncio.create_task(self._read_stdin())
+        try:
+            await self._rpc('initialize', {
+                'protocolVersion': '2024-11-05',
+                'capabilities': {'tools': {}},
+                'clientInfo': {'name': 'codex-3', 'version': '0.1.0'},
+            })
+            self._write({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+            self._initialized = True
+            _log('MCP initialized')
+            await self._emit_start_session_block()
+            await self._refresh_sessions()
+            await stdin_task
+        finally:
+            if not stdin_task.done():
+                stdin_task.cancel()
 
 
 if __name__ == '__main__':
