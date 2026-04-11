@@ -1489,16 +1489,29 @@ struct ScriptDetailView: View {
             // Session chat navigation
             .navigationDestination(for: AgentSessionNavValue.self) { nav in
                 let livePayload = allBlocks.first(where: { $0.id == nav.blockID })?.agentSessionPayload
-                SessionChatView(
-                    sessionBlockID: nav.blockID,
-                    sessionID: nav.sessionID,
-                    project: nav.project,
-                    livePayload: livePayload,
-                    allBlocks: allBlocks,
-                    scriptID: scriptID,
-                    machineID: nav.machineID,
-                    onRespond: onRespond
-                )
+                if scriptID == "codex-3" {
+                    SessionFeedView(
+                        sessionBlockID: nav.blockID,
+                        sessionID: nav.sessionID,
+                        project: nav.project,
+                        livePayload: livePayload,
+                        allBlocks: allBlocks,
+                        scriptID: scriptID,
+                        machineID: nav.machineID,
+                        onRespond: onRespond
+                    )
+                } else {
+                    SessionChatView(
+                        sessionBlockID: nav.blockID,
+                        sessionID: nav.sessionID,
+                        project: nav.project,
+                        livePayload: livePayload,
+                        allBlocks: allBlocks,
+                        scriptID: scriptID,
+                        machineID: nav.machineID,
+                        onRespond: onRespond
+                    )
+                }
             }
             // Detail block push (list→detail pattern)
             .navigationDestination(isPresented: $isShowingDetail) {
