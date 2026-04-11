@@ -166,7 +166,6 @@ private enum AppMockScreen: Hashable {
 
 private struct MacAppMockView: View {
     @Environment(ScriptManager.self) private var scriptManager
-    @Environment(ActionHistoryService.self) private var actionHistory
     @State private var screen: AppMockScreen = .home
 
     var body: some View {
@@ -183,8 +182,7 @@ private struct MacAppMockView: View {
                 case .home:
                     MacAppHomeScreen(scriptManager: scriptManager)
                 case .feed:
-                    MacFeedView()
-                        .environment(actionHistory)
+                    MacAppFeedScreen(scriptManager: scriptManager)
                 }
             }
         }
@@ -236,6 +234,64 @@ private struct MacAppHomeScreen: View {
                                 scriptManager.respondToBlock(scriptID: script.id, blockID: blockID, value: value)
                             }
                         )
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct MacAppFeedScreen: View {
+    let scriptManager: ScriptManager
+
+    private var feedBlocks: [LiveBlock] {
+        let feedScriptIDs = Set(
+            scriptManager.scripts
+                .filter { $0.scriptType == "feed" }
+                .map(\.id)
+        )
+        let feedBlockTypes: Set<String> = [
+            "feed_item",
+            "activity_feed",
+            "compact_summary",
+            "session_event"
+        ]
+
+        return scriptManager.activeBlocks
+            .flatMap { scriptID, blocksByID in
+                blocksByID.values.filter { block in
+                    feedScriptIDs.contains(scriptID) || feedBlockTypes.contains(block.blockType)
+                }
+            }
+            .sorted { $0.id < $1.id }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Feed")
+                        .font(.largeTitle)
+                        .fontWeight(.semibold)
+                    Text("Local block-rendered feed surface, aligned with the app feed model rather than script detail or desktop action history.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                if feedBlocks.isEmpty {
+                    ContentUnavailableView(
+                        "No Feed Items",
+                        systemImage: "scroll",
+                        description: Text("Feed blocks will appear here when local scripts emit feed content.")
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 20)
+                } else {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(feedBlocks) { block in
+                            BlockPreviewView(block: block)
+                        }
                     }
                 }
             }
