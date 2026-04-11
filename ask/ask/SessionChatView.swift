@@ -618,17 +618,24 @@ struct SessionChatView: View {
         sendStatuses[entry.entryID] = .sending
 
         do {
-            try await cloudKit.sendMessage(
-                machineID: machineID,
-                text: text,
-                messageID: entry.entryID,
-                sessionID: sessionId,
-                scriptID: scriptID
-            )
-            sendStatuses[entry.entryID] = .sent
-            // Watch for Mac delivery confirmation
-            pendingDelivery[entry.entryID] = entry.entryID
-            Task { await pollDelivery(entryID: entry.entryID) }
+            if scriptID == "codex-2", let block = liveBlock {
+                await onRespond(block, text)
+                sendStatuses[entry.entryID] = .delivered
+                try? await Task.sleep(for: .seconds(4))
+                sendStatuses.removeValue(forKey: entry.entryID)
+            } else {
+                try await cloudKit.sendMessage(
+                    machineID: machineID,
+                    text: text,
+                    messageID: entry.entryID,
+                    sessionID: sessionId,
+                    scriptID: scriptID
+                )
+                sendStatuses[entry.entryID] = .sent
+                // Watch for Mac delivery confirmation
+                pendingDelivery[entry.entryID] = entry.entryID
+                Task { await pollDelivery(entryID: entry.entryID) }
+            }
         } catch {
             sendStatuses[entry.entryID] = .failed
         }

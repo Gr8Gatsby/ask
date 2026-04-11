@@ -1313,7 +1313,7 @@ struct ScriptDetailView: View {
     /// Non-session, non-tile, non-feed blocks shown in the header strip above sessions.
     private var headerBlocks: [RKBlock] {
         let liveSessionIDs = Set(sessionBlocks.compactMap { $0.agentSessionPayload?.sessionId })
-        group.blocks.filter {
+        return group.blocks.filter {
             $0.blockType != .agentSession &&
             $0.blockType != .tile &&
             $0.blockType != .startSession &&

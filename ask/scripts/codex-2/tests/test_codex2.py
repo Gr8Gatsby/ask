@@ -451,6 +451,44 @@ def test_chat_message_routed_to_correct_session(harness):
         f'send_text should carry the message text; got {texts}'
 
 
+def test_session_block_text_response_routes_to_codex(harness):
+    """A plain user_response to the session block should route as chat text."""
+    harness.socket_send({
+        'type': 'session_active',
+        'session_id': 'tmux-codex:ask.0',
+        'cwd': '/tmp/ask',
+        'tmux_target': 'codex:ask.0',
+    })
+    time.sleep(0.3)
+
+    session_block = harness.wait_for(
+        lambda m: is_emit(m, 'agent_session') and
+        m.get('params', {}).get('arguments', {}).get('payload', {}).get('session_id') == 'tmux-codex:ask.0',
+        timeout=3.0,
+    )
+    assert session_block is not None, 'Session block should be emitted'
+    block_id = session_block['params']['arguments']['blockId']
+
+    harness.proc.stdin.write((json.dumps({
+        'jsonrpc': '2.0',
+        'method': 'notifications/message',
+        'params': {
+            'data': {
+                'type': 'user_response',
+                'blockId': block_id,
+                'value': 'continue with the refactor',
+            }
+        }
+    }) + '\n').encode())
+    harness.proc.stdin.flush()
+    time.sleep(0.5)
+
+    send_text_calls = harness.all_calls('send_text')
+    texts = [c['params']['arguments'].get('text', '') for c in send_text_calls]
+    assert any('continue with the refactor' in t for t in texts), \
+        f'session block reply should route to send_text; got {texts}'
+
+
 # Fix 9: User prompt surfaced on session tile ─────────────────────────────────
 
 def test_prompt_surfaced_on_session_tile(harness):

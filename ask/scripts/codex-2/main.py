@@ -1844,6 +1844,16 @@ class CodexController:
                 info['is_headless'] = False
                 self._schedule_session_tile(session_id)
             return
+        elif block_id == self._session_block_id(session_id):
+            if value:
+                ok = await self._send_session_text(session_id, value)
+                if ok and session_id in self._sessions:
+                    self._sessions[session_id]['is_working'] = True
+                    self._sessions[session_id]['current_prompt'] = value[:200]
+                    self._sessions[session_id]['last_seen'] = datetime.datetime.now().timestamp()
+                    _save_sessions(self._sessions)
+                    self._schedule_session_tile(session_id)
+            return
         elif value == '__view_log__':
             info = self._sessions.get(session_id, {})
             tmux_target = info.get('tmux_target', '')
