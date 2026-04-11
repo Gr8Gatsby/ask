@@ -58,7 +58,10 @@ enum MacUITestingSupport {
             result[block.scriptID, default: [:]][block.id] = LiveBlock(
                 id: block.id,
                 blockType: block.blockType,
-                payloadJSON: block.payloadJSON
+                payloadJSON: block.payloadJSON,
+                createdAt: Date(),
+                requiresResponse: block.blockType != "tile",
+                showsInInbox: block.blockType == "confirmation"
             )
         }
         return result

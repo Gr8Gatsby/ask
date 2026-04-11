@@ -159,6 +159,100 @@ struct MacScriptsView: View {
     }
 }
 
+private struct LocalTilePayload {
+    let label: String?
+    let body: String?
+    let statusColor: String?
+    let actionRequired: Bool
+}
+
+private struct LocalAgentSessionSummary {
+    let lastMessage: String?
+    let currentPreview: String?
+    let isWorking: Bool
+}
+
+private struct LocalAppScriptGroup: Identifiable {
+    let script: ManagedScript
+    let blocks: [LiveBlock]
+
+    var id: String { script.id }
+
+    private var tileBlock: LiveBlock? {
+        blocks.first(where: { $0.blockType == "tile" })
+    }
+
+    private var tilePayload: LocalTilePayload? {
+        tileBlock.flatMap { block in
+            guard let dict = block.payloadDict else { return nil }
+            return LocalTilePayload(
+                label: dict["label"] as? String,
+                body: dict["body"] as? String,
+                statusColor: dict["status_color"] as? String,
+                actionRequired: dict["action_required"] as? Bool ?? false
+            )
+        }
+    }
+
+    private var agentSessions: [LocalAgentSessionSummary] {
+        blocks.compactMap { block in
+            guard block.blockType == "agent_session", let dict = block.payloadDict else { return nil }
+            return LocalAgentSessionSummary(
+                lastMessage: dict["last_message"] as? String,
+                currentPreview: dict["current_preview"] as? String,
+                isWorking: dict["is_working"] as? Bool ?? false
+            )
+        }
+    }
+
+    var isActionRequired: Bool { tilePayload?.actionRequired == true }
+
+    var needsResponse: Bool {
+        blocks.contains(where: \.showsInInbox) || isActionRequired
+    }
+
+    var inboxBlocks: [LiveBlock] {
+        blocks.filter(\.showsInInbox)
+    }
+
+    var recentBlocks: [LiveBlock] {
+        blocks.filter { !$0.showsInInbox && $0.blockType != "tile" }
+    }
+
+    var tileLabel: String? {
+        if let label = tilePayload?.label { return label }
+        let working = agentSessions.filter(\.isWorking).count
+        guard !agentSessions.isEmpty else { return nil }
+        let noun = agentSessions.count == 1 ? "session" : "sessions"
+        if working > 0 {
+            return working == agentSessions.count ? "\(agentSessions.count) \(noun) working" : "\(agentSessions.count) \(noun), \(working) working"
+        }
+        return "\(agentSessions.count) \(noun)"
+    }
+
+    var tileStatusColor: String? {
+        if let color = tilePayload?.statusColor { return color }
+        return agentSessions.contains(where: \.isWorking) ? "blue" : "gray"
+    }
+
+    var tileBody: String? {
+        if let body = tilePayload?.body, !body.isEmpty { return body }
+        let active = agentSessions.first(where: \.isWorking) ?? agentSessions.first
+        let text = active?.lastMessage ?? active?.currentPreview
+        guard let text, !text.isEmpty else { return nil }
+        return text.components(separatedBy: "\n").first(where: { !$0.isEmpty })
+    }
+}
+
+private extension LiveBlock {
+    var payloadDict: [String: Any]? {
+        guard let data = payloadJSON.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return obj
+    }
+}
+
 private enum AppMockScreen: Hashable {
     case home
     case feed
@@ -194,15 +288,27 @@ private struct MacAppMockView: View {
 private struct MacAppHomeScreen: View {
     let scriptManager: ScriptManager
 
-    private var scripts: [ManagedScript] {
+    private var groups: [LocalAppScriptGroup] {
         scriptManager.scripts
             .filter { !$0.isSystem && ($0.isEnabled || !(scriptManager.activeBlocks[$0.id] ?? [:]).isEmpty) }
-            .sorted { a, b in
-                let aBlocks = (scriptManager.activeBlocks[a.id] ?? [:]).count
-                let bBlocks = (scriptManager.activeBlocks[b.id] ?? [:]).count
-                if aBlocks != bBlocks { return aBlocks > bBlocks }
-                return a.name < b.name
+            .map { script in
+                LocalAppScriptGroup(
+                    script: script,
+                    blocks: Array((scriptManager.activeBlocks[script.id] ?? [:]).values).sorted { $0.createdAt > $1.createdAt }
+                )
             }
+            .sorted { a, b in
+                if a.needsResponse != b.needsResponse { return a.needsResponse && !b.needsResponse }
+                return a.script.name < b.script.name
+            }
+    }
+
+    private var needsResponseGroups: [LocalAppScriptGroup] {
+        groups.filter(\.needsResponse)
+    }
+
+    private var recentGroups: [LocalAppScriptGroup] {
+        groups.filter { !$0.needsResponse }
     }
 
     var body: some View {
@@ -217,7 +323,7 @@ private struct MacAppHomeScreen: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if scripts.isEmpty {
+                if groups.isEmpty {
                     ContentUnavailableView(
                         "No Active App Content",
                         systemImage: "square.grid.2x2",
@@ -226,19 +332,45 @@ private struct MacAppHomeScreen: View {
                     .frame(maxWidth: .infinity)
                     .padding(.top, 20)
                 } else {
-                    ForEach(scripts) { script in
-                        MacAppScriptCard(
-                            script: script,
-                            liveBlocks: Array((scriptManager.activeBlocks[script.id] ?? [:]).values).sorted { $0.id < $1.id },
-                            onRespond: { blockID, value in
-                                scriptManager.respondToBlock(scriptID: script.id, blockID: blockID, value: value)
+                    if !needsResponseGroups.isEmpty {
+                        appSectionHeader("Needs Response", count: needsResponseGroups.count)
+                        ForEach(needsResponseGroups) { group in
+                            MacAppActionCard(group: group) { blockID, value in
+                                scriptManager.respondToBlock(scriptID: group.script.id, blockID: blockID, value: value)
                             }
-                        )
+                        }
+                    }
+
+                    if !recentGroups.isEmpty {
+                        appSectionHeader("Recent", count: nil)
+                        ForEach(recentGroups) { group in
+                            MacAppTileCard(group: group)
+                        }
                     }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func appSectionHeader(_ title: String, count: Int?) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+            if let count, count > 0 {
+                Text("\(count)")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.orange)
+                    .clipShape(Capsule())
+            }
+            Spacer()
+        }
+        .padding(.top, 6)
     }
 }
 
@@ -300,27 +432,9 @@ private struct MacAppFeedScreen: View {
     }
 }
 
-private struct MacAppScriptCard: View {
-    let script: ManagedScript
-    let liveBlocks: [LiveBlock]
+private struct MacAppActionCard: View {
+    let group: LocalAppScriptGroup
     let onRespond: (String, String) -> Void
-
-    private var sessionBlocks: [LiveBlock] {
-        liveBlocks.filter { $0.blockType == "agent_session" }
-    }
-
-    private var actionBlocks: [LiveBlock] {
-        liveBlocks.filter { $0.blockType == "start_session" || $0.blockType == "confirmation" }
-    }
-
-    private var otherBlocks: [LiveBlock] {
-        liveBlocks.filter {
-            $0.blockType != "agent_session"
-                && $0.blockType != "start_session"
-                && $0.blockType != "confirmation"
-                && $0.blockType != "tile"
-        }
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -328,43 +442,49 @@ private struct MacAppScriptCard: View {
                 scriptIcon
                     .frame(width: 26, height: 26)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(script.name)
+                    Text(group.script.name)
                         .font(.headline)
-                    Text(statusLine)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if let label = group.tileLabel {
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(blockStatusColor(group.tileStatusColor))
+                                .frame(width: 7, height: 7)
+                            Text(label)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
                 }
                 Spacer()
-                Text("\(liveBlocks.count) block\(liveBlocks.count == 1 ? "" : "s")")
+                Text("\(group.inboxBlocks.count) pending")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Capsule().fill(Color.secondary.opacity(0.12)))
-            }
-            if !sessionBlocks.isEmpty {
-                sectionLabel("Sessions")
-                blockStack(sessionBlocks)
+                    .background(Capsule().fill(Color.orange.opacity(0.12)))
             }
 
-            if !actionBlocks.isEmpty {
-                sectionLabel("Actions")
-                blockStack(actionBlocks)
-            }
-
-            if !otherBlocks.isEmpty {
-                sectionLabel("Live Blocks")
-                blockStack(otherBlocks)
-            }
-
-            if liveBlocks.isEmpty {
-                Text("No active blocks")
+            if let body = group.tileBody {
+                Text(body)
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
+
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(group.inboxBlocks) { block in
+                    BlockPreviewView(block: block) { value in
+                        onRespond(block.id, value)
+                    }
+                }
+            }
         }
         .padding(16)
-        .background(RoundedRectangle(cornerRadius: 18).fill(Color.secondary.opacity(0.07)))
+        .background(RoundedRectangle(cornerRadius: 18).fill(Color.orange.opacity(0.06)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(Color.orange.opacity(0.25), lineWidth: 1)
+        )
     }
 
     @ViewBuilder
@@ -373,7 +493,7 @@ private struct MacAppScriptCard: View {
             Image(nsImage: img)
                 .resizable()
                 .scaledToFit()
-        } else if let sf = script.icon {
+        } else if let sf = group.script.icon {
             Image(systemName: sf)
                 .font(.title3)
                 .foregroundStyle(.primary)
@@ -385,34 +505,68 @@ private struct MacAppScriptCard: View {
     }
 
     private var effectiveIconImage: NSImage? {
-        guard let img = script.iconImage else { return nil }
-        guard let svg = script.svgString else { return img }
+        guard let img = group.script.iconImage else { return nil }
+        guard let svg = group.script.svgString else { return img }
         return svgToWhite(svg) ?? img
     }
+}
 
-    private var statusLine: String {
-        if !sessionBlocks.isEmpty { return "\(sessionBlocks.count) active session\(sessionBlocks.count == 1 ? "" : "s")" }
-        return script.status.label
-    }
+private struct MacAppTileCard: View {
+    let group: LocalAppScriptGroup
 
-    @ViewBuilder
-    private func sectionLabel(_ text: String) -> some View {
-        Text(text)
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
-            .textCase(.uppercase)
-            .tracking(0.4)
-    }
-
-    @ViewBuilder
-    private func blockStack(_ blocks: [LiveBlock]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(blocks) { block in
-                BlockPreviewView(block: block) { value in
-                    onRespond(block.id, value)
+    var body: some View {
+        HStack(spacing: 10) {
+            scriptIcon
+                .frame(width: 26, height: 26)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(group.script.name)
+                    .font(.headline)
+                if let label = group.tileLabel {
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(blockStatusColor(group.tileStatusColor))
+                            .frame(width: 7, height: 7)
+                        Text(label)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                if let body = group.tileBody {
+                    Text(body)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
+            Spacer()
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(RoundedRectangle(cornerRadius: 18).fill(Color.secondary.opacity(0.07)))
+    }
+
+    @ViewBuilder
+    private var scriptIcon: some View {
+        if let img = effectiveIconImage {
+            Image(nsImage: img)
+                .resizable()
+                .scaledToFit()
+        } else if let sf = group.script.icon {
+            Image(systemName: sf)
+                .font(.title3)
+                .foregroundStyle(.primary)
+        } else {
+            Image(systemName: "app")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var effectiveIconImage: NSImage? {
+        guard let img = group.script.iconImage else { return nil }
+        guard let svg = group.script.svgString else { return img }
+        return svgToWhite(svg) ?? img
     }
 }
 

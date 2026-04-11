@@ -25,7 +25,14 @@ struct BuilderBlock: Identifiable {
     var liveBlock: LiveBlock {
         let json = (try? JSONSerialization.data(withJSONObject: payload))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-        return LiveBlock(id: id.uuidString, blockType: blockType, payloadJSON: json)
+        return LiveBlock(
+            id: id.uuidString,
+            blockType: blockType,
+            payloadJSON: json,
+            createdAt: Date(),
+            requiresResponse: false,
+            showsInInbox: false
+        )
     }
 }
 

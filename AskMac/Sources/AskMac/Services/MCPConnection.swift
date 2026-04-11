@@ -10,6 +10,9 @@ struct LiveBlock: Identifiable, Sendable {
     let id: String          // blockId
     let blockType: String
     let payloadJSON: String
+    let createdAt: Date
+    let requiresResponse: Bool
+    let showsInInbox: Bool
 }
 
 // MARK: - MCPConnection
@@ -288,7 +291,14 @@ final class MCPConnection: @unchecked Sendable {
             }
             // Reply and update local preview immediately — don't block on CloudKit.
             reply(id: id, result: ["content": [["type": "text", "text": "ok"]]])
-            let block = LiveBlock(id: blockID, blockType: blockType, payloadJSON: payloadJSON)
+            let block = LiveBlock(
+                id: blockID,
+                blockType: blockType,
+                payloadJSON: payloadJSON,
+                createdAt: Date(),
+                requiresResponse: requiresResponse,
+                showsInInbox: showsInInbox
+            )
             onBlockEmitted?(block)
             Task {
                 do {
