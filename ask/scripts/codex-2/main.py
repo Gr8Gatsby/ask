@@ -1602,11 +1602,13 @@ class CodexController:
         preview = msg.get('preview', '')
         options = msg.get('options', ['Allow', 'Deny'])
         raw_id = msg.get('session_id', '')
-        session_id = self._lookup_session_id(raw_id=raw_id) if raw_id else ''
-        if not session_id:
-            session_id = 'unknown'
+        session_id = self._lookup_session_id(
+            raw_id=raw_id,
+            cwd=msg.get('cwd', ''),
+            tmux_target=msg.get('tmux_target', ''),
+        ) if raw_id else ''
 
-        block_id = self._permission_block_id(session_id, tool)
+        block_id = self._permission_block_id(session_id or 'unknown', tool)
         loop = asyncio.get_running_loop()
         fut = loop.create_future()
         self._pending_permissions[block_id] = fut
@@ -1617,8 +1619,9 @@ class CodexController:
             'title': f'Allow {tool}?',
             'body': preview,
             'options': options,
-            'session_id': session_id,
         }
+        if session_id:
+            payload['session_id'] = session_id
         try:
             await self.emit_block(block_id, 'confirmation', payload, inbox=True)
         except Exception as e:

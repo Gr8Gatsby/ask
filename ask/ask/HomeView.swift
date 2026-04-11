@@ -1312,6 +1312,7 @@ struct ScriptDetailView: View {
 
     /// Non-session, non-tile, non-feed blocks shown in the header strip above sessions.
     private var headerBlocks: [RKBlock] {
+        let liveSessionIDs = Set(sessionBlocks.compactMap { $0.agentSessionPayload?.sessionId })
         group.blocks.filter {
             $0.blockType != .agentSession &&
             $0.blockType != .tile &&
@@ -1319,9 +1320,10 @@ struct ScriptDetailView: View {
             $0.blockType != .feedItem &&
             $0.blockType != .detail &&
             $0.blockType != .diagnostics &&  // lives on log page, not detail view
-            // Confirmation blocks with a sessionId are shown inline under their session.
-            // Confirmation blocks without a sessionId (e.g. global settings toggles) belong here.
-            !($0.blockType == .confirmation && $0.confirmationPayload?.sessionId != nil)
+            // Confirmation blocks with a live sessionId are shown inline under their session.
+            // Orphaned confirmations still belong in the header so they remain actionable.
+            !($0.blockType == .confirmation &&
+              ($0.confirmationPayload?.sessionId).map { liveSessionIDs.contains($0) } == true)
         }
     }
 

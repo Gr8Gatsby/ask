@@ -9,6 +9,7 @@ import sys
 import json
 import socket
 import os
+import subprocess
 
 SOCKET_PATH           = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/sockets/codex-2.sock'))
 ALLOWLIST_PATH        = os.environ.get('ASK_CODEX2_ALLOWLIST_PATH', os.path.expanduser('~/.ask/codex_allowlist.json'))
@@ -31,6 +32,22 @@ def _check_allowlist(preview: str) -> bool:
     except Exception:
         pass
     return False
+
+
+def _get_tmux_target():
+    """Return 'session:window.pane' for the current tmux pane, or ''."""
+    tmux_pane = os.environ.get('TMUX_PANE', '')
+    if not tmux_pane:
+        return ''
+    try:
+        r = subprocess.run(
+            ['tmux', 'display-message', '-p', '-t', tmux_pane,
+             '#{session_name}:#{window_index}.#{pane_index}'],
+            capture_output=True, text=True, timeout=2,
+        )
+        return r.stdout.strip() if r.returncode == 0 else ''
+    except Exception:
+        return ''
 
 
 data = json.load(sys.stdin)
@@ -90,6 +107,8 @@ try:
         'preview': preview,
         'options': ['Allow', 'Always Allow', 'Deny'],
         'session_id': session,
+        'cwd': data.get('cwd', '') or os.getcwd(),
+        'tmux_target': _get_tmux_target(),
     }).encode()
     sock.sendall(request)
     sock.shutdown(socket.SHUT_WR)
