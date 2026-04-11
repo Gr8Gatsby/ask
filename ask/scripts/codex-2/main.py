@@ -553,20 +553,24 @@ class CodexController:
     async def _tm_send_key(self, session_id: str, key: str):
         tm_sid = self._tm_sessions.get(session_id)
         if not tm_sid:
-            return
+            return False
         try:
             await self._call_tool('send_key', {'session_id': tm_sid, 'key': key})
+            return True
         except Exception as e:
             _log(f'send_key error: {e}', 'WARN')
+            return False
 
     async def _tm_send_text(self, session_id: str, text: str):
         tm_sid = self._tm_sessions.get(session_id)
         if not tm_sid:
-            return
+            return False
         try:
             await self._call_tool('send_text', {'session_id': tm_sid, 'text': text})
+            return True
         except Exception as e:
             _log(f'send_text error: {e}', 'WARN')
+            return False
 
     # ── Session ID resolution ─────────────────────────────────────────────────
 
@@ -604,6 +608,131 @@ class CodexController:
 
     def _permission_block_id(self, session_id: str, tool: str) -> str:
         return f'codex2-perm-{self._sanitize_id(session_id[:16])}-{tool}'
+
+    def _lookup_session_id(self, raw_id: str = '', cwd: str = '', tmux_target: str = '') -> str:
+        """Resolve a session without guessing across unrelated panes.
+
+        Resolution order:
+          1. Exact stable/raw session ID match
+          2. Existing raw→stable mapping
+          3. Exact tmux target match
+          4. Stable ID derived from an explicit/discoverable tmux target
+          5. Single CWD match when unambiguous
+
+        Returns an empty string when no exact match exists.
+        """
+        if raw_id:
+            if raw_id in self._sessions:
+                return raw_id
+            if raw_id in self._real_to_stable:
+                stable = self._real_to_stable[raw_id]
+                if stable in self._sessions:
+                    return stable
+
+        if tmux_target:
+            stable = f'tmux-{tmux_target}'
+            if stable in self._sessions:
+                if raw_id:
+                    self._real_to_stable[raw_id] = stable
+                return stable
+            for sid, info in self._sessions.items():
+                if info.get('tmux_target') == tmux_target:
+                    if raw_id:
+                        self._real_to_stable[raw_id] = sid
+                    return sid
+
+        discovered_target = ''
+        if not tmux_target and cwd:
+            discovered_target = _find_tmux_target(cwd)
+            if discovered_target:
+                stable = f'tmux-{discovered_target}'
+                if stable in self._sessions:
+                    if raw_id:
+                        self._real_to_stable[raw_id] = stable
+                    return stable
+
+        if raw_id:
+            stable = self._stable_id(raw_id, tmux_target or discovered_target)
+            if stable in self._sessions:
+                return stable
+
+        if cwd:
+            matches = [sid for sid, info in self._sessions.items() if info.get('cwd') == cwd]
+            if len(matches) == 1:
+                if raw_id:
+                    self._real_to_stable[raw_id] = matches[0]
+                return matches[0]
+
+        return ''
+
+    async def _ensure_tm_session(self, session_id: str) -> bool:
+        """Ensure terminal-manager knows about this session."""
+        info = self._sessions.get(session_id, {})
+        if not info:
+            return False
+        if session_id in self._tm_sessions:
+            return True
+        await self._tm_register(
+            session_id,
+            info.get('tmux_target', ''),
+            info.get('tty', ''),
+        )
+        return session_id in self._tm_sessions
+
+    async def _send_session_text(self, session_id: str, text: str) -> bool:
+        """Route text to a session, re-registering or falling back when needed."""
+        if session_id not in self._sessions:
+            return False
+        if await self._ensure_tm_session(session_id):
+            if await self._tm_send_text(session_id, text):
+                return True
+            info = self._sessions.get(session_id, {})
+            await self._tm_register(
+                session_id,
+                info.get('tmux_target', ''),
+                info.get('tty', ''),
+            )
+            if await self._tm_send_text(session_id, text):
+                return True
+
+        tmux_target = self._sessions.get(session_id, {}).get('tmux_target', '')
+        if tmux_target:
+            try:
+                subprocess.run([TMUX, 'send-keys', '-t', tmux_target, '-l', text],
+                               capture_output=True, timeout=3, check=False)
+                subprocess.run([TMUX, 'send-keys', '-t', tmux_target, 'Enter'],
+                               capture_output=True, timeout=3, check=False)
+                return True
+            except Exception as e:
+                _log(f'send_text tmux fallback error: {e}', 'WARN')
+        return False
+
+    async def _send_session_key(self, session_id: str, key: str) -> bool:
+        """Route a keypress to a session, re-registering or falling back when needed."""
+        if session_id not in self._sessions:
+            return False
+        if await self._ensure_tm_session(session_id):
+            if await self._tm_send_key(session_id, key):
+                return True
+            info = self._sessions.get(session_id, {})
+            await self._tm_register(
+                session_id,
+                info.get('tmux_target', ''),
+                info.get('tty', ''),
+            )
+            if await self._tm_send_key(session_id, key):
+                return True
+
+        tmux_target = self._sessions.get(session_id, {}).get('tmux_target', '')
+        if tmux_target:
+            tmux_key = 'C-c' if key in ('C-c', 'ctrl_c') else key
+            try:
+                subprocess.run([TMUX, 'send-keys', '-t', tmux_target, tmux_key],
+                               capture_output=True, timeout=3, check=False)
+                return True
+            except Exception as e:
+                _log(f'send_key tmux fallback error: {e}', 'WARN')
+        return False
 
     # ── Session tile emission ──────────────────────────────────────────────────
 
@@ -909,9 +1038,11 @@ class CodexController:
                     # Use force=True to bypass dedup — content may be unchanged but
                     # CloudKit needs the TTL refreshed or the record disappears.
                     if session_id in self._sessions:
+                        self._sessions[session_id]['last_seen'] = datetime.datetime.now().timestamp()
                         await self._emit_session_tile(session_id, force=True)
 
                 await self._discover_active_sessions()
+                _save_sessions(self._sessions)
 
                 if not self._sessions:
                     await self.emit_block(TILE_ID, 'tile', {
@@ -985,11 +1116,11 @@ class CodexController:
         raw_id = msg.get('session_id', '')
         if not raw_id:
             return
-        # Resolve to stable ID; fall back to raw_id if tmux is already gone
         cwd = msg.get('cwd', '')
-        tmux_target = _find_tmux_target(cwd)
-        session_id = self._stable_id(raw_id, tmux_target) if raw_id in self._sessions or not raw_id.startswith('tmux-') else raw_id
-        if session_id not in self._sessions:
+        session_id = self._lookup_session_id(raw_id=raw_id, cwd=cwd)
+        if not session_id and raw_id.startswith('tmux-'):
+            session_id = raw_id
+        if not session_id:
             session_id = self._real_to_stable.get(raw_id, raw_id)
         last_message = msg.get('last_message', '')
         _log(f'Session stop: {session_id} (raw={raw_id[:12]})')
@@ -1127,37 +1258,43 @@ class CodexController:
 
     async def _tool_reply(self, args: dict) -> dict:
         message = args.get('message', '').strip()
-        session_id = args.get('session_id', '')
+        requested_session_id = args.get('session_id', '')
         if not message:
             return {'error': 'message is required'}
-        # Resolve stable session ID
-        if session_id:
-            session_id = self._stable_id(session_id)
-        if not session_id or session_id not in self._sessions:
-            session_id = next(iter(self._sessions), '')
+        session_id = self._lookup_session_id(raw_id=requested_session_id)
         if not session_id:
-            return {'error': 'no active session'}
-        await self._tm_send_text(session_id, message)
+            if not requested_session_id and len(self._sessions) == 1:
+                session_id = next(iter(self._sessions))
+            else:
+                return {'error': 'unknown session'}
+        ok = await self._send_session_text(session_id, message)
+        if not ok:
+            return {'error': 'session is not routable'}
+        info = self._sessions.get(session_id)
+        if info is not None:
+            info['is_working'] = True
+            info['current_prompt'] = message[:200]
+            info['last_seen'] = datetime.datetime.now().timestamp()
+            _save_sessions(self._sessions)
+            self._schedule_session_tile(session_id)
         return {'ok': True}
 
     async def _tool_stop_session(self, args: dict) -> dict:
-        session_id = args.get('session_id', '')
-        if session_id:
-            session_id = self._stable_id(session_id)
-        if not session_id or session_id not in self._sessions:
-            session_id = next(iter(self._sessions), '')
+        requested_session_id = args.get('session_id', '')
+        session_id = self._lookup_session_id(raw_id=requested_session_id)
         if not session_id:
-            return {'error': 'no active session'}
-        info = self._sessions.get(session_id, {})
-        tmux_target = info.get('tmux_target', '')
-        if tmux_target:
-            subprocess.run([TMUX, 'send-keys', '-t', tmux_target, 'C-c'],
-                           capture_output=True, timeout=3)
-            _log(f'stop_session: sent C-c to {tmux_target}')
-        else:
-            await self._tm_send_key(session_id, 'C-c')
+            if not requested_session_id and len(self._sessions) == 1:
+                session_id = next(iter(self._sessions))
+            else:
+                return {'error': 'unknown session'}
+        ok = await self._send_session_key(session_id, 'ctrl_c')
+        if not ok:
+            return {'error': 'session is not routable'}
+        _log(f'stop_session: sent C-c to {session_id}')
         if session_id in self._sessions:
             self._sessions[session_id]['is_working'] = False
+            self._sessions[session_id]['last_seen'] = datetime.datetime.now().timestamp()
+            _save_sessions(self._sessions)
             self._schedule_session_tile(session_id)
         return {'ok': True}
 
@@ -1394,7 +1531,11 @@ class CodexController:
             elif t == 'tool_executed':
                 tool = msg.get('tool_name', msg.get('tool', ''))
                 raw_id = msg.get('session_id', '')
-                session_id = self._stable_id(raw_id) if raw_id else ''
+                session_id = self._lookup_session_id(
+                    raw_id=raw_id,
+                    cwd=msg.get('cwd', ''),
+                    tmux_target=msg.get('tmux_target', ''),
+                ) if raw_id else ''
                 display_tool = _map_tool_name(tool)
                 # Resolve any pending permission block for this tool
                 for block_id, fut in list(self._pending_permissions.items()):
@@ -1405,6 +1546,7 @@ class CodexController:
                 if session_id and session_id in self._sessions:
                     info = self._sessions[session_id]
                     info['is_working'] = True
+                    info['last_seen'] = datetime.datetime.now().timestamp()
                     info['current_tool'] = display_tool
                     last_msg = msg.get('last_message', '')
                     if last_msg:
@@ -1419,15 +1561,21 @@ class CodexController:
                             'title': f'{project}: file changed',
                             'body': f'{_map_tool_name(tool)} completed',
                         })
+                    _save_sessions(self._sessions)
                     self._schedule_session_tile(session_id)
                 elif session_id:
                     await self._handle_session_active(msg)
             elif t in ('pre_tool_use', 'user_prompt_submit'):
                 raw_id = msg.get('session_id', '')
-                session_id = self._stable_id(raw_id) if raw_id else ''
+                session_id = self._lookup_session_id(
+                    raw_id=raw_id,
+                    cwd=msg.get('cwd', ''),
+                    tmux_target=msg.get('tmux_target', ''),
+                ) if raw_id else ''
                 if session_id and session_id in self._sessions:
                     info = self._sessions[session_id]
                     info['is_working'] = True
+                    info['last_seen'] = datetime.datetime.now().timestamp()
                     if t == 'pre_tool_use':
                         tool = msg.get('tool_name', msg.get('tool', ''))
                         if tool:
@@ -1437,6 +1585,7 @@ class CodexController:
                         if prompt:
                             info['current_prompt'] = prompt[:200]
                             info.pop('last_message', None)  # clear stale message when new prompt arrives
+                    _save_sessions(self._sessions)
                     self._schedule_session_tile(session_id)
             elif t == 'permission_request':
                 # Hook is blocking on a response -- emit confirmation, wait, reply.
@@ -1453,10 +1602,9 @@ class CodexController:
         preview = msg.get('preview', '')
         options = msg.get('options', ['Allow', 'Deny'])
         raw_id = msg.get('session_id', '')
-        # Always resolve to stable tmux-based ID
-        session_id = self._stable_id(raw_id) if raw_id else next(iter(self._sessions), 'unknown')
-        if session_id not in self._sessions:
-            session_id = next(iter(self._sessions), 'unknown')
+        session_id = self._lookup_session_id(raw_id=raw_id) if raw_id else ''
+        if not session_id:
+            session_id = 'unknown'
 
         block_id = self._permission_block_id(session_id, tool)
         loop = asyncio.get_running_loop()
@@ -1486,6 +1634,8 @@ class CodexController:
             info['is_working'] = True
             info['current_tool'] = _map_tool_name(tool)
             info['current_preview'] = preview[:100] if preview else ''
+            info['last_seen'] = datetime.datetime.now().timestamp()
+            _save_sessions(self._sessions)
             self._schedule_session_tile(session_id)
 
         _log(f'Waiting for permission: {tool!r} session={session_id[:12]!r}')
@@ -1560,12 +1710,21 @@ class CodexController:
             elif msg_type == 'chat_message':
                 # Route free-form text to the Codex terminal via send_text.
                 text = data.get('text', '').strip()
-                session_id = data.get('sessionId', '')
+                requested_session_id = data.get('sessionId', '')
+                session_id = self._lookup_session_id(raw_id=requested_session_id)
                 if text and session_id:
                     _log(f'chat_message → session={session_id[:12]!r} text={text[:60]!r}')
-                    await self._tm_send_text(session_id, text)
+                    ok = await self._send_session_text(session_id, text)
+                    if ok and session_id in self._sessions:
+                        self._sessions[session_id]['is_working'] = True
+                        self._sessions[session_id]['current_prompt'] = text[:200]
+                        self._sessions[session_id]['last_seen'] = datetime.datetime.now().timestamp()
+                        _save_sessions(self._sessions)
+                        self._schedule_session_tile(session_id)
+                    elif not ok:
+                        _log(f'chat_message: routing failed for sessionId={requested_session_id!r}', 'WARN')
                 elif text:
-                    _log(f'chat_message: no matching session for sessionId={session_id!r}, dropping', 'WARN')
+                    _log(f'chat_message: no matching session for sessionId={requested_session_id!r}, dropping', 'WARN')
             return
 
         # Inbound tool calls from daemon

@@ -4,13 +4,14 @@ Unit tests for codex-2 pure helper functions.
 These tests import directly from main.py and patch paths to use temp dirs.
 """
 import importlib
+import asyncio
 import json
 import os
 import sys
 import tempfile
 import types
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 # ── Import main.py without executing its module-level side effects ─────────────
 
@@ -266,6 +267,86 @@ class TestPerLaunchModePicker(unittest.TestCase):
             hasattr(ctrl, '_pending_launch_path'),
             '_pending_launch_path should be gone; use _pending_launches dict'
         )
+
+
+class TestSessionLookup(unittest.TestCase):
+
+    def _controller(self):
+        ctrl = _mod.CodexController.__new__(_mod.CodexController)
+        ctrl._sessions = {}
+        ctrl._tm_sessions = {}
+        ctrl._poll_tasks = {}
+        ctrl._real_to_stable = {}
+        ctrl._pending_permissions = {}
+        ctrl._pending_launches = {}
+        ctrl._tile_debounce_tasks = {}
+        ctrl._active_perm_blocks = set()
+        ctrl._start_repos = {}
+        ctrl._settings = {}
+        ctrl._last_payload_hash = {}
+        return ctrl
+
+    def test_lookup_uses_exact_mapping_before_tmux_discovery(self):
+        ctrl = self._controller()
+        ctrl._sessions = {
+            'tmux-codex:alpha.0': {'cwd': '/tmp/alpha', 'tmux_target': 'codex:alpha.0'},
+            'tmux-codex:beta.0': {'cwd': '/tmp/beta', 'tmux_target': 'codex:beta.0'},
+        }
+        ctrl._real_to_stable = {'raw-beta': 'tmux-codex:beta.0'}
+        with patch.object(_mod, '_find_tmux_target', return_value='codex:alpha.0'):
+            resolved = ctrl._lookup_session_id(raw_id='raw-beta')
+        self.assertEqual(resolved, 'tmux-codex:beta.0')
+
+    def test_lookup_does_not_guess_when_cwd_is_ambiguous(self):
+        ctrl = self._controller()
+        ctrl._sessions = {
+            'tmux-codex:alpha.0': {'cwd': '/tmp/shared', 'tmux_target': 'codex:alpha.0'},
+            'tmux-codex:beta.0': {'cwd': '/tmp/shared', 'tmux_target': 'codex:beta.0'},
+        }
+        with patch.object(_mod, '_find_tmux_target', return_value=''):
+            resolved = ctrl._lookup_session_id(raw_id='raw-unknown', cwd='/tmp/shared')
+        self.assertEqual(resolved, '')
+
+
+class TestStrictToolRouting(unittest.TestCase):
+
+    def _controller(self):
+        ctrl = _mod.CodexController.__new__(_mod.CodexController)
+        ctrl._sessions = {}
+        ctrl._tm_sessions = {}
+        ctrl._poll_tasks = {}
+        ctrl._real_to_stable = {}
+        ctrl._pending_permissions = {}
+        ctrl._pending_launches = {}
+        ctrl._tile_debounce_tasks = {}
+        ctrl._active_perm_blocks = set()
+        ctrl._start_repos = {}
+        ctrl._settings = {}
+        ctrl._last_payload_hash = {}
+        return ctrl
+
+    def test_reply_returns_unknown_session_instead_of_falling_back(self):
+        ctrl = self._controller()
+        ctrl._sessions = {
+            'tmux-codex:alpha.0': {'cwd': '/tmp/alpha', 'tmux_target': 'codex:alpha.0'}
+        }
+        with patch.object(ctrl, '_send_session_text', new=AsyncMock(return_value=True)):
+            result = asyncio.run(ctrl._tool_reply({
+                'session_id': 'tmux-codex:missing.0',
+                'message': 'hello',
+            }))
+        self.assertEqual(result, {'error': 'unknown session'})
+
+    def test_stop_returns_unknown_session_instead_of_falling_back(self):
+        ctrl = self._controller()
+        ctrl._sessions = {
+            'tmux-codex:alpha.0': {'cwd': '/tmp/alpha', 'tmux_target': 'codex:alpha.0'}
+        }
+        with patch.object(ctrl, '_send_session_key', new=AsyncMock(return_value=True)):
+            result = asyncio.run(ctrl._tool_stop_session({
+                'session_id': 'tmux-codex:missing.0',
+            }))
+        self.assertEqual(result, {'error': 'unknown session'})
 
 
 if __name__ == '__main__':
