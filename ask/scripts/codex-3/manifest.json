@@ -5,6 +5,7 @@
   "description": "Feed-first Codex session supervisor with tmux transport and task-backed history",
   "entry": "main.py",
   "icon": "sparkles",
+  "icon_file": "icon.svg",
   "tools": [
     {
       "name": "start_session",
