@@ -30,6 +30,8 @@ SETTINGS_PATH      = os.environ.get('ASK_CODEX2_SETTINGS_PATH',
                      os.path.expanduser('~/.ask/codex2-settings.json'))
 ALLOWLIST_PATH     = os.environ.get('ASK_CODEX2_ALLOWLIST_PATH',
                      os.path.expanduser('~/.ask/codex_allowlist.json'))
+PERMISSION_MODE_PATH = os.environ.get('ASK_CODEX2_PERMISSION_MODE_PATH',
+                     os.path.expanduser('~/.ask/codex_permission_mode.json'))
 ACTIVE_BLOCKS_PATH = os.environ.get('ASK_CODEX2_ACTIVE_BLOCKS_PATH',
                      os.path.expanduser('~/.ask/codex2-active-blocks.json'))
 SESSIONS_PATH      = os.environ.get('ASK_CODEX2_SESSIONS_PATH',
@@ -287,6 +289,24 @@ def _save_settings_file(settings: dict):
             json.dump(settings, f, indent=2)
     except Exception as e:
         _log(f'Could not save settings: {e}', 'WARN')
+
+
+def _load_permission_mode() -> str:
+    try:
+        with open(PERMISSION_MODE_PATH) as f:
+            mode = json.load(f).get('mode', 'supervised')
+        return mode if mode in ('supervised', 'full-auto') else 'supervised'
+    except Exception:
+        return 'supervised'
+
+
+def _save_permission_mode(mode: str):
+    os.makedirs(os.path.dirname(PERMISSION_MODE_PATH), exist_ok=True)
+    try:
+        with open(PERMISSION_MODE_PATH, 'w') as f:
+            json.dump({'mode': mode}, f, indent=2)
+    except Exception as e:
+        _log(f'Could not save permission mode: {e}', 'WARN')
 
 
 def _append_allowlist(preview: str):
@@ -777,6 +797,7 @@ class CodexController:
             'cwd': cwd,
             'is_working': info.get('is_working', False),
             'is_headless': info.get('is_headless', False),
+            'permission_mode': _load_permission_mode(),
         }
         # Include last agent message if available (captured from PostToolUse hook)
         if last_msg := info.get('last_message'):
@@ -1802,6 +1823,13 @@ class CodexController:
             mode = 'Interactive' if self._settings['interactive'] else 'Headless'
             _log(f'Switched mode to {mode}')
             await self._emit_start_session_block(force=True)
+            return
+        if value == '__permissions__':
+            next_mode = 'supervised' if _load_permission_mode() == 'full-auto' else 'full-auto'
+            _save_permission_mode(next_mode)
+            _log(f'Switched permission mode to {next_mode}')
+            for sid in list(self._sessions):
+                self._schedule_session_tile(sid, delay=0.0)
             return
 
         # Find which session this block belongs to (match sanitized prefix)

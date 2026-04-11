@@ -34,10 +34,12 @@ class TempDirTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.allowlist_path = os.path.join(self.tmp, 'allowlist.json')
+        self.permission_mode_path = os.path.join(self.tmp, 'permission_mode.json')
         self.active_blocks_path = os.path.join(self.tmp, 'active_blocks.json')
         self.hooks_path = os.path.join(self.tmp, 'hooks.json')
         self._patches = [
             patch.object(_mod, 'ALLOWLIST_PATH', self.allowlist_path),
+            patch.object(_mod, 'PERMISSION_MODE_PATH', self.permission_mode_path),
             patch.object(_mod, 'ACTIVE_BLOCKS_PATH', self.active_blocks_path),
             patch.object(_mod, 'CODEX_HOOKS_PATH', self.hooks_path),
         ]
@@ -88,6 +90,21 @@ class TestAppendAllowlist(TempDirTest):
         _mod._append_allowlist('git status')  # should not raise
         data = json.loads(open(self.allowlist_path).read())
         self.assertIn('git status', data['patterns'])
+
+
+class TestPermissionMode(TempDirTest):
+
+    def test_defaults_to_supervised(self):
+        self.assertEqual(_mod._load_permission_mode(), 'supervised')
+
+    def test_saves_and_loads_full_auto(self):
+        _mod._save_permission_mode('full-auto')
+        self.assertEqual(_mod._load_permission_mode(), 'full-auto')
+
+    def test_invalid_mode_falls_back_to_supervised(self):
+        with open(self.permission_mode_path, 'w') as f:
+            json.dump({'mode': 'bogus'}, f)
+        self.assertEqual(_mod._load_permission_mode(), 'supervised')
 
 
 # ── Fix 11: _update_recent_repos ─────────────────────────────────────────────
