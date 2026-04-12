@@ -2,15 +2,16 @@ import type { Urgency } from '../../lib/types'
 
 interface Props { urgency?: Urgency }
 
+// Matches iOS: [!] red / [~] orange / [i] gray, monospace
 export default function UrgencyBadge({ urgency = 'warning' }: Props) {
   const config = {
-    urgent:  { label: '!', bg: 'bg-ask-red/20',    text: 'text-ask-red',    border: 'border-ask-red/40' },
-    warning: { label: '~', bg: 'bg-ask-orange/20', text: 'text-ask-orange', border: 'border-ask-orange/40' },
-    info:    { label: 'i', bg: 'bg-ask-secondary/20', text: 'text-ask-secondary', border: 'border-ask-secondary/40' },
+    urgent:  { label: '[!]', color: 'text-ask-red',       bg: 'bg-ask-red/15' },
+    warning: { label: '[~]', color: 'text-ask-orange',    bg: 'bg-ask-orange/15' },
+    info:    { label: '[i]', color: 'text-ask-secondary', bg: 'bg-ask-secondary/15' },
   }[urgency]
 
   return (
-    <span className={`inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-bold border ${config.bg} ${config.text} ${config.border}`}>
+    <span className={`font-mono text-[10px] font-bold px-1 py-0.5 rounded ${config.color} ${config.bg}`}>
       {config.label}
     </span>
   )
