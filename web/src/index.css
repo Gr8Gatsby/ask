@@ -101,7 +101,8 @@
 
 @layer base {
   html, body, #root {
-    @apply min-h-screen text-ask-text font-sans;
+    @apply min-h-screen font-sans;
+    color: rgb(var(--pt-text));
   }
 
   * {
@@ -117,3 +118,103 @@
     scrollbar-width: none;
   }
 }
+
+/* ===== Theme-reactive color overrides =====
+   Vite's dev server compiles Tailwind utility classes with the :root CSS
+   variable values hardcoded (e.g. rgb(44 44 46 / ...)) rather than keeping
+   them as runtime var() references. These unlayered rules override the
+   @layer utilities output — CSS outside @layer always wins in cascade — so
+   colors respond to .theme-light and .platform-android at runtime.
+   =========================================== */
+
+/* Solid backgrounds */
+.bg-ask-bg    { background-color: rgb(var(--pt-bg)); }
+.bg-ask-card  { background-color: rgb(var(--pt-card)); }
+.bg-ask-card2 { background-color: rgb(var(--pt-card2)); }
+.bg-ask-blue   { background-color: rgb(var(--pt-blue)); }
+.bg-ask-green  { background-color: rgb(var(--pt-green)); }
+.bg-ask-orange { background-color: rgb(var(--pt-orange)); }
+.bg-ask-red    { background-color: rgb(var(--pt-red)); }
+.bg-ask-yellow { background-color: rgb(var(--pt-yellow)); }
+.bg-ask-purple { background-color: rgb(var(--pt-purple)); }
+
+/* Background with opacity */
+.bg-ask-bg\/90      { background-color: rgb(var(--pt-bg) / 0.9); }
+.bg-ask-card\/60    { background-color: rgb(var(--pt-card) / 0.6); }
+.bg-ask-blue\/10    { background-color: rgb(var(--pt-blue) / 0.1); }
+.bg-ask-blue\/20    { background-color: rgb(var(--pt-blue) / 0.2); }
+.bg-ask-blue\/25    { background-color: rgb(var(--pt-blue) / 0.25); }
+.bg-ask-blue\/30    { background-color: rgb(var(--pt-blue) / 0.3); }
+.bg-ask-blue\/60    { background-color: rgb(var(--pt-blue) / 0.6); }
+.bg-ask-blue\/80    { background-color: rgb(var(--pt-blue) / 0.8); }
+.bg-ask-blue\/\[0\.12\] { background-color: rgb(var(--pt-blue) / 0.12); }
+.bg-ask-green\/20   { background-color: rgb(var(--pt-green) / 0.2); }
+.bg-ask-green\/25   { background-color: rgb(var(--pt-green) / 0.25); }
+.bg-ask-green\/30   { background-color: rgb(var(--pt-green) / 0.3); }
+.bg-ask-green\/\[0\.12\] { background-color: rgb(var(--pt-green) / 0.12); }
+.bg-ask-orange\/5   { background-color: rgb(var(--pt-orange) / 0.05); }
+.bg-ask-orange\/15  { background-color: rgb(var(--pt-orange) / 0.15); }
+.bg-ask-orange\/20  { background-color: rgb(var(--pt-orange) / 0.2); }
+.bg-ask-orange\/25  { background-color: rgb(var(--pt-orange) / 0.25); }
+.bg-ask-orange\/40  { background-color: rgb(var(--pt-orange) / 0.4); }
+.bg-ask-orange\/50  { background-color: rgb(var(--pt-orange) / 0.5); }
+.bg-ask-orange\/\[0\.12\] { background-color: rgb(var(--pt-orange) / 0.12); }
+.bg-ask-red\/10     { background-color: rgb(var(--pt-red) / 0.1); }
+.bg-ask-red\/15     { background-color: rgb(var(--pt-red) / 0.15); }
+.bg-ask-red\/20     { background-color: rgb(var(--pt-red) / 0.2); }
+.bg-ask-red\/30     { background-color: rgb(var(--pt-red) / 0.3); }
+.bg-ask-red\/40     { background-color: rgb(var(--pt-red) / 0.4); }
+.bg-ask-red\/50     { background-color: rgb(var(--pt-red) / 0.5); }
+.bg-ask-secondary\/15 { background-color: rgb(var(--pt-secondary) / 0.15); }
+.bg-ask-secondary\/20 { background-color: rgb(var(--pt-secondary) / 0.2); }
+.bg-ask-secondary\/40 { background-color: rgb(var(--pt-secondary) / 0.4); }
+.bg-ask-secondary\/50 { background-color: rgb(var(--pt-secondary) / 0.5); }
+.bg-ask-secondary\/60 { background-color: rgb(var(--pt-secondary) / 0.6); }
+.bg-ask-secondary\/70 { background-color: rgb(var(--pt-secondary) / 0.7); }
+.bg-ask-sep\/30     { background-color: rgb(var(--pt-sep) / 0.3); }
+.bg-ask-sep\/40     { background-color: rgb(var(--pt-sep) / 0.4); }
+.bg-ask-sep\/50     { background-color: rgb(var(--pt-sep) / 0.5); }
+.bg-ask-sep\/60     { background-color: rgb(var(--pt-sep) / 0.6); }
+.bg-ask-text\/30    { background-color: rgb(var(--pt-text) / 0.3); }
+.bg-ask-text\/70    { background-color: rgb(var(--pt-text) / 0.7); }
+.bg-ask-text\/\[0\.05\] { background-color: rgb(var(--pt-text) / 0.05); }
+
+/* Text colors */
+.text-ask-text      { color: rgb(var(--pt-text)); }
+.text-ask-secondary { color: rgb(var(--pt-secondary)); }
+.text-ask-blue      { color: rgb(var(--pt-blue)); }
+.text-ask-green     { color: rgb(var(--pt-green)); }
+.text-ask-orange    { color: rgb(var(--pt-orange)); }
+.text-ask-red       { color: rgb(var(--pt-red)); }
+.text-ask-yellow    { color: rgb(var(--pt-yellow)); }
+.text-ask-purple    { color: rgb(var(--pt-purple)); }
+
+/* Border colors */
+.border-ask-sep    { border-color: rgb(var(--pt-sep)); }
+.border-ask-blue   { border-color: rgb(var(--pt-blue)); }
+.border-ask-orange { border-color: rgb(var(--pt-orange)); }
+.border-ask-red    { border-color: rgb(var(--pt-red)); }
+.border-ask-sep\/30 { border-color: rgb(var(--pt-sep) / 0.3); }
+.border-ask-sep\/40 { border-color: rgb(var(--pt-sep) / 0.4); }
+.border-ask-sep\/50 { border-color: rgb(var(--pt-sep) / 0.5); }
+.border-ask-sep\/60 { border-color: rgb(var(--pt-sep) / 0.6); }
+.border-ask-blue\/20  { border-color: rgb(var(--pt-blue) / 0.2); }
+.border-ask-blue\/30  { border-color: rgb(var(--pt-blue) / 0.3); }
+.border-ask-orange\/40 { border-color: rgb(var(--pt-orange) / 0.4); }
+.border-ask-red\/20   { border-color: rgb(var(--pt-red) / 0.2); }
+.border-ask-red\/30   { border-color: rgb(var(--pt-red) / 0.3); }
+.border-ask-red\/40   { border-color: rgb(var(--pt-red) / 0.4); }
+
+/* Hover and interactive states */
+.hover\:bg-ask-card:hover  { background-color: rgb(var(--pt-card)); }
+.hover\:bg-ask-card2:hover { background-color: rgb(var(--pt-card2)); }
+.hover\:bg-ask-text\/\[0\.05\]:hover { background-color: rgb(var(--pt-text) / 0.05); }
+.hover\:bg-ask-blue:hover  { background-color: rgb(var(--pt-blue)); }
+.hover\:bg-ask-red\/10:hover { background-color: rgb(var(--pt-red) / 0.1); }
+.hover\:text-ask-text:hover { color: rgb(var(--pt-text)); }
+.active\:bg-ask-card2:active { background-color: rgb(var(--pt-card2)); }
+.focus\:ring-ask-blue { --tw-ring-color: rgb(var(--pt-blue)); }
+
+/* Placeholder and divide */
+.placeholder-ask-secondary::placeholder { color: rgb(var(--pt-secondary)); }
+.divide-ask-sep > :not([hidden]) ~ :not([hidden]) { border-color: rgb(var(--pt-sep)); }
