@@ -520,7 +520,15 @@ private struct AgentSessionPreview: View {
                 }
             }
 
-            // Message / working state
+            // Last assistant message — shown above the status indicator
+            if let msg = lastMessage, !msg.isEmpty {
+                markdownText(msg)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+            }
+
+            // Status indicator
             Group {
                 if let pending = pendingConfirmation {
                     VStack(alignment: .leading, spacing: 6) {
@@ -538,27 +546,17 @@ private struct AgentSessionPreview: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                } else if isWorking, let msg = lastMessage, !msg.isEmpty {
-                    markdownText(msg)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .italic()
-                        .lineLimit(4)
                 } else if isWorking {
                     HStack(spacing: 4) {
-                        Text(statusText ?? "Working…").font(.caption).foregroundStyle(.secondary).italic()
+                        ProgressView().controlSize(.mini).tint(brandColor)
+                        if let tool = payload["current_tool"] as? String, !tool.isEmpty {
+                            Text(tool)
+                                .font(.caption).foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        } else {
+                            Text(statusText ?? "Working…").font(.caption).foregroundStyle(.secondary)
+                        }
                     }
-                } else if let msg = lastMessage, !msg.isEmpty {
-                    markdownText(msg)
-                        .font(.caption)
-                        .foregroundStyle(.primary)
-                        .lineLimit(6)
-                        .textSelection(.enabled)
-                } else if let preview = currentPreview, !preview.isEmpty {
-                    markdownText(preview)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(4)
                 } else {
                     Text("Waiting for input…")
                         .font(.caption).foregroundStyle(.secondary).italic()

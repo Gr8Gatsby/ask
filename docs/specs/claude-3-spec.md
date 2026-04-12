@@ -158,3 +158,5 @@ Hooks live in a `hooks/` subdirectory, matching the claudecode-controller layout
 | 2026-04-12 | iOS: move last assistant message from inside the gray status box to a standalone markdown area above it; status box now shows only the working indicator or "Waiting for input…" |
 | 2026-04-12 | iOS: TaskFeedView and TaskThreadView now auto-refresh from CloudKit (every 15s and 10s respectively) while visible, so new feed messages appear without manual pull-to-refresh |
 | 2026-04-12 | Fix missing final assistant message in feed: session_stop.py now sleeps 1 s before reading the transcript so Claude Code has time to flush the final response to the JSONL before we read it |
+| 2026-04-12 | Mac: AgentSessionPreview (BlockPreviewViews.swift) updated to match iOS layout — last message renders as standalone markdown above status indicator |
+| 2026-04-12 | iOS: TaskThreadView scrolls to bottom after initial CloudKit refresh (not just on appear before data loads), ensuring most-recent messages are visible when opening a feed thread |
