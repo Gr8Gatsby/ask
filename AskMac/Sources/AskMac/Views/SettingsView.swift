@@ -290,29 +290,35 @@ private struct MacAppMockView: View {
     @State private var screen: AppMockScreen = .home
     @State private var selectedScriptID: String?
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            if let selectedScriptID,
-               let script = scriptManager.scripts.first(where: { $0.id == selectedScriptID }) {
+    private var alertGroups: [LocalAppScriptGroup] {
+        scriptManager.scripts
+            .filter { !$0.isSystem }
+            .compactMap { script -> LocalAppScriptGroup? in
                 let blocks = Array((scriptManager.activeBlocks[script.id] ?? [:]).values)
                     .sorted { $0.createdAt > $1.createdAt }
-                MacAppScriptScreen(
-                    script: script,
-                    liveBlocks: blocks,
-                    onBack: { self.selectedScriptID = nil },
-                    onRespond: { blockID, value in
-                        scriptManager.respondToBlock(scriptID: script.id, blockID: blockID, value: value)
-                    }
-                )
-            } else {
-                Picker("", selection: $screen) {
-                    Text("Home").tag(AppMockScreen.home)
-                    Text("Feed").tag(AppMockScreen.feed)
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 220)
+                let group = LocalAppScriptGroup(script: script, blocks: blocks)
+                return group.needsResponse ? group : nil
+            }
+            .sorted { $0.script.name < $1.script.name }
+    }
 
-                Group {
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            // Content — always padded to leave room for tab bar
+            Group {
+                if let selectedScriptID,
+                   let script = scriptManager.scripts.first(where: { $0.id == selectedScriptID }) {
+                    let blocks = Array((scriptManager.activeBlocks[script.id] ?? [:]).values)
+                        .sorted { $0.createdAt > $1.createdAt }
+                    MacAppScriptScreen(
+                        script: script,
+                        liveBlocks: blocks,
+                        onBack: { self.selectedScriptID = nil },
+                        onRespond: { blockID, value in
+                            scriptManager.respondToBlock(scriptID: script.id, blockID: blockID, value: value)
+                        }
+                    )
+                } else {
                     switch screen {
                     case .home:
                         MacAppHomeScreen(
@@ -324,9 +330,78 @@ private struct MacAppMockView: View {
                     }
                 }
             }
+            .padding(20)
+            .padding(.bottom, alertGroups.isEmpty ? 60 : 88)
+
+            // Floating tab bar — always visible
+            VStack(spacing: 8) {
+                // Alert chips: scripts that need a response
+                if !alertGroups.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(alertGroups) { group in
+                            Button {
+                                selectedScriptID = group.script.id
+                                screen = .home
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Circle()
+                                        .fill(blockStatusColor(group.tileStatusColor))
+                                        .frame(width: 6, height: 6)
+                                    Text(group.script.name)
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .lineLimit(1)
+                                }
+                                .foregroundStyle(.primary)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(.regularMaterial, in: Capsule())
+                                .overlay(
+                                    Capsule().stroke(blockStatusColor(group.tileStatusColor).opacity(0.35), lineWidth: 1)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .help("\(group.script.name) needs attention")
+                        }
+                    }
+                    .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
+                }
+
+                // Tab pills
+                HStack(spacing: 2) {
+                    ForEach([AppMockScreen.home, AppMockScreen.feed], id: \.self) { tab in
+                        Button {
+                            selectedScriptID = nil
+                            screen = tab
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: tab == .home ? "house.fill" : "list.bullet")
+                                    .font(.system(size: 13, weight: .medium))
+                                Text(tab == .home ? "Home" : "Feed")
+                                    .font(.system(size: 13, weight: .medium))
+                            }
+                            .foregroundStyle(activeTab == tab ? .white : .secondary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(
+                                activeTab == tab ? Color.accentColor : Color.clear,
+                                in: Capsule()
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(4)
+                .background(.regularMaterial, in: Capsule())
+                .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+            }
+            .padding(.bottom, 16)
         }
-        .padding(20)
         .navigationTitle("App")
+    }
+
+    /// The tab that should appear selected. Home is highlighted when drilling into a script.
+    private var activeTab: AppMockScreen {
+        selectedScriptID != nil ? .home : screen
     }
 }
 
@@ -746,7 +821,9 @@ private struct TaskThreadSheet: View {
                         }
                         // Artifacts
                         if !store.artifacts.isEmpty {
-                            Divider().padding(.vertical, 8)
+                            if !store.messages.isEmpty {
+                                Divider().padding(.vertical, 8)
+                            }
                             Text("Attachments")
                                 .font(.caption)
                                 .fontWeight(.semibold)
@@ -1011,6 +1088,11 @@ private struct MessageRow: View {
 
 private struct ArtifactRow: View {
     let artifact: TaskArtifactDisplay
+    @State private var showPreview = false
+
+    private var isMarkdown: Bool {
+        artifact.mimeType == "text/markdown" || artifact.filename.hasSuffix(".md")
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -1039,17 +1121,33 @@ private struct ArtifactRow: View {
             }
             Spacer()
             if let url = artifact.localURL {
-                Button {
-                    let dest = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
-                        .appendingPathComponent(artifact.filename)
-                    try? FileManager.default.copyItem(at: url, to: dest)
-                    NSWorkspace.shared.activateFileViewerSelecting([dest])
-                } label: {
-                    Label("Save", systemImage: "arrow.down.circle")
-                        .font(.caption)
+                HStack(spacing: 6) {
+                    if isMarkdown {
+                        Button {
+                            showPreview = true
+                        } label: {
+                            Image(systemName: "eye")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("Preview")
+                    }
+                    Button {
+                        let dest = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+                            .appendingPathComponent(artifact.filename)
+                        try? FileManager.default.copyItem(at: url, to: dest)
+                        NSWorkspace.shared.activateFileViewerSelecting([dest])
+                    } label: {
+                        Label("Save", systemImage: "arrow.down.circle")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .sheet(isPresented: $showPreview) {
+                    ArtifactPreviewSheet(artifact: artifact, url: url)
+                }
             }
         }
         .padding(.horizontal, 16)
@@ -1062,6 +1160,41 @@ private struct ArtifactRow: View {
         if artifact.mimeType.contains("pdf") { return "doc.richtext" }
         if artifact.mimeType.contains("zip") || artifact.mimeType.contains("gzip") { return "archivebox" }
         return "doc"
+    }
+}
+
+private struct ArtifactPreviewSheet: View {
+    let artifact: TaskArtifactDisplay
+    let url: URL
+    @Environment(\.dismiss) private var dismiss
+
+    private var content: String {
+        (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(artifact.filename)
+                        .font(.headline)
+                    Text(artifact.formattedSize)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.escape)
+            }
+            .padding()
+            Divider()
+            ScrollView {
+                SimpleMarkdownView(text: content)
+                    .padding(16)
+            }
+        }
+        .frame(minWidth: 480, minHeight: 360)
+        .onAppear { NSApplication.shared.activate(ignoringOtherApps: true) }
     }
 }
 

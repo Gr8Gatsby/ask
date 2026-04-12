@@ -1216,6 +1216,11 @@ struct AgentSessionBlockView: View {
             .padding(.bottom, isCollapsed ? 0 : -4)
 
             if !isCollapsed {
+                // Last assistant message — rendered as markdown above the status indicator
+                if !lastSeenMessage.isEmpty {
+                    ClaudeMarkdownView(text: lastSeenMessage)
+                }
+
                 // Status area
                 Group {
                     if isClosing {
@@ -1233,38 +1238,29 @@ struct AgentSessionBlockView: View {
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
-                    } else {
-                        VStack(alignment: .leading, spacing: 8) {
-                            if payload.isWorking == true {
-                                HStack(spacing: 8) {
-                                    ProgressView()
-                                        .scaleEffect(0.7)
-                                        .tint(payload.brandColorValue)
-                                    if let tool = payload.currentTool {
-                                        Image(systemName: toolIcon(tool))
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                        Text(toolActivityText(tool, payload.currentPreview))
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(2)
-                                    } else {
-                                        Text("\(payload.agentName ?? "Claude") is working…")
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-
-                            if !lastSeenMessage.isEmpty {
-                                ClaudeMarkdownView(text: lastSeenMessage)
-                            } else if payload.isWorking != true {
-                                // No context yet — session waiting for first input
-                                Text("Session started")
+                    } else if payload.isWorking == true {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                                .tint(payload.brandColorValue)
+                            if let tool = payload.currentTool {
+                                Image(systemName: toolIcon(tool))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(toolActivityText(tool, payload.currentPreview))
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            } else {
+                                Text("\(payload.agentName ?? "Claude") is working…")
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                             }
                         }
+                    } else {
+                        Text("Waiting for input…")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .padding(8)

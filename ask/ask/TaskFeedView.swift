@@ -63,6 +63,11 @@ struct TaskFeedView: View {
         .task {
             guard !machines.isEmpty else { return }
             await taskHistory.refresh(machineIDs: machines.map(\.id))
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(15))
+                guard !Task.isCancelled else { break }
+                await taskHistory.refresh(machineIDs: machines.map(\.id))
+            }
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {

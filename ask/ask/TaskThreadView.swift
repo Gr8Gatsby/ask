@@ -71,6 +71,14 @@ struct TaskThreadView: View {
             }
         }
         .quickLookPreview($previewURL)
+        .task {
+            await taskHistory.refresh(machineIDs: [task.machineID])
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(10))
+                guard !Task.isCancelled else { break }
+                await taskHistory.refresh(machineIDs: [task.machineID])
+            }
+        }
     }
 
     // MARK: - Status label
