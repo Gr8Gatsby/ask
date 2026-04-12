@@ -165,6 +165,12 @@ function simulateScriptResponse(blockID: string, value: string): boolean {
         blocks[idx] = { ...blocks[idx], payload: JSON.stringify(p) }
         broadcast('block_updated', blocks[idx])
       }
+      // Clear the linked bash-permission block so the script fully exits "Needs Response"
+      const bashIdx = blocks.findIndex(b => b.blockID === 'claudecode-bash-permission')
+      if (bashIdx >= 0) {
+        blocks.splice(bashIdx, 1)
+        broadcast('block_cleared', { blockID: 'claudecode-bash-permission' })
+      }
       return false  // keep the session block alive
     }
   }

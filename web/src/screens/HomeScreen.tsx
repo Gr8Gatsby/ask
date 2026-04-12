@@ -18,7 +18,19 @@ const DOT: Record<string, string> = {
   red: 'bg-ask-red', yellow: 'bg-ask-yellow',
 }
 
-function dominantUrgency(inboxBlocks: Block[]): Urgency {
+// Find the first agent_session block that has a pending_confirmation
+function pendingAgentSession(blocks: Block[]): { block: Block; payload: AgentSessionPayload } | null {
+  for (const b of blocks) {
+    if (b.blockType !== 'agent_session') continue
+    const p = parsePayload<AgentSessionPayload>(b.payload)
+    if (p?.pending_confirmation) return { block: b, payload: p }
+  }
+  return null
+}
+
+function dominantUrgency(inboxBlocks: Block[], allBlocks?: Block[]): Urgency {
+  // Agent sessions waiting for permission are always treated as urgent
+  if (allBlocks && pendingAgentSession(allBlocks)) return 'urgent'
   const urgencies = inboxBlocks.map(b => parsePayload<{ urgency?: Urgency }>(b.payload)?.urgency)
   if (urgencies.includes('urgent')) return 'urgent'
   if (urgencies.includes('info'))   return 'info'
@@ -73,7 +85,7 @@ function useCountdownDisplay(isoTime: string | undefined): string | null {
 function AlertChip({ scriptID, blocks, onClick }: { scriptID: string; blocks: Block[]; onClick: () => void }) {
   const theme = useTheme()
   const inboxBlocks = blocks.filter(b => b.showsInInbox === 1)
-  const urgency = dominantUrgency(inboxBlocks)
+  const urgency = dominantUrgency(inboxBlocks, blocks)
   const first = blocks[0]
 
   const chipColor = urgency === 'urgent'
@@ -107,7 +119,7 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
   const first = blocks[0]
   const { color, label, body } = tileStatus(blocks)
   const inboxBlocks = blocks.filter(b => b.showsInInbox === 1)
-  const urgency = dominantUrgency(inboxBlocks)
+  const urgency = dominantUrgency(inboxBlocks, blocks)
 
   const urgencyRank = (u?: Urgency) => u === 'urgent' ? 0 : u === 'info' ? 2 : 1
   const quickReplyBlock = inboxBlocks
@@ -118,6 +130,11 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
       return ua !== ub ? ua - ub : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
     })[0]
 
+  // Agent session with a pending_confirmation — show inline even if not in inbox
+  const pendingSession = !quickReplyBlock ? pendingAgentSession(blocks) : null
+  const pending = pendingSession?.payload.pending_confirmation
+
+  const hasInline = !!(quickReplyBlock || pending)
   const borderColor = urgency === 'urgent' ? 'border-ask-red/40' : urgency === 'info' ? 'border-ask-sep' : 'border-ask-orange/40'
   const cardClass = theme.isAndroid
     ? `bg-ask-card rounded-2xl shadow-md shadow-black/50 overflow-hidden`
@@ -149,7 +166,7 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
           )}
         </div>
         <UrgencyBadge urgency={urgency} />
-        {!quickReplyBlock && <span className="text-ask-secondary text-sm ml-1">›</span>}
+        {!hasInline && <span className="text-ask-secondary text-sm ml-1">›</span>}
       </button>
 
       {quickReplyBlock && (
@@ -161,6 +178,37 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
               payload={parsePayload<QuickReplyPayload>(quickReplyBlock.payload)!}
               onRespond={onRespond}
             />
+          </div>
+        </>
+      )}
+
+      {pending && pendingSession && (
+        <>
+          <div className="h-px bg-ask-sep mx-3.5" />
+          <div className="px-3.5 pt-2.5 pb-3">
+            <p className="text-xs font-semibold text-ask-text mb-1.5">{pending.title}</p>
+            {pending.body && (
+              <p className="text-[10px] font-mono text-ask-secondary mb-2 line-clamp-2 leading-relaxed">
+                {pending.body}
+              </p>
+            )}
+            <div className="flex flex-wrap gap-2">
+              {pending.options.map((opt, i) => (
+                <button
+                  key={opt}
+                  onClick={() => onRespond(pendingSession.block.blockID, opt)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                    i === 0
+                      ? 'bg-ask-blue text-white'
+                      : opt.toLowerCase().includes('deny') || opt.toLowerCase() === 'no'
+                      ? 'bg-ask-red/10 text-ask-red border border-ask-red/30'
+                      : 'bg-ask-card2 text-ask-text border border-ask-sep/50'
+                  }`}
+                >
+                  {opt}
+                </button>
+              ))}
+            </div>
           </div>
         </>
       )}
@@ -242,14 +290,16 @@ export default function HomeScreen() {
 
   const entries = Object.entries(scriptGroups)
   const needsResponseGroups = entries
-    .filter(([, blocks]) => blocks.some(b => b.showsInInbox === 1))
+    .filter(([, blocks]) => blocks.some(b => b.showsInInbox === 1) || !!pendingAgentSession(blocks))
     .sort(([, a], [, b]) => {
-      const ua = dominantUrgency(a.filter(b => b.showsInInbox === 1))
-      const ub = dominantUrgency(b.filter(b => b.showsInInbox === 1))
+      const ua = dominantUrgency(a.filter(b => b.showsInInbox === 1), a)
+      const ub = dominantUrgency(b.filter(b => b.showsInInbox === 1), b)
       const rank = (u: Urgency) => u === 'urgent' ? 0 : u === 'warning' ? 1 : 2
       return rank(ua) - rank(ub)
     })
-  const recentGroups = entries.filter(([, blocks]) => !blocks.some(b => b.showsInInbox === 1))
+  const recentGroups = entries.filter(([, blocks]) =>
+    !blocks.some(b => b.showsInInbox === 1) && !pendingAgentSession(blocks)
+  )
 
   return (
     <div className="flex flex-col h-full">
