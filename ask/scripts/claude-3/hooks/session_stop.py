@@ -60,6 +60,12 @@ cwd        = data.get('cwd', '') or os.getcwd()
 if not session_id:
     sys.exit(0)
 
+# Wait briefly so Claude Code finishes flushing the final assistant message
+# to the session JSONL before we read it. Without this, the Stop hook fires
+# before the transcript is updated and the final message is silently skipped.
+import time
+time.sleep(1)
+
 last_text = _read_last_assistant_message(session_id, cwd)
 
 try:

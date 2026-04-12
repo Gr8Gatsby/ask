@@ -157,3 +157,4 @@ Hooks live in a `hooks/` subdirectory, matching the claudecode-controller layout
 | 2026-04-12 | Fix _handle_pre_tool_use in main.py not reading last_message from hook event — the hook sent it but the handler never consumed it or wrote it to the task feed; added same last_message handling as _handle_tool_executed |
 | 2026-04-12 | iOS: move last assistant message from inside the gray status box to a standalone markdown area above it; status box now shows only the working indicator or "Waiting for input…" |
 | 2026-04-12 | iOS: TaskFeedView and TaskThreadView now auto-refresh from CloudKit (every 15s and 10s respectively) while visible, so new feed messages appear without manual pull-to-refresh |
+| 2026-04-12 | Fix missing final assistant message in feed: session_stop.py now sleeps 1 s before reading the transcript so Claude Code has time to flush the final response to the JSONL before we read it |
