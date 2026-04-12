@@ -1,7 +1,11 @@
-import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getTasks } from '../lib/api'
-import type { AskTask } from '../lib/types'
+import { useBlocks } from '../lib/useBlocks'
+import type { FeedItemPayload } from '../lib/types'
+import ScriptIcon from '../components/shared/ScriptIcon'
+
+function parsePayload<T>(json: string): T | null {
+  try { return JSON.parse(json) as T } catch { return null }
+}
 
 function relativeTime(iso: string) {
   const diff = Date.now() - new Date(iso).getTime()
@@ -13,14 +17,23 @@ function relativeTime(iso: string) {
   return `${Math.floor(h / 24)}d ago`
 }
 
+const DOT: Record<string, string> = {
+  green: 'bg-ask-green', blue: 'bg-ask-blue', orange: 'bg-ask-orange',
+  red: 'bg-ask-red', yellow: 'bg-ask-yellow',
+}
+
 export default function TaskFeedScreen() {
-  const [tasks, setTasks] = useState<AskTask[]>([])
-  const [loading, setLoading] = useState(true)
+  const { blocks, loading } = useBlocks()
   const navigate = useNavigate()
 
-  useEffect(() => {
-    getTasks().then(t => { setTasks(t); setLoading(false) })
-  }, [])
+  const feedBlocks = blocks
+    .filter(b => b.blockType === 'feed_item')
+    .slice()
+    .sort((a, b) => {
+      const ta = parsePayload<FeedItemPayload>(a.payload)?.timestamp ?? a.createdAt
+      const tb = parsePayload<FeedItemPayload>(b.payload)?.timestamp ?? b.createdAt
+      return new Date(tb).getTime() - new Date(ta).getTime()
+    })
 
   return (
     <div className="flex flex-col h-full">
@@ -30,25 +43,39 @@ export default function TaskFeedScreen() {
 
       <div className="flex-1 overflow-y-auto no-scrollbar">
         {loading ? (
-          <div className="flex items-center justify-center h-40 text-ask-secondary text-sm">Loading...</div>
-        ) : tasks.length === 0 ? (
-          <div className="flex items-center justify-center h-40 text-ask-secondary text-sm">No tasks</div>
+          <div className="flex items-center justify-center h-40 text-ask-secondary text-sm">Connecting…</div>
+        ) : feedBlocks.length === 0 ? (
+          <div className="flex items-center justify-center h-40 text-ask-secondary text-sm">No feed entries</div>
         ) : (
           <div className="flex flex-col divide-y divide-ask-sep">
-            {tasks.map(task => (
-              <button
-                key={task.taskID}
-                onClick={() => navigate(`/tasks/${task.taskID}`)}
-                className="flex items-start gap-3 px-4 py-3 hover:bg-white/5 transition-colors text-left w-full"
-              >
-                <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${task.status === 'running' ? 'bg-ask-blue' : 'bg-ask-green'}`} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-white font-medium truncate">{task.title}</p>
-                  <p className="text-xs text-ask-secondary">{task.scriptName} · {task.messageCount} messages</p>
-                </div>
-                <span className="text-[10px] text-ask-secondary flex-shrink-0">{relativeTime(task.lastActivityAt)}</span>
-              </button>
-            ))}
+            {feedBlocks.map(block => {
+              const p = parsePayload<FeedItemPayload>(block.payload)
+              if (!p) return null
+              const ts = p.timestamp ?? block.createdAt
+              return (
+                <button
+                  key={block.blockID}
+                  onClick={() => navigate(`/script/${block.scriptID}`)}
+                  className="flex items-start gap-3 px-4 py-3.5 hover:bg-white/5 transition-colors text-left w-full"
+                >
+                  <ScriptIcon
+                    scriptIconData={block.scriptIconData}
+                    scriptIconSVG={block.scriptIconSVG}
+                    scriptIcon={block.scriptIcon}
+                    scriptName={block.scriptName}
+                    size={28}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <p className="text-sm text-white font-semibold truncate">{p.title}</p>
+                      <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${DOT[p.color ?? ''] ?? 'bg-ask-secondary'}`} />
+                    </div>
+                    {p.body && <p className="text-xs text-ask-secondary truncate">{p.body}</p>}
+                    <p className="text-[10px] text-ask-secondary/60 mt-0.5">{block.scriptName} · {relativeTime(ts)}</p>
+                  </div>
+                </button>
+              )
+            })}
           </div>
         )}
       </div>
