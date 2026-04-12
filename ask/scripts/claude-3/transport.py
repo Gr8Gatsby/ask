@@ -49,10 +49,25 @@ def find_repos() -> list[tuple[str, str]]:
 # Process discovery
 # ---------------------------------------------------------------------------
 
+def _get_process_cwd(pid: int) -> str:
+    """Return the working directory of *pid* using lsof, or '' on failure."""
+    try:
+        r = subprocess.run(
+            ['lsof', '-p', str(pid), '-d', 'cwd', '-Fn'],
+            capture_output=True, text=True, timeout=2,
+        )
+        for line in r.stdout.splitlines():
+            if line.startswith('n'):
+                return line[1:].strip()
+    except Exception:
+        pass
+    return ''
+
+
 def discover_claude_processes() -> list[dict]:
     """Scan running processes and return info about live Claude Code instances.
 
-    Returns a list of dicts with keys: pid, tty, comm.
+    Returns a list of dicts with keys: pid, tty, comm, cwd.
     Only processes with a real TTY are returned — headless/background
     processes cannot be routed to.
     """
@@ -77,7 +92,10 @@ def discover_claude_processes() -> list[dict]:
                 pid = int(pid_str)
             except ValueError:
                 continue
-            processes.append({'pid': pid, 'tty': tty, 'comm': comm})
+            processes.append({'pid': pid, 'tty': tty, 'comm': comm, 'cwd': ''})
+        # Enrich each process with its CWD so the caller can do CWD-based matching.
+        for proc in processes:
+            proc['cwd'] = _get_process_cwd(proc['pid'])
         return processes
     except Exception:
         return []

@@ -88,11 +88,17 @@ struct SessionChatView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @Environment(iOSCloudKitService.self) private var cloudKit
+    @Environment(TaskHistoryStore.self) private var taskHistory
     @Query private var entries: [ChatEntry]
+    /// All tasks for this machine — filtered at render time by livePayload.taskId
+    /// so we pick up the task_id even if it arrived after view init.
+    @Query private var machineTasks: [TaskRecord]
 
     @State private var draft = ""
     @State private var isSending = false
     @State private var showStopConfirm = false
+    @State private var showFeedSheet = false
+    @State private var feedSheetTask: TaskRecord? = nil
     /// Tracks per-entry send status for outgoing messages while this view is open.
     @State private var sendStatuses: [String: MessageSendStatus] = [:]
     /// Maps entryID → messageID for messages pending Mac delivery confirmation.
@@ -128,9 +134,19 @@ struct SessionChatView: View {
             sort: \.timestamp,
             order: .forward
         )
+        let mid = machineID
+        _machineTasks = Query(filter: #Predicate<TaskRecord> { $0.machineID == mid })
     }
 
     // MARK: - Derived live state
+
+    /// The A2A task backing this session, looked up by task_id from the live payload.
+    /// Filtered at render time so changes to livePayload.taskId are picked up without
+    /// requiring a view re-init.
+    private var feedTask: TaskRecord? {
+        guard let tid = livePayload?.taskId, !tid.isEmpty else { return nil }
+        return machineTasks.first { $0.taskID == tid }
+    }
 
     private var liveBlock: RKBlock? {
         allBlocks.first { $0.id == sessionBlockID }
@@ -174,6 +190,9 @@ struct SessionChatView: View {
                 pendingConfirmationBar(pc: pc, block: block)
             }
             Divider()
+            if let msg = livePayload?.lastMessage, !msg.isEmpty {
+                lastMessageBar(msg)
+            }
             composeBar
             if isActive, scriptID == "codex-2", let block = liveBlock {
                 modeToggle(block: block)
@@ -186,6 +205,16 @@ struct SessionChatView: View {
                     Text(displayProject)
                         .font(.headline)
                     statusLabel
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                if feedTask != nil {
+                    Button {
+                        feedSheetTask = feedTask
+                        showFeedSheet = true
+                    } label: {
+                        Image(systemName: "list.bullet")
+                    }
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -218,6 +247,20 @@ struct SessionChatView: View {
                     } message: {
                         Text("Stops the active session and clears its chat history.")
                     }
+                }
+            }
+        }
+        .sheet(isPresented: $showFeedSheet) {
+            if let task = feedSheetTask {
+                NavigationStack {
+                    TaskThreadView(task: task)
+                        .environment(taskHistory)
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { showFeedSheet = false }
+                            }
+                        }
                 }
             }
         }
@@ -257,6 +300,45 @@ struct SessionChatView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Last message context bar
+
+    @ViewBuilder
+    private func lastMessageBar(_ message: String) -> some View {
+        // Strip leading heading markers (### ...) so the preview reads as body text.
+        let stripped = message
+            .components(separatedBy: "\n")
+            .filter { !$0.isEmpty }
+            .map { line -> String in
+                var s = line
+                while s.hasPrefix("#") { s = String(s.dropFirst()) }
+                return s.trimmingCharacters(in: .whitespaces)
+            }
+            .joined(separator: " ")
+        HStack(spacing: 10) {
+            Rectangle()
+                .fill(livePayload?.brandColorValue ?? .accentColor)
+                .frame(width: 3)
+                .clipShape(RoundedRectangle(cornerRadius: 2))
+            Group {
+                if let attr = try? AttributedString(
+                    markdown: stripped,
+                    options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+                ) {
+                    Text(attr)
+                } else {
+                    Text(stripped)
+                }
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .lineLimit(3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color(.systemGray6))
     }
 
     // MARK: - Reconnecting banner

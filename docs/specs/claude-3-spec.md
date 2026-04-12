@@ -150,3 +150,5 @@ Hooks live in a `hooks/` subdirectory, matching the claudecode-controller layout
 |---|---|
 | 2026-04-11 | Initial spec |
 | 2026-04-11 | Initial implementation: main.py, registry.py, transport.py, setup.py, 8 hooks |
+| 2026-04-11 | Fix duplicate session detection: improve TTY capture in session_start hook (env var + os.ttyname fallbacks); add CWD-based session merging in process discovery so an existing hook session is linked by CWD when its TTY is missing |
+| 2026-04-11 | Add task_id to agent_session block payload; iOS shows last message above reply input and "View Feed" button that opens the full task thread |

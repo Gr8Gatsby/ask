@@ -14,7 +14,28 @@ import subprocess
 SOCKET_PATH = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/sockets/claude-3.sock'))
 
 
+def _tty_name_to_short(path: str) -> str:
+    """Convert /dev/ttys003 or ttys003 → s003."""
+    name = os.path.basename(path)
+    if name.startswith('tty'):
+        name = name[3:]
+    return name
+
+
 def _get_tty():
+    # 1. Environment variable — set by the shell and inherited by Claude Code.
+    tty_env = os.environ.get('TTY', '')
+    if tty_env and os.path.exists(tty_env):
+        return _tty_name_to_short(tty_env)
+
+    # 2. os.ttyname() on standard file descriptors.
+    for fd in (0, 1, 2):
+        try:
+            return _tty_name_to_short(os.ttyname(fd))
+        except Exception:
+            pass
+
+    # 3. Walk parent-process chain via ps.
     try:
         pid = os.getpid()
         for _ in range(10):

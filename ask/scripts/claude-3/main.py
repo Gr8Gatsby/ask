@@ -308,6 +308,7 @@ class Claude3:
     async def _emit_session_block(self, session: SessionRecord):
         payload = {
             'session_id': session.session_id,
+            'task_id': session.task_id,
             'agent_name': 'Claude 3',
             'brand_color': '#D97757',
             'placeholder': 'Message Claude 3…',
@@ -448,6 +449,14 @@ class Claude3:
         text_with_newline = text if text.endswith('\n') else text + '\n'
         ok = await self._tm_inject_tty(session, text_with_newline)
         if not ok:
+            # If TTY is still unknown, try to discover it now from the process list.
+            if not session.tty and session.cwd:
+                for proc in discover_claude_processes():
+                    if proc.get('cwd') == session.cwd and proc.get('tty'):
+                        session.tty = proc['tty']
+                        self._registry._index_aliases(session)
+                        _log(f'late-discovered tty={session.tty!r} for session {session.session_id}')
+                        break
             # Re-register and retry once
             await self._tm_register(session)
             ok = await self._tm_inject_tty(session, text_with_newline)
@@ -762,13 +771,41 @@ class Claude3:
 
     async def _discover_active_processes(self):
         """Scan running processes and create transient sessions for any Claude Code
-        instances not already tracked via hooks."""
+        instances not already tracked via hooks.
+
+        Matching priority:
+        1. TTY alias — session was created with a known TTY, already indexed.
+        2. CWD match — session exists but its TTY was never captured (hook
+           failed to detect the terminal). Link the discovered TTY to that
+           session so routing works and avoid emitting a duplicate block.
+        3. No match — create a transient 'pid-XXXXX' session as a last resort.
+        """
         processes = discover_claude_processes()
         for proc in processes:
             tty = proc['tty']
+            cwd = proc.get('cwd', '')
+
+            # 1. Already tracked by TTY?
             if self._registry.resolve(tty=tty):
-                continue  # already known
-            # Build a minimal session so the user can see the running process
+                continue
+
+            # 2. Match an existing session by CWD when TTY is missing.
+            if cwd:
+                sid = self._registry.resolve(cwd=cwd)
+                if sid:
+                    session = self._registry.sessions[sid]
+                    if not session.tty:
+                        # Backfill TTY so routing and liveness checks work.
+                        session.tty = tty
+                        self._registry._index_aliases(session)
+                        _log(f'linked tty={tty} to session {sid} via cwd={cwd!r}')
+                        # Register with terminal-manager immediately so the
+                        # first send attempt succeeds without needing a retry.
+                        asyncio.create_task(self._tm_register(session))
+                    await self._emit_session_block(session)
+                    continue
+
+            # 3. Unknown process — surface as transient session.
             session = self._registry.ensure(
                 tty=tty,
                 project=f'pid-{proc["pid"]}',

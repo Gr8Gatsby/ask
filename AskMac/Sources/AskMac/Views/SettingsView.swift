@@ -687,7 +687,13 @@ private final class TaskThreadStore {
         do {
             async let msgs = cloudKit.fetchTaskMessages(taskID: task.taskID, machineID: task.machineID)
             async let arts = cloudKit.fetchTaskArtifacts(taskID: task.taskID, machineID: task.machineID)
-            (messages, artifacts) = try await (msgs, arts)
+            let (rawMsgs, rawArts) = try await (msgs, arts)
+            // Sort oldest-first by timestamp only.
+            // sequenceNumber restarts at 1 on each daemon run, so using it as a
+            // primary key interleaves messages from different sessions. Timestamp
+            // is a real wall-clock value and never collides across runs.
+            messages  = rawMsgs.sorted { $0.timestamp < $1.timestamp }
+            artifacts = rawArts.sorted  { $0.updatedAt < $1.updatedAt }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -729,9 +735,14 @@ private struct TaskThreadSheet: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        // Messages
-                        ForEach(store.messages) { msg in
-                            MessageRow(message: msg)
+                        // Messages — grouped so permission pairs appear as one unit
+                        ForEach(groupMessages(store.messages)) { group in
+                            switch group {
+                            case .single(let msg):
+                                MessageRow(message: msg)
+                            case .permissionPair(let needed, let resolved):
+                                PermissionGroupRow(needed: needed, resolved: resolved)
+                            }
                         }
                         // Artifacts
                         if !store.artifacts.isEmpty {
@@ -873,6 +884,91 @@ private struct SimpleMarkdownView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - Permission pair grouping
+
+private enum MessageGroup: Identifiable {
+    case single(TaskMessageDisplay)
+    case permissionPair(needed: TaskMessageDisplay, resolved: TaskMessageDisplay)
+
+    var id: String {
+        switch self {
+        case .single(let m):            return m.id
+        case .permissionPair(let n, _): return n.id
+        }
+    }
+}
+
+/// Collapse consecutive "Permission needed" + "Permission resolved" pairs into one group.
+private func groupMessages(_ messages: [TaskMessageDisplay]) -> [MessageGroup] {
+    var groups: [MessageGroup] = []
+    var i = 0
+    while i < messages.count {
+        let msg = messages[i]
+        if msg.text.hasPrefix("### Permission needed"),
+           i + 1 < messages.count,
+           messages[i + 1].text.hasPrefix("### Permission resolved") {
+            groups.append(.permissionPair(needed: msg, resolved: messages[i + 1]))
+            i += 2
+        } else {
+            groups.append(.single(msg))
+            i += 1
+        }
+    }
+    return groups
+}
+
+/// Extract the first non-heading, non-empty line from a structured message.
+private func messageBody(_ text: String) -> String {
+    text.components(separatedBy: "\n")
+        .first { !$0.isEmpty && !$0.hasPrefix("#") }
+        ?? text
+}
+
+private struct PermissionGroupRow: View {
+    let needed:   TaskMessageDisplay
+    let resolved: TaskMessageDisplay
+
+    private var decision: String { messageBody(resolved.text) }
+    private var isPositive: Bool {
+        let d = decision.lowercased()
+        return d.contains("allow") || d == "yes"
+    }
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                // Permission request bubble
+                SimpleMarkdownView(text: needed.text)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.secondary.opacity(0.15))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+
+                // Resolution pill — attached directly below, no timestamp gap
+                HStack(spacing: 5) {
+                    Image(systemName: isPositive ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    Text(decision)
+                        .fontWeight(.medium)
+                }
+                .font(.caption)
+                .foregroundStyle(isPositive ? Color.green : Color.red)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background((isPositive ? Color.green : Color.red).opacity(0.1))
+                .clipShape(Capsule())
+
+                // Single timestamp after resolution
+                Text(simpleRelativeTime(resolved.timestamp))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 60)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
     }
 }
 

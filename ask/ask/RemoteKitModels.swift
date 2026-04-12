@@ -140,6 +140,7 @@ struct RKAgentSessionPayload: Codable {
     let isHeadless: Bool?
     let tty: String?
     let pendingConfirmation: RKPendingConfirmation?
+    let taskId: String?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
@@ -157,6 +158,7 @@ struct RKAgentSessionPayload: Codable {
         case isHeadless = "is_headless"
         case tty
         case pendingConfirmation = "pending_confirmation"
+        case taskId = "task_id"
     }
 
     /// Parses `brandColor` hex string (e.g. `#74AA9C`) into a SwiftUI Color.
