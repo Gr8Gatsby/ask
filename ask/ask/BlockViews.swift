@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 import UIKit
 import CoreText
 import Combine
@@ -155,7 +156,7 @@ struct BlockView: View {
             }
         case .agentSession:
             if let p = block.agentSessionPayload {
-                AgentSessionBlockView(payload: p, onRespond: onRespond)
+                AgentSessionBlockView(payload: p, machineID: block.machineID, onRespond: onRespond)
             }
         case .iconCard:
             if let p = block.iconCardPayload {
@@ -1089,7 +1090,12 @@ struct ClaudeMessageBlockView: View {
 
 struct AgentSessionBlockView: View {
     let payload: RKAgentSessionPayload
+    let machineID: String
     let onRespond: (String) async -> Void
+
+    /// All tasks for this machine — filtered at render time by payload.taskId so
+    /// we pick up the task_id even if it arrived after view init.
+    @Query private var machineTasks: [TaskRecord]
 
     @State private var text = ""
     @State private var responding = false
@@ -1098,9 +1104,24 @@ struct AgentSessionBlockView: View {
     @State private var showCloseConfirmation = false
     @State private var isClosing = false
     @State private var closeTimedOut = false
+    @State private var showFeedSheet = false
+    @State private var feedSheetTask: TaskRecord? = nil
     /// Holds the last non-empty message we received. Never cleared when status
     /// transitions to "working" or "waiting" so the user retains context.
     @State private var lastSeenMessage: String = ""
+
+    init(payload: RKAgentSessionPayload, machineID: String, onRespond: @escaping (String) async -> Void) {
+        self.payload = payload
+        self.machineID = machineID
+        self.onRespond = onRespond
+        let mid = machineID
+        _machineTasks = Query(filter: #Predicate<TaskRecord> { $0.machineID == mid })
+    }
+
+    private var feedTask: TaskRecord? {
+        guard let tid = payload.taskId, !tid.isEmpty else { return nil }
+        return machineTasks.first { $0.taskID == tid }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: BlockStyle.innerSpacing + 2) {
@@ -1177,6 +1198,19 @@ struct AgentSessionBlockView: View {
                     }
                 } message: {
                     Text("This will send Ctrl+C to the terminal and end the \(payload.project) session.")
+                }
+
+                if feedTask != nil {
+                    Button {
+                        feedSheetTask = feedTask
+                        showFeedSheet = true
+                    } label: {
+                        Image(systemName: "list.bullet")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 2)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             .padding(.bottom, isCollapsed ? 0 : -4)
@@ -1300,6 +1334,20 @@ struct AgentSessionBlockView: View {
             }
         }
         .padding(.vertical, BlockStyle.blockVerticalPadding)
+        .sheet(isPresented: $showFeedSheet) {
+            if let task = feedSheetTask {
+                NavigationStack {
+                    TaskThreadView(task: task)
+                        .navigationTitle(payload.project)
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { showFeedSheet = false }
+                            }
+                        }
+                }
+            }
+        }
         .onAppear {
             if let msg = payload.lastMessage, !msg.isEmpty {
                 lastSeenMessage = msg

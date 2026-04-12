@@ -539,6 +539,13 @@ class Claude3:
         session.current_tool = msg.get('tool', '')
         session.preview = msg.get('preview', '')[:200]
         session.state = 'running_tool'
+
+        last_msg = (msg.get('last_message', '') or '').strip()
+        if last_msg and last_msg != session.last_message:
+            session.last_message = last_msg
+            await self.append_message(session.task_id, 'assistant', last_msg)
+            await self._append_artifact_if_large(session, 'Assistant output', last_msg)
+
         await self._emit_session_block(session)
         await self._emit_tile()
         _save_registry(self._registry)

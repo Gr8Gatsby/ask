@@ -528,22 +528,80 @@ struct HomeView: View {
     // MARK: - Custom bottom bar (avoids UIKitToolbar subview warning on iOS 26)
 
     private var bottomBar: some View {
-        HStack(spacing: 14) {
-            machineMenuButton
-            tabSwitcher
-            NotificationBellButton()
-            Button { showSettings = true } label: {
-                Image(systemName: "gearshape")
+        VStack(spacing: 0) {
+            // Alert chips — one per script that needs a response, shown above main controls.
+            if !needsResponseGroups.isEmpty {
+                globalAlertChips
+                    .padding(.bottom, 8)
+                Divider()
+                    .padding(.horizontal, -4)
+                    .padding(.bottom, 6)
+            }
+
+            HStack(spacing: 14) {
+                machineMenuButton
+                tabSwitcher
+                Spacer()
+                Button { showSettings = true } label: {
+                    Image(systemName: "gearshape")
+                }
             }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
-        .background(Color(.systemBackground), in: Capsule())
-        .overlay(Capsule().strokeBorder(.primary.opacity(0.12), lineWidth: 1))
+        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 28))
+        .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(.primary.opacity(0.12), lineWidth: 1))
         .shadow(color: .black.opacity(0.22), radius: 16, y: 6)
-        .padding(.horizontal, 32)
+        .padding(.horizontal, 20)
         .padding(.bottom, 16)
         .padding(.top, 4)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: needsResponseGroups.map(\.scriptID))
+    }
+
+    // Horizontal scrolling row of chips, one per script needing response.
+    private var globalAlertChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(needsResponseGroups) { group in
+                    Button {
+                        selectedScriptID = group.scriptID
+                        Task { await load() }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(.white.opacity(0.85))
+                                .frame(width: 5, height: 5)
+                            Text(group.name)
+                                .font(.caption2.weight(.semibold))
+                                .lineLimit(1)
+                            let inboxCount = group.blocks.filter { $0.showsInInbox }.count
+                            if inboxCount > 1 {
+                                Text("\(inboxCount)")
+                                    .font(.caption2.weight(.bold))
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(.white.opacity(0.25), in: Capsule())
+                            }
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(alertChipColor(for: group), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func alertChipColor(for group: ScriptGroup) -> Color {
+        switch group.dominantUrgency {
+        case .urgent:  return .red
+        case .warning: return .orange
+        case .info:    return .blue
+        case nil:      return group.brandHighlight ?? .orange
+        }
     }
 
     private var tabSwitcher: some View {

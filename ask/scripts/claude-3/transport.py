@@ -53,12 +53,15 @@ def _get_process_cwd(pid: int) -> str:
     """Return the working directory of *pid* using lsof, or '' on failure."""
     try:
         r = subprocess.run(
-            ['lsof', '-p', str(pid), '-d', 'cwd', '-Fn'],
+            ['lsof', '-p', str(pid)],
             capture_output=True, text=True, timeout=2,
         )
         for line in r.stdout.splitlines():
-            if line.startswith('n'):
-                return line[1:].strip()
+            parts = line.split()
+            # lsof columns: COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
+            # FD column (index 3) is 'cwd' for the current working directory
+            if len(parts) >= 9 and parts[3] == 'cwd':
+                return parts[8]
     except Exception:
         pass
     return ''
