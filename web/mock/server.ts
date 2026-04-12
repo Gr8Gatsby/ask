@@ -98,24 +98,48 @@ function simulateScriptResponse(blockID: string, value: string) {
     }
   }
 
-  // ---- Claude Code confirmation ----
-  if (blockID === 'claudecode-confirmation-lint') {
-    const id = ++feedSeq
-    const label = value === 'Fix & Commit' ? 'Lint fixed & committed' : value === 'Skip Lint' ? 'Lint skipped' : 'Cancelled'
-    const color = value === 'Fix & Commit' ? 'green' : value === 'Cancel' ? 'red' : 'orange'
-    upsertBlock(makeBlock({
-      blockID: `feed-claude-${id}`,
-      scriptID: 'claude-3',
-      scriptName: 'Claude Code',
-      blockType: 'feed_item',
-      scriptType: 'feed',
-      payload: JSON.stringify({
-        title: label,
-        body: value === 'Fix & Commit' ? 'auth.ts — 3 lint errors auto-fixed and committed' : undefined,
-        timestamp: new Date().toISOString(),
-        color,
-      }),
-    }))
+  // ---- Claude Code session actions ----
+  if (blockID === 'claudecode-session-a3f91c2b') {
+    if (value === '__close_session__') {
+      // Add session_event: stopped
+      upsertBlock(makeBlock({
+        blockID: `event-stopped-${++feedSeq}`,
+        scriptID: 'claude-3',
+        scriptName: 'Claude Code',
+        blockType: 'session_event',
+        scriptType: 'tile',
+        payload: JSON.stringify({ event: 'stopped', project: 'code/ask [a3f9]', cwd: '/Users/kevin/Documents/code/ask' }),
+      }))
+      // Update tile to idle
+      upsertBlock(makeBlock({
+        blockID: 'claudecode-tile',
+        scriptID: 'claude-3',
+        scriptName: 'Claude Code',
+        blockType: 'tile',
+        payload: JSON.stringify({ label: 'Idle', status_color: 'green' }),
+      }))
+    } else if (value === '__permissions__') {
+      // Toggle permission mode in the session block — update payload
+      const idx = blocks.findIndex(b => b.blockID === blockID)
+      if (idx >= 0) {
+        const p = JSON.parse(blocks[idx].payload)
+        p.permission_mode = p.permission_mode === 'supervised' ? 'full-auto' : 'supervised'
+        blocks[idx] = { ...blocks[idx], payload: JSON.stringify(p) }
+        broadcast('block_updated', blocks[idx])
+      }
+    } else {
+      // Pending confirmation response — clear it and simulate resuming
+      const idx = blocks.findIndex(b => b.blockID === blockID)
+      if (idx >= 0) {
+        const p = JSON.parse(blocks[idx].payload)
+        delete p.pending_confirmation
+        p.is_working = true
+        p.current_tool = 'Bash'
+        p.current_preview = value === 'Fix & Commit' ? 'npm run lint --fix && git commit' : 'git commit'
+        blocks[idx] = { ...blocks[idx], payload: JSON.stringify(p) }
+        broadcast('block_updated', blocks[idx])
+      }
+    }
   }
 }
 

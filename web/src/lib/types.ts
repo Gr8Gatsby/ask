@@ -22,6 +22,7 @@ export type BlockType =
   | 'icon_card' | 'tile' | 'countdown' | 'picker' | 'list' | 'detail'
   | 'feed_item' | 'quick_reply' | 'progress' | 'log' | 'image'
   | 'multi_select' | 'toggle'
+  | 'session_event' | 'activity_feed' | 'compact_summary' | 'diagnostics'
 
 // ---- Payload types (mirrors RemoteKitModels.swift) ----
 
@@ -76,6 +77,13 @@ export interface AgentSessionPayload {
   agent_name?: string
   brand_color?: string
   placeholder?: string
+  current_tool?: string       // e.g. 'Edit', 'Bash', 'Read', 'Glob', 'Agent'
+  current_preview?: string    // tool-specific context: filename, command snippet
+  permission_mode?: 'supervised' | 'full-auto'
+  pending_confirmation?: {    // inline permission prompt from the script
+    title: string
+    options: string[]
+  }
 }
 
 export interface StartSessionPayload {
@@ -160,7 +168,7 @@ export interface AskTask {
   scriptName: string
   scriptIcon?: string
   title: string
-  status: string
+  status: 'working' | 'input-required' | 'completed' | 'failed' | 'cancelled'
   lastActivityAt: string
   messageCount: number
   artifactCount: number
@@ -173,6 +181,34 @@ export interface TaskMessage {
   partsJSON: string  // JSON array of message parts
   timestamp: string
   sequenceNumber: number
+}
+
+export interface SessionEventPayload {
+  event: 'started' | 'stopped'
+  project: string
+  cwd: string
+  exit_code?: number
+}
+
+export interface ActivityFeedPayload {
+  session_id: string
+  project: string
+  entries: Array<{ tool: string; preview: string; timestamp: string }>
+}
+
+export interface CompactSummaryPayload {
+  session_id: string
+  project: string
+  trigger: string
+  summary: string
+}
+
+export interface DiagnosticsPayload {
+  version: string
+  hooks: string[]
+  hooks_ok: boolean
+  socket_ok: boolean
+  log_lines: string[]
 }
 
 // ---- SSE events ----

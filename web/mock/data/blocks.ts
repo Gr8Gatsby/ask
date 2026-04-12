@@ -21,8 +21,43 @@ export const FIXTURE_BLOCKS: Block[] = [
     scriptName: 'Claude Code',
     blockType: 'tile',
     scriptType: 'tile',
-    payload: JSON.stringify({ label: 'Running', status_color: 'blue', body: 'Working on agent gap remediation...' }),
+    payload: JSON.stringify({ label: 'Working', status_color: 'blue', body: 'Editing SessionChatScreen.tsx…' }),
   }),
+
+  // session_event: started
+  block({
+    blockID: 'claudecode-event-start',
+    scriptID: 'claude-3',
+    scriptName: 'Claude Code',
+    blockType: 'session_event',
+    scriptType: 'tile',
+    payload: JSON.stringify({
+      event: 'started',
+      project: 'code/ask [a3f9]',
+      cwd: '/Users/kevin/Documents/code/ask',
+    }),
+  }),
+
+  // activity_feed: recent tool calls
+  block({
+    blockID: 'claudecode-activity',
+    scriptID: 'claude-3',
+    scriptName: 'Claude Code',
+    blockType: 'activity_feed',
+    scriptType: 'tile',
+    payload: JSON.stringify({
+      session_id: 'session-a3f91c2b',
+      project: 'code/ask [a3f9]',
+      entries: [
+        { tool: 'Read',  preview: 'web/src/screens/SessionChatScreen.tsx', timestamp: new Date(Date.now() - 4 * 60_000).toISOString() },
+        { tool: 'Edit',  preview: 'web/src/screens/SessionChatScreen.tsx', timestamp: new Date(Date.now() - 3 * 60_000).toISOString() },
+        { tool: 'Bash',  preview: 'npm run lint',                          timestamp: new Date(Date.now() - 2 * 60_000).toISOString() },
+        { tool: 'Bash',  preview: 'git add -p',                            timestamp: new Date(Date.now() - 1 * 60_000).toISOString() },
+      ],
+    }),
+  }),
+
+  // agent_session — working, with currentTool + pendingConfirmation
   block({
     blockID: 'claudecode-session-a3f91c2b',
     scriptID: 'claude-3',
@@ -37,28 +72,20 @@ export const FIXTURE_BLOCKS: Block[] = [
       project: 'code/ask [a3f9]',
       cwd: '/Users/kevin/Documents/code/ask',
       last_message: "I've refactored the auth middleware. All 42 tests pass. Ready for review.",
-      is_working: false,
+      is_working: true,
+      current_tool: 'Bash',
+      current_preview: 'git commit -m "web: rebuild SessionChatScreen"',
       agent_name: 'Claude Code',
       brand_color: '#74AA9C',
-      placeholder: 'Reply to Claude...',
+      placeholder: 'Reply to Claude…',
+      permission_mode: 'supervised',
+      pending_confirmation: {
+        title: 'Run linter before committing?',
+        options: ['Fix & Commit', 'Skip Lint', 'Cancel'],
+      },
     }),
   }),
-  block({
-    blockID: 'claudecode-confirmation-lint',
-    scriptID: 'claude-3',
-    scriptName: 'Claude Code',
-    blockType: 'confirmation',
-    scriptType: 'tile',
-    requiresResponse: 1,
-    showsInInbox: 1,
-    payload: JSON.stringify({
-      title: 'Run linter before committing?',
-      body: 'Found 3 auto-fixable lint errors in auth.ts.',
-      options: ['Fix & Commit', 'Skip Lint', 'Cancel'],
-      session_id: 'session-a3f91c2b',
-      urgency: 'warning',
-    }),
-  }),
+
   block({
     blockID: 'claudecode-start-session',
     scriptID: 'claude-3',
@@ -92,7 +119,6 @@ export const FIXTURE_BLOCKS: Block[] = [
     payload: JSON.stringify({
       title: 'Security Update Available',
       body: 'openssl has a critical security patch. Run `brew upgrade openssl` to update.',
-      icon: 'exclamationmark.shield.fill',
       urgency: 'urgent',
     }),
   }),
@@ -147,7 +173,7 @@ export const FIXTURE_BLOCKS: Block[] = [
     payload: JSON.stringify({
       title: 'Reply to Claude',
       context: "I found **3 failing tests**. Should I attempt auto-fixes or open a ticket for each?",
-      placeholder: 'Reply to Claude...',
+      placeholder: 'Reply to Claude…',
       urgency: 'warning',
     }),
   }),
@@ -164,34 +190,6 @@ export const FIXTURE_BLOCKS: Block[] = [
       placeholder: 'Fix login timeout bug',
       multiline: false,
       urgency: 'info',
-    }),
-  }),
-
-  // ---- Feed items ----
-  block({
-    blockID: 'feed-1',
-    scriptID: 'claude-3',
-    scriptName: 'Claude Code',
-    blockType: 'feed_item',
-    scriptType: 'feed',
-    payload: JSON.stringify({
-      title: 'Session started',
-      body: 'Claude Code is working on ask/agent gap remediation',
-      timestamp: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
-      color: 'blue',
-    }),
-  }),
-  block({
-    blockID: 'feed-2',
-    scriptID: 'brew-monitor',
-    scriptName: 'Brew Monitor',
-    blockType: 'feed_item',
-    scriptType: 'feed',
-    payload: JSON.stringify({
-      title: '3 packages updated',
-      body: 'openssl 3.4.0, git 2.47.1, node 22.12.0',
-      timestamp: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
-      color: 'green',
     }),
   }),
 ]
