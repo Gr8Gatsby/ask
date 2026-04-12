@@ -130,9 +130,18 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
       return ua !== ub ? ua - ub : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
     })[0]
 
-  // Agent session with a pending_confirmation — show inline even if not in inbox
+  // Agent session — used for pending_confirmation inline and for Feed/Stop actions
+  const agentSession = blocks.find(b => b.blockType === 'agent_session')
+  const agentPayload = agentSession ? parsePayload<AgentSessionPayload>(agentSession.payload) : null
+
+  // Pending confirmation: prefer standalone quick_reply, then agent session pending
   const pendingSession = !quickReplyBlock ? pendingAgentSession(blocks) : null
   const pending = pendingSession?.payload.pending_confirmation
+
+  // Destination when tapping the card header
+  const cardTarget = agentPayload?.session_id
+    ? `/script/${scriptID}/session/${agentPayload.session_id}`
+    : `/script/${scriptID}`
 
   const hasInline = !!(quickReplyBlock || pending)
   const borderColor = urgency === 'urgent' ? 'border-ask-red/40' : urgency === 'info' ? 'border-ask-sep' : 'border-ask-orange/40'
@@ -142,8 +151,9 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
 
   return (
     <div className={cardClass}>
+      {/* Header row */}
       <button
-        onClick={() => navigate(`/script/${scriptID}`)}
+        onClick={() => navigate(cardTarget)}
         className="w-full flex items-center gap-3 px-3.5 py-3.5 hover:bg-ask-text/[0.05] transition-colors text-left"
       >
         <ScriptIcon
@@ -165,9 +175,53 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
             <p className="text-xs text-ask-secondary truncate mt-0.5">{body}</p>
           )}
         </div>
-        <UrgencyBadge urgency={urgency} />
-        {!hasInline && <span className="text-ask-secondary text-sm ml-1">›</span>}
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          <UrgencyBadge urgency={urgency} />
+          {!hasInline && !agentSession && <span className="text-ask-secondary text-sm ml-1">›</span>}
+        </div>
       </button>
+
+      {/* Agent session action row — Feed, permission mode, Stop */}
+      {agentSession && agentPayload && (
+        <>
+          <div className="h-px bg-ask-sep mx-3.5" />
+          <div className="flex items-center gap-2 px-3.5 py-2">
+            <div
+              className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${agentPayload.is_working ? 'animate-pulse' : ''}`}
+              style={{ backgroundColor: agentPayload.is_working ? (agentPayload.brand_color ?? '#74AA9C') : undefined }}
+            />
+            <span className="text-[11px] text-ask-secondary flex-1 truncate">
+              {agentPayload.is_working
+                ? (agentPayload.current_tool
+                    ? `${agentPayload.current_tool}: ${agentPayload.current_preview ?? '…'}`
+                    : 'Working…')
+                : (agentPayload.last_message?.split('\n').find(l => l.trim())?.replace(/^#+\s*/, '').slice(0, 80) ?? 'Ready')}
+            </span>
+            {agentPayload.permission_mode && (
+              <button
+                onClick={() => onRespond(agentSession.blockID, '__permissions__')}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-ask-card2 text-ask-secondary hover:text-ask-text border border-ask-sep/50 transition-colors flex-shrink-0"
+              >
+                {agentPayload.permission_mode === 'full-auto' ? 'auto' : 'supervised'}
+              </button>
+            )}
+            {agentPayload.task_id && (
+              <button
+                onClick={() => navigate(`/tasks/${agentPayload.task_id}`)}
+                className="text-[11px] text-ask-blue font-medium flex-shrink-0"
+              >
+                Feed
+              </button>
+            )}
+            <button
+              onClick={() => onRespond(agentSession.blockID, '__close_session__')}
+              className="text-[11px] text-ask-red font-medium border border-ask-red/30 px-2 py-0.5 rounded-lg hover:bg-ask-red/10 transition-colors flex-shrink-0"
+            >
+              Stop
+            </button>
+          </div>
+        </>
+      )}
 
       {quickReplyBlock && (
         <>
