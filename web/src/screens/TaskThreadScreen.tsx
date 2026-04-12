@@ -116,29 +116,6 @@ function ThinkingCard({ part }: { part: ThinkingPart }) {
   )
 }
 
-function renderPart(part: MessagePart, i: number) {
-  switch (part.type) {
-    case 'text':
-      return <Markdown key={i}>{(part as TextPart).text}</Markdown>
-    case 'image':
-      return <ImageCard key={i} part={part as ImagePart} />
-    case 'document':
-      return <DocumentCard key={i} part={part as DocumentPart} />
-    case 'tool_use':
-      return <ToolUseCard key={i} part={part as ToolUsePart} />
-    case 'tool_result':
-      return <ToolResultCard key={i} part={part as ToolResultPart} />
-    case 'thinking':
-      return <ThinkingCard key={i} part={part as ThinkingPart} />
-    default:
-      return (
-        <span key={i} className="text-[10px] font-mono text-ask-secondary/50 bg-ask-card px-1.5 py-0.5 rounded">
-          [{part.type}]
-        </span>
-      )
-  }
-}
-
 // ---- Screen ----
 
 export default function TaskThreadScreen() {

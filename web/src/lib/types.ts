@@ -86,6 +86,8 @@ export interface AgentSessionPayload {
     title: string
     options: string[]
   }
+  tool_history?: Array<{ tool: string; preview: string; timestamp: string }>
+  is_headless?: boolean
 }
 
 export interface StartSessionPayload {

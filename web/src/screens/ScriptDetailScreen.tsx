@@ -41,7 +41,9 @@ function SessionRow({
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
         {confirmationCount > 0 && (
-          <span className="text-ask-orange text-sm">⚠</span>
+          <span className="text-[10px] font-bold bg-ask-orange/20 text-ask-orange px-1.5 py-0.5 rounded-full min-w-[20px] text-center">
+            {confirmationCount}
+          </span>
         )}
         <span className="text-ask-secondary">›</span>
       </div>

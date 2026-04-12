@@ -79,6 +79,12 @@ export const FIXTURE_BLOCKS: Block[] = [
       brand_color: '#74AA9C',
       placeholder: 'Reply to Claude…',
       permission_mode: 'supervised',
+      tool_history: [
+        { tool: 'Read',  preview: 'web/src/screens/SessionChatScreen.tsx', timestamp: new Date(Date.now() - 4 * 60_000).toISOString() },
+        { tool: 'Edit',  preview: 'web/src/screens/SessionChatScreen.tsx', timestamp: new Date(Date.now() - 3 * 60_000).toISOString() },
+        { tool: 'Bash',  preview: 'npm run lint',                          timestamp: new Date(Date.now() - 2 * 60_000).toISOString() },
+        { tool: 'Bash',  preview: 'git add -p',                            timestamp: new Date(Date.now() - 1 * 60_000).toISOString() },
+      ],
       pending_confirmation: {
         title: 'Run linter before committing?',
         options: ['Fix & Commit', 'Skip Lint', 'Cancel'],

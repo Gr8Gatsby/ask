@@ -1,5 +1,6 @@
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { Block, TilePayload, AgentSessionPayload, Urgency, QuickReplyPayload } from '../lib/types'
+import type { Block, TilePayload, AgentSessionPayload, CountdownPayload, Urgency, QuickReplyPayload } from '../lib/types'
 import { useBlocks } from '../lib/useBlocks'
 import ScriptIcon from '../components/shared/ScriptIcon'
 import UrgencyBadge from '../components/shared/UrgencyBadge'
@@ -38,6 +39,32 @@ function tileStatus(blocks: Block[]): { color?: string; label?: string; body?: s
     return { color: working.length > 0 ? 'blue' : undefined, label, body }
   }
   return {}
+}
+
+// ---- Live countdown hook ----
+
+function useCountdownDisplay(isoTime: string | undefined): string | null {
+  const [display, setDisplay] = useState<string | null>(null)
+  useEffect(() => {
+    if (!isoTime) { setDisplay(null); return }
+    const target = new Date(isoTime)
+    function fmt() {
+      const diff = target.getTime() - Date.now()
+      if (diff <= 0) return 'overdue'
+      const h = Math.floor(diff / 3_600_000)
+      const m = Math.floor((diff % 3_600_000) / 60_000)
+      const s = Math.floor((diff % 60_000) / 1_000)
+      if (h > 48) return `in ${Math.floor(h / 24)}d`
+      if (h > 0) return `${h}h ${m}m`
+      if (m > 0) return `${m}m ${s}s`
+      return `${s}s`
+    }
+    setDisplay(fmt())
+    const interval = (target.getTime() - Date.now()) > 3_600_000 ? 30_000 : 1_000
+    const id = setInterval(() => setDisplay(fmt()), interval)
+    return () => clearInterval(id)
+  }, [isoTime])
+  return display
 }
 
 // ---- Alert chip (one per needs-response script) ----
@@ -142,7 +169,9 @@ function ScriptTile({ scriptID, blocks }: { scriptID: string; blocks: Block[] })
   const first = blocks[0]
   const { color, label, body } = tileStatus(blocks)
   const tile = parsePayload<TilePayload>(blocks.find(b => b.blockType === 'tile')?.payload ?? 'null')
+  const countdown = parsePayload<CountdownPayload>(blocks.find(b => b.blockType === 'countdown')?.payload ?? 'null')
   const isActionRequired = tile?.action_required
+  const countdownDisplay = useCountdownDisplay(countdown?.time)
 
   return (
     <button
@@ -170,9 +199,14 @@ function ScriptTile({ scriptID, blocks }: { scriptID: string; blocks: Block[] })
           <p className="text-xs text-ask-secondary/70 truncate mt-0.5">{body}</p>
         )}
       </div>
-      {isActionRequired && (
-        <span className="text-ask-orange text-base flex-shrink-0">!</span>
-      )}
+      <div className="flex items-center gap-2 flex-shrink-0">
+        {countdownDisplay && (
+          <span className="text-xs font-mono tabular-nums text-ask-orange">{countdownDisplay}</span>
+        )}
+        {isActionRequired && (
+          <span className="text-ask-orange text-base">!</span>
+        )}
+      </div>
     </button>
   )
 }

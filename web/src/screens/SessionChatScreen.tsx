@@ -13,7 +13,7 @@ function parsePayload<T>(json: string): T | null {
 
 interface Part { type: string; text?: string; name?: string; input?: unknown; content?: unknown; source?: unknown; thinking?: string }
 
-function renderPart(p: Part, i: number, accentColor: string) {
+function renderPart(p: Part, i: number) {
   if (p.type === 'text' && p.text) {
     return <Markdown key={i}>{p.text}</Markdown>
   }
@@ -67,6 +67,50 @@ function ToolStatusLine({ tool, preview, color }: { tool: string; preview?: stri
   )
 }
 
+// ---- Tool history timeline ----
+
+function ToolHistoryTimeline({
+  entries,
+  color,
+}: {
+  entries: Array<{ tool: string; preview: string; timestamp: string }>
+  color: string
+}) {
+  function relTime(ts: string) {
+    const diff = Date.now() - new Date(ts).getTime()
+    if (diff < 60_000) return 'just now'
+    return `${Math.floor(diff / 60_000)}m ago`
+  }
+
+  return (
+    <div className="flex flex-col gap-1 mb-2">
+      {entries.map((e, i) => (
+        <div key={i} className="flex items-center gap-1.5">
+          <span className="text-[10px]">{TOOL_ICONS[e.tool] ?? '⚙'}</span>
+          <span className="text-[10px] font-mono font-semibold" style={{ color }}>{e.tool}</span>
+          <span className="text-[10px] text-ask-secondary/70 truncate flex-1 min-w-0">{e.preview}</span>
+          <span className="text-[9px] text-ask-secondary/50 flex-shrink-0">{relTime(e.timestamp)}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ---- Last message context bar ----
+
+function LastMessageBar({ message, color }: { message: string; color: string }) {
+  const firstLine = message.split('\n').find(l => l.trim()) ?? message
+  const preview = firstLine.replace(/^#+\s*/, '').replace(/\*\*/g, '').slice(0, 150)
+  return (
+    <div
+      className="flex-shrink-0 px-4 py-2.5 border-b border-ask-sep/50 bg-ask-card/60"
+      style={{ borderLeftWidth: 3, borderLeftColor: color }}
+    >
+      <p className="text-[11px] text-ask-secondary leading-snug line-clamp-2">{preview}</p>
+    </div>
+  )
+}
+
 // ---- Pending confirmation bar ----
 
 function PendingConfirmationBar({
@@ -81,7 +125,7 @@ function PendingConfirmationBar({
   accentColor: string
 }) {
   return (
-    <div className="border-t border-ask-orange/30 bg-ask-orange/5 px-4 pt-3 pb-2">
+    <div className="border-t border-ask-sep/50 bg-ask-orange/5 px-4 pt-3 pb-2" style={{ borderTopColor: `${accentColor}40` }}>
       <p className="text-xs font-semibold text-white mb-2">{title}</p>
       <div className="flex flex-wrap gap-2">
         {options.map(opt => (
@@ -189,6 +233,11 @@ export default function SessionChatScreen() {
         </div>
       </div>
 
+      {/* Last message context bar — shown when working and there's a previous message */}
+      {payload?.is_working && payload.last_message && (
+        <LastMessageBar message={payload.last_message} color={accentColor} />
+      )}
+
       {/* Chat history */}
       <div className="flex-1 overflow-y-auto no-scrollbar px-4 py-3 flex flex-col gap-2">
         {!sessionBlock ? (
@@ -211,7 +260,7 @@ export default function SessionChatScreen() {
                       ? 'bg-ask-blue text-white rounded-br-sm'
                       : 'bg-ask-card text-white rounded-bl-sm'
                   }`}>
-                    {parts.map((p, i) => renderPart(p, i, accentColor))}
+                    {parts.map((p, i) => renderPart(p, i))}
                   </div>
                 </div>
               )
@@ -233,6 +282,9 @@ export default function SessionChatScreen() {
                 </div>
                 {payload?.is_working ? (
                   <>
+                    {payload.tool_history && payload.tool_history.length > 0 && (
+                      <ToolHistoryTimeline entries={payload.tool_history.slice(-5)} color={accentColor} />
+                    )}
                     {payload.current_tool && (
                       <ToolStatusLine tool={payload.current_tool} preview={payload.current_preview} color={accentColor} />
                     )}

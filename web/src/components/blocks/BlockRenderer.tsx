@@ -8,6 +8,8 @@ import ClaudeMessageBlock from './ClaudeMessageBlock'
 import AgentSessionBlock from './AgentSessionBlock'
 import StartSessionBlock from './StartSessionBlock'
 import InfoCardBlock from './InfoCardBlock'
+import IconCardBlock from './IconCardBlock'
+import CompactSummaryBlock from './CompactSummaryBlock'
 import CountdownBlock from './CountdownBlock'
 import PickerBlock from './PickerBlock'
 import ListBlock from './ListBlock'
@@ -38,6 +40,8 @@ export default function BlockRenderer({ block, onRespond }: Props) {
     case 'agent_session':  return <AgentSessionBlock   block={block} payload={p as never} onRespond={onRespond} />
     case 'start_session':  return <StartSessionBlock   block={block} payload={p as never} onRespond={onRespond} />
     case 'info_card':      return <InfoCardBlock        payload={p as never} />
+    case 'icon_card':      return <IconCardBlock        payload={p as never} />
+    case 'compact_summary': return <CompactSummaryBlock payload={p as never} />
     case 'countdown':      return <CountdownBlock       payload={p as never} />
     case 'picker':         return <PickerBlock          block={block} payload={p as never} onRespond={onRespond} />
     case 'list':           return <ListBlock            block={block} payload={p as never} onRespond={onRespond} />
