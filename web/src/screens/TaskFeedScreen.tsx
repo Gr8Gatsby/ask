@@ -89,7 +89,7 @@ export default function TaskFeedScreen() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="px-4 pt-12 pb-3 border-b border-ask-sep flex-shrink-0">
+      <div className="px-4 pt-3 pb-3 border-b border-ask-sep flex-shrink-0">
         <h1 className="text-xl font-bold text-white">Feed</h1>
       </div>
 

@@ -5,23 +5,27 @@ export default {
     extend: {
       colors: {
         ask: {
-          bg: '#1c1c1e',
-          card: '#2c2c2e',
-          card2: '#3a3a3c',
-          text: '#ffffff',
-          secondary: '#8e8e93',
-          sep: '#38383a',
-          orange: '#ff9f0a',
-          red: '#ff453a',
-          green: '#32d74b',
-          blue: '#0a84ff',
-          yellow: '#ffd60a',
-          purple: '#bf5af2',
+          // All colors reference CSS variables so they swap per platform.
+          // The `<alpha-value>` placeholder lets Tailwind opacity modifiers work
+          // (e.g. bg-ask-card/20, border-ask-sep/50).
+          bg:        'rgb(var(--pt-bg)        / <alpha-value>)',
+          card:      'rgb(var(--pt-card)      / <alpha-value>)',
+          card2:     'rgb(var(--pt-card2)     / <alpha-value>)',
+          text:      'rgb(var(--pt-text)      / <alpha-value>)',
+          secondary: 'rgb(var(--pt-secondary) / <alpha-value>)',
+          sep:       'rgb(var(--pt-sep)       / <alpha-value>)',
+          blue:      'rgb(var(--pt-blue)      / <alpha-value>)',
+          green:     'rgb(var(--pt-green)     / <alpha-value>)',
+          orange:    'rgb(var(--pt-orange)    / <alpha-value>)',
+          red:       'rgb(var(--pt-red)       / <alpha-value>)',
+          yellow:    'rgb(var(--pt-yellow)    / <alpha-value>)',
+          purple:    'rgb(var(--pt-purple)    / <alpha-value>)',
         },
       },
       fontFamily: {
-        sans: ['-apple-system', 'BlinkMacSystemFont', 'SF Pro Text', 'Helvetica Neue', 'sans-serif'],
-        mono: ['SF Mono', 'ui-monospace', 'Menlo', 'monospace'],
+        // CSS variable lets platform class swap fonts (Roboto on Android)
+        sans: ['var(--font-sans)'],
+        mono: ['var(--font-mono)'],
       },
     },
   },

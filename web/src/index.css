@@ -1,6 +1,50 @@
+/* Roboto for Android platform theme */
+@import url('https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&family=Roboto+Mono:wght@400;500&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ---- Platform color tokens (RGB channel triplets for Tailwind opacity support) ---- */
+
+/* iOS — Apple HIG dark palette */
+:root {
+  --pt-bg:        28 28 30;     /* #1c1c1e */
+  --pt-card:      44 44 46;     /* #2c2c2e */
+  --pt-card2:     58 58 60;     /* #3a3a3c */
+  --pt-sep:       56 56 58;     /* #38383a */
+  --pt-text:      255 255 255;
+  --pt-secondary: 142 142 147;  /* #8e8e93 */
+  --pt-blue:      10 132 255;   /* #0a84ff */
+  --pt-green:     50 215 75;    /* #32d74b */
+  --pt-orange:    255 159 10;   /* #ff9f0a */
+  --pt-red:       255 69 58;    /* #ff453a */
+  --pt-yellow:    255 214 10;   /* #ffd60a */
+  --pt-purple:    191 90 242;   /* #bf5af2 */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --font-mono: "SF Mono", ui-monospace, Menlo, monospace;
+}
+
+/* Android — Material Design 3 dark palette */
+.platform-android {
+  --pt-bg:        20 18 24;     /* #141218  M3 background */
+  --pt-card:      33 31 38;     /* #211f26  M3 surface-container */
+  --pt-card2:     45 43 51;     /* #2d2b33  M3 surface-container-high */
+  --pt-sep:       73 69 79;     /* #49454f  M3 outline-variant */
+  --pt-text:      230 225 229;  /* #e6e1e5  M3 on-surface */
+  --pt-secondary: 202 196 208;  /* #cac4d0  M3 on-surface-variant */
+  --pt-blue:      208 188 255;  /* #d0bcff  M3 primary */
+  --pt-green:     168 199 160;  /* #a8c7a0  M3 tertiary */
+  --pt-orange:    255 183 77;   /* #ffb74d  Material amber */
+  --pt-red:       242 184 181;  /* #f2b8b5  M3 error */
+  --pt-yellow:    246 216 96;   /* #f6d860  Material yellow */
+  --pt-purple:    206 147 216;  /* #ce93d8  Material purple 200 */
+  --font-sans: "Roboto", system-ui, sans-serif;
+  --font-mono: "Roboto Mono", monospace;
+
+  /* Apply Roboto to all text inside the Android phone shell */
+  font-family: var(--font-sans);
+}
 
 @layer base {
   html, body, #root {

@@ -1,4 +1,5 @@
 import type { Block, ConfirmationPayload } from '../../lib/types'
+import { useTheme } from '../../lib/PlatformContext'
 
 interface Props {
   block: Block
@@ -8,6 +9,7 @@ interface Props {
 
 // Permission-style block — matches iOS "Permission needed" layout
 function PermissionBlock({ block, payload, onRespond }: Props) {
+  const theme = useTheme()
   const denyOptions = ['Deny', 'Cancel', 'No', 'Reject']
   const allowOptions = ['Allow', 'Yes', 'Approve', 'Permit']
 
@@ -36,12 +38,10 @@ function PermissionBlock({ block, payload, onRespond }: Props) {
             <button
               key={opt}
               onClick={() => onRespond(block.blockID, opt)}
-              className={`w-full py-2.5 px-3 rounded-xl text-sm font-semibold transition-colors active:scale-[0.98] ${
-                isDeny
-                  ? 'bg-ask-orange/15 text-ask-orange border border-ask-orange/30 hover:bg-ask-orange/25'
-                  : isAllow
-                  ? 'bg-ask-green/15 text-ask-green border border-ask-green/30 hover:bg-ask-green/25'
-                  : 'bg-ask-card2 text-white hover:bg-ask-card2/80'
+              className={`w-full py-2.5 px-3 text-sm font-semibold active:scale-[0.98] ${
+                isDeny ? theme.buttonDeny
+                : isAllow ? theme.buttonAllow
+                : theme.buttonNeutral
               }`}
             >
               {opt}
@@ -55,6 +55,8 @@ function PermissionBlock({ block, payload, onRespond }: Props) {
 
 // Standard confirmation block
 export default function ConfirmationBlock({ block, payload, onRespond }: Props) {
+  const theme = useTheme()
+
   if (payload.command) {
     return <PermissionBlock block={block} payload={payload} onRespond={onRespond} />
   }
@@ -83,7 +85,7 @@ export default function ConfirmationBlock({ block, payload, onRespond }: Props) 
           <button
             key={opt}
             onClick={() => onRespond(block.blockID, opt)}
-            className={`${inline ? 'flex-1' : 'w-full'} py-2 px-3 rounded-lg bg-ask-card2 text-sm font-medium text-white hover:bg-ask-blue hover:text-white transition-colors active:scale-[0.98]`}
+            className={`${inline ? 'flex-1' : 'w-full'} py-2 px-3 text-sm font-medium active:scale-[0.98] ${theme.buttonOption}`}
           >
             {opt}
           </button>

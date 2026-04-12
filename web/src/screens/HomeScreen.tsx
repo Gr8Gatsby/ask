@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Block, TilePayload, AgentSessionPayload, CountdownPayload, Urgency, QuickReplyPayload } from '../lib/types'
 import { useBlocks } from '../lib/useBlocks'
+import { useTheme } from '../lib/PlatformContext'
 import ScriptIcon from '../components/shared/ScriptIcon'
 import UrgencyBadge from '../components/shared/UrgencyBadge'
 import QuickReplyBlock from '../components/blocks/QuickReplyBlock'
@@ -70,6 +71,7 @@ function useCountdownDisplay(isoTime: string | undefined): string | null {
 // ---- Alert chip (one per needs-response script) ----
 
 function AlertChip({ scriptID, blocks, onClick }: { scriptID: string; blocks: Block[]; onClick: () => void }) {
+  const theme = useTheme()
   const inboxBlocks = blocks.filter(b => b.showsInInbox === 1)
   const urgency = dominantUrgency(inboxBlocks)
   const first = blocks[0]
@@ -84,7 +86,7 @@ function AlertChip({ scriptID, blocks, onClick }: { scriptID: string; blocks: Bl
     <button
       key={scriptID}
       onClick={onClick}
-      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full flex-shrink-0 ${chipColor}`}
+      className={`flex items-center gap-1.5 px-3 py-1.5 flex-shrink-0 ${chipColor} ${theme.isAndroid ? 'rounded-xl' : 'rounded-full'}`}
     >
       <span className="w-1.5 h-1.5 rounded-full bg-white/70 flex-shrink-0" />
       <span className="text-[11px] font-semibold whitespace-nowrap">{first.scriptName}</span>
@@ -101,6 +103,7 @@ function AlertChip({ scriptID, blocks, onClick }: { scriptID: string; blocks: Bl
 
 function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; blocks: Block[]; onRespond: (id: string, v: string) => void }) {
   const navigate = useNavigate()
+  const theme = useTheme()
   const first = blocks[0]
   const { color, label, body } = tileStatus(blocks)
   const inboxBlocks = blocks.filter(b => b.showsInInbox === 1)
@@ -116,9 +119,12 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
     })[0]
 
   const borderColor = urgency === 'urgent' ? 'border-ask-red/40' : urgency === 'info' ? 'border-ask-sep' : 'border-ask-orange/40'
+  const cardClass = theme.isAndroid
+    ? `bg-ask-card rounded-2xl shadow-md shadow-black/50 overflow-hidden`
+    : `bg-ask-card rounded-xl border ${borderColor} overflow-hidden`
 
   return (
-    <div className={`bg-ask-card rounded-xl border ${borderColor} overflow-hidden`}>
+    <div className={cardClass}>
       <button
         onClick={() => navigate(`/script/${scriptID}`)}
         className="w-full flex items-center gap-3 px-3.5 py-3.5 hover:bg-white/5 transition-colors text-left"
@@ -166,6 +172,7 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
 
 function ScriptTile({ scriptID, blocks }: { scriptID: string; blocks: Block[] }) {
   const navigate = useNavigate()
+  const theme = useTheme()
   const first = blocks[0]
   const { color, label, body } = tileStatus(blocks)
   const tile = parsePayload<TilePayload>(blocks.find(b => b.blockType === 'tile')?.payload ?? 'null')
@@ -173,12 +180,16 @@ function ScriptTile({ scriptID, blocks }: { scriptID: string; blocks: Block[] })
   const isActionRequired = tile?.action_required
   const countdownDisplay = useCountdownDisplay(countdown?.time)
 
+  const tileClass = theme.isAndroid
+    ? `w-full flex items-center gap-3 bg-ask-card rounded-2xl px-3.5 py-3.5 shadow-md shadow-black/40 hover:bg-ask-card2 transition-colors text-left`
+    : `w-full flex items-center gap-3 bg-ask-card rounded-xl px-3.5 py-3.5 border ${
+        isActionRequired ? 'border-ask-orange/40' : 'border-ask-sep/50'
+      } hover:bg-ask-card2 transition-colors text-left`
+
   return (
     <button
       onClick={() => navigate(`/script/${scriptID}`)}
-      className={`w-full flex items-center gap-3 bg-ask-card rounded-xl px-3.5 py-3.5 border ${
-        isActionRequired ? 'border-ask-orange/40' : 'border-ask-sep/50'
-      } hover:bg-ask-card2 transition-colors text-left`}
+      className={tileClass}
     >
       <ScriptIcon
         scriptIconData={first.scriptIconData}
@@ -243,7 +254,7 @@ export default function HomeScreen() {
   return (
     <div className="flex flex-col h-full">
       {/* Nav */}
-      <div className="flex items-center justify-between px-4 pt-12 pb-3 flex-shrink-0">
+      <div className="flex items-center justify-between px-4 pt-3 pb-3 flex-shrink-0">
         <h1 className="text-xl font-bold text-white">Ask</h1>
         <span className="text-xs text-ask-secondary">MockAskMac</span>
       </div>

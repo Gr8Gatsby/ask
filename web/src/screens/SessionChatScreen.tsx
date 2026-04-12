@@ -193,7 +193,7 @@ export default function SessionChatScreen() {
   return (
     <div className="flex flex-col h-full">
       {/* Nav bar */}
-      <div className="flex items-center gap-3 px-4 pt-12 pb-3 border-b border-ask-sep flex-shrink-0">
+      <div className="flex items-center gap-3 px-4 pt-3 pb-3 border-b border-ask-sep flex-shrink-0">
         <button onClick={() => navigate(-1)} className="text-ask-blue text-sm font-medium flex-shrink-0">
           ‹ Back
         </button>

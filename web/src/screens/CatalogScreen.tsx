@@ -19,7 +19,7 @@ export default function CatalogScreen() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="px-4 pt-12 pb-3 border-b border-ask-sep">
+      <div className="px-4 pt-3 pb-3 border-b border-ask-sep">
         <h1 className="text-xl font-bold text-white">Catalog</h1>
         <p className="text-xs text-ask-secondary mt-0.5">All block types with fixture data</p>
       </div>

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { Block, QuickReplyPayload } from '../../lib/types'
+import { useTheme } from '../../lib/PlatformContext'
 import UrgencyBadge from '../shared/UrgencyBadge'
 
 interface Props {
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export default function QuickReplyBlock({ block, payload, onRespond }: Props) {
+  const theme = useTheme()
   const [customText, setCustomText] = useState('')
   const [showCustom, setShowCustom] = useState(false)
   const inline = payload.options.length <= 2 && !payload.allow_custom
@@ -42,7 +44,7 @@ export default function QuickReplyBlock({ block, payload, onRespond }: Props) {
             <button
               key={opt}
               onClick={() => onRespond(block.blockID, opt)}
-              className={`${inline ? 'flex-1' : 'w-full text-left'} py-1.5 px-3 rounded-lg bg-ask-card2 text-sm font-medium text-white hover:bg-ask-blue transition-colors`}
+              className={`${inline ? 'flex-1' : 'w-full text-left'} py-1.5 px-3 text-sm font-medium active:scale-[0.98] ${theme.buttonOption}`}
             >
               {opt}
             </button>
@@ -50,7 +52,9 @@ export default function QuickReplyBlock({ block, payload, onRespond }: Props) {
           {payload.allow_custom && (
             <button
               onClick={() => setShowCustom(true)}
-              className="w-full text-left py-1.5 px-3 rounded-lg bg-ask-card2 text-sm text-ask-secondary hover:text-white transition-colors"
+              className={`w-full text-left py-1.5 px-3 text-sm text-ask-secondary hover:text-white transition-colors ${
+                theme.isAndroid ? 'rounded-full' : 'rounded-lg'
+              } bg-ask-card2`}
             >
               Custom...
             </button>
