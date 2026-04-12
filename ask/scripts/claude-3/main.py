@@ -1012,6 +1012,16 @@ class Claude3:
                 value = await self._handle_permission_request(msg)
                 writer.write(json.dumps({'value': value}).encode())
                 await writer.drain()
+            elif msg_type == 'ui_respond':
+                # Response from MockAskMac web UI (dev tool) — treat like iPhone response
+                sid = msg.get('session_id', '')
+                value = msg.get('value', '')
+                session = self._registry.sessions.get(sid)
+                if session:
+                    block_id = self._session_block_id(sid)
+                    await self._handle_block_response(block_id, value)
+                writer.write(json.dumps({'ok': True}).encode())
+                await writer.drain()
         except Exception as exc:
             _log(f'socket client error: {exc}', 'WARN')
         finally:

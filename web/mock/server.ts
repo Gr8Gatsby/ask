@@ -1,19 +1,196 @@
 import http from 'http'
+import net from 'net'
+import fs from 'fs'
+import path from 'path'
 import type { IncomingMessage, ServerResponse } from 'http'
-import { FIXTURE_BLOCKS, CLAUDE3_NAME, CLAUDE3_ICON, BREW_NAME, BREW_ICON } from './data/blocks.js'
+import { FIXTURE_BREW_BLOCKS, CLAUDE3_NAME, CLAUDE3_ICON, BREW_NAME, BREW_ICON } from './data/blocks.js'
 import { FIXTURE_MACHINES } from './data/machines.js'
 import { FIXTURE_TASKS, FIXTURE_TASK_MESSAGES } from './data/tasks.js'
 import type { Block } from '../src/lib/types.js'
 
 const PORT = 4242
+const HOME = process.env.HOME!
+const SESSIONS_PATH = path.join(HOME, '.ask/claude3-sessions.json')
+const SOCKET_PATH = path.join(HOME, '.ask/sockets/claude-3.sock')
+const SESSION_TTL = 86400  // 24 hours
 
-let blocks: Block[] = [...FIXTURE_BLOCKS]
+// ---- Live session state from ~/.ask/claude3-sessions.json ----
+
+interface RawSession {
+  session_id: string
+  task_id?: string
+  project: string
+  cwd: string
+  state: string          // 'idle' | 'starting' | 'running_tool' | 'working' | 'stopping' | 'stopped'
+  current_tool: string
+  preview: string
+  last_message: string
+  last_seen: number
+  is_transient: boolean
+  permission_mode: string
+  pending_permission: {
+    request_id: string
+    tool: string
+    preview: string
+    options: string[]
+  } | null
+}
+
+function readSessions(): Record<string, RawSession> {
+  try {
+    return JSON.parse(fs.readFileSync(SESSIONS_PATH, 'utf-8')) as Record<string, RawSession>
+  } catch {
+    return {}
+  }
+}
+
+function sessionToBlock(sid: string, s: RawSession): Block | null {
+  const now = Date.now() / 1000
+  if (s.state === 'stopped') return null
+  if (now - s.last_seen > SESSION_TTL) return null
+  if (s.is_transient) return null
+
+  const isWorking = s.state === 'running_tool' || s.state === 'working' || s.state === 'starting'
+  const pending = s.pending_permission
+    ? {
+        title: `Allow ${s.pending_permission.tool}?`,
+        body: s.pending_permission.preview || undefined,
+        options: s.pending_permission.options,
+      }
+    : undefined
+
+  return {
+    blockID: `claude3-live-${sid}`,
+    machineID: 'mac-live',
+    scriptID: 'claude-3',
+    scriptName: CLAUDE3_NAME,
+    scriptIconSVG: CLAUDE3_ICON,
+    blockType: 'agent_session',
+    scriptType: 'tile',
+    createdAt: new Date(s.last_seen * 1000).toISOString(),
+    requiresResponse: pending ? 1 : 0,
+    showsInInbox: 0,
+    payload: JSON.stringify({
+      session_id: sid,
+      task_id: s.task_id ?? sid,
+      project: s.project,
+      cwd: s.cwd,
+      last_message: s.last_message || undefined,
+      is_working: isWorking,
+      current_tool: isWorking && s.current_tool ? s.current_tool : undefined,
+      current_preview: isWorking && s.preview ? s.preview : undefined,
+      agent_name: 'Claude Code',
+      brand_color: '#74AA9C',
+      placeholder: 'Reply to Claude…',
+      permission_mode: s.permission_mode ?? 'supervised',
+      pending_confirmation: pending,
+    }),
+  }
+}
+
+function buildClaude3Blocks(): Block[] {
+  const sessions = readSessions()
+  const sessionBlocks: Block[] = []
+
+  for (const [sid, s] of Object.entries(sessions)) {
+    const b = sessionToBlock(sid, s)
+    if (b) sessionBlocks.push(b)
+  }
+
+  // Derive tile label from live session state
+  const working = sessionBlocks.filter(b => {
+    try { return (JSON.parse(b.payload) as { is_working?: boolean }).is_working } catch { return false }
+  })
+  const tileLabel = sessionBlocks.length === 0
+    ? 'Idle'
+    : working.length > 0
+    ? `${working.length} session${working.length > 1 ? 's' : ''} working`
+    : `${sessionBlocks.length} session${sessionBlocks.length > 1 ? 's' : ''}`
+
+  const tile: Block = {
+    blockID: 'claude3-tile',
+    machineID: 'mac-live',
+    scriptID: 'claude-3',
+    scriptName: CLAUDE3_NAME,
+    scriptIconSVG: CLAUDE3_ICON,
+    blockType: 'tile',
+    scriptType: 'tile',
+    createdAt: new Date().toISOString(),
+    requiresResponse: 0,
+    showsInInbox: 0,
+    payload: JSON.stringify({
+      label: tileLabel,
+      status_color: working.length > 0 ? 'blue' : sessionBlocks.length > 0 ? 'green' : 'green',
+    }),
+  }
+
+  return [tile, ...sessionBlocks]
+}
+
+// ---- Block state (live claude-3 + fixture brew) ----
+
+let blocks: Block[] = [...buildClaude3Blocks(), ...FIXTURE_BREW_BLOCKS]
 let sseClients: ServerResponse[] = []
-let feedSeq = 100  // incrementing IDs for dynamically added feed items
+let feedSeq = 100
+
+function rebuildClaude3Blocks() {
+  const newLive = buildClaude3Blocks()
+  const brew = blocks.filter(b => b.scriptID !== 'claude-3')
+
+  // Diff: broadcast updates for changed blocks
+  for (const nb of newLive) {
+    const old = blocks.find(b => b.blockID === nb.blockID)
+    if (!old) {
+      broadcast('block_added', nb)
+    } else if (old.payload !== nb.payload) {
+      broadcast('block_updated', nb)
+    }
+  }
+  // Broadcast removals
+  const newIDs = new Set(newLive.map(b => b.blockID))
+  for (const ob of blocks.filter(b => b.scriptID === 'claude-3')) {
+    if (!newIDs.has(ob.blockID)) broadcast('block_cleared', { blockID: ob.blockID })
+  }
+
+  blocks = [...newLive, ...brew]
+  console.log(`[MockAskMac] sessions refreshed — ${newLive.length - 1} session(s)`)
+}
+
+// Watch ~/.ask/claude3-sessions.json for live updates
+fs.watchFile(SESSIONS_PATH, { interval: 500 }, () => rebuildClaude3Blocks())
+
+// ---- Respond via daemon Unix socket (for claude-3 blocks) ----
+
+function sendToSocket(socketPath: string, message: object): Promise<void> {
+  return new Promise((resolve) => {
+    const client = net.createConnection(socketPath)
+    let done = false
+    const finish = () => { if (!done) { done = true; resolve() } }
+
+    client.on('connect', () => {
+      client.write(JSON.stringify(message))
+      client.end()
+    })
+    client.on('end', finish)
+    client.on('error', (err) => {
+      console.error(`[MockAskMac] socket error: ${err.message}`)
+      finish()
+    })
+    setTimeout(finish, 3000)
+  })
+}
+
+async function respondClaude3(sessionID: string, value: string): Promise<void> {
+  console.log(`[MockAskMac] ui_respond session=${sessionID} value="${value}"`)
+  await sendToSocket(SOCKET_PATH, { type: 'ui_respond', session_id: sessionID, value })
+  // Daemon updates sessions file; watcher will pick it up within 500ms
+}
+
+// ---- Brew fixture simulation (unchanged) ----
 
 function makeBlock(partial: Partial<Block> & Pick<Block, 'blockID' | 'scriptID' | 'scriptName' | 'blockType' | 'payload'>): Block {
   return {
-    machineID: 'mac-dev-1',
+    machineID: 'mac-live',
     createdAt: new Date().toISOString(),
     requiresResponse: 0,
     showsInInbox: 0,
@@ -33,11 +210,8 @@ function upsertBlock(b: Block) {
   }
 }
 
-// Simulate what a real script does after the user responds to a block.
-// Returns true if the caller should also clear+broadcast the block, false if
-// this function handled the block update itself (agent_session stays alive).
-function simulateScriptResponse(blockID: string, value: string): boolean {
-  // ---- Brew Monitor ----
+// Returns true if the caller should clear the block, false if handled in-place
+function simulateBrewResponse(blockID: string, value: string): boolean {
   if (blockID === 'brew-quick-reply') {
     const id = ++feedSeq
     if (value === 'Update All') {
@@ -49,19 +223,16 @@ function simulateScriptResponse(blockID: string, value: string): boolean {
         blockType: 'tile',
         payload: JSON.stringify({ label: 'Updating…', status_color: 'blue' }),
       }))
-      // Clear the alert block too
       const alertIdx = blocks.findIndex(b => b.blockID === 'brew-alert')
       if (alertIdx >= 0) { blocks.splice(alertIdx, 1); broadcast('block_cleared', { blockID: 'brew-alert' }) }
-      // Clear the countdown block
       const cdIdx = blocks.findIndex(b => b.blockID === 'brew-countdown')
       if (cdIdx >= 0) { blocks.splice(cdIdx, 1); broadcast('block_cleared', { blockID: 'brew-countdown' }) }
-      // After a simulated delay, mark done and add feed entry
       setTimeout(() => {
         upsertBlock(makeBlock({
           blockID: 'brew-tile',
           scriptID: 'brew-monitor',
           scriptName: BREW_NAME,
-        scriptIconSVG: BREW_ICON,
+          scriptIconSVG: BREW_ICON,
           blockType: 'tile',
           payload: JSON.stringify({ label: 'Up to date', status_color: 'green' }),
         }))
@@ -69,7 +240,7 @@ function simulateScriptResponse(blockID: string, value: string): boolean {
           blockID: `feed-brew-${id}`,
           scriptID: 'brew-monitor',
           scriptName: BREW_NAME,
-        scriptIconSVG: BREW_ICON,
+          scriptIconSVG: BREW_ICON,
           blockType: 'feed_item',
           scriptType: 'feed',
           payload: JSON.stringify({
@@ -81,7 +252,6 @@ function simulateScriptResponse(blockID: string, value: string): boolean {
         }))
       }, 2000)
     } else {
-      // Skip — update tile and add feed entry
       upsertBlock(makeBlock({
         blockID: 'brew-tile',
         scriptID: 'brew-monitor',
@@ -105,85 +275,12 @@ function simulateScriptResponse(blockID: string, value: string): boolean {
         }),
       }))
     }
-    return true  // clear the quick_reply block
+    return true
   }
-
-  // ---- Claude Code bash permission block ----
-  // Clearing this block should also update the linked session block.
-  if (blockID === 'claudecode-bash-permission') {
-    const sessionIdx = blocks.findIndex(b => b.blockID === 'claudecode-session-a3f91c2b')
-    if (sessionIdx >= 0) {
-      const p = JSON.parse(blocks[sessionIdx].payload)
-      delete p.pending_confirmation
-      if (value === 'Allow') {
-        p.is_working = true
-        p.current_tool = 'Bash'
-        p.current_preview = 'rsync --delete ask/scripts/ ~/.ask/scripts/claude-3/'
-      } else {
-        p.is_working = false
-        p.last_message = 'Permission denied. The command was not run.'
-      }
-      blocks[sessionIdx] = { ...blocks[sessionIdx], payload: JSON.stringify(p) }
-      broadcast('block_updated', blocks[sessionIdx])
-    }
-    return true  // clear the confirmation block
-  }
-
-  // ---- Claude Code session actions ----
-  if (blockID === 'claudecode-session-a3f91c2b') {
-    if (value === '__close_session__') {
-      upsertBlock(makeBlock({
-        blockID: `event-stopped-${++feedSeq}`,
-        scriptID: 'claude-3',
-        scriptName: CLAUDE3_NAME,
-        scriptIconSVG: CLAUDE3_ICON,
-        blockType: 'session_event',
-        scriptType: 'tile',
-        payload: JSON.stringify({ event: 'stopped', project: 'code/ask [a3f9]', cwd: '/Users/kevin/Documents/code/ask' }),
-      }))
-      upsertBlock(makeBlock({
-        blockID: 'claudecode-tile',
-        scriptID: 'claude-3',
-        scriptName: CLAUDE3_NAME,
-        scriptIconSVG: CLAUDE3_ICON,
-        blockType: 'tile',
-        payload: JSON.stringify({ label: 'Idle', status_color: 'green' }),
-      }))
-      return true  // clear the session block on stop
-    } else if (value === '__permissions__') {
-      // Toggle permission mode — update in-place
-      const idx = blocks.findIndex(b => b.blockID === blockID)
-      if (idx >= 0) {
-        const p = JSON.parse(blocks[idx].payload)
-        p.permission_mode = p.permission_mode === 'supervised' ? 'full-auto' : 'supervised'
-        blocks[idx] = { ...blocks[idx], payload: JSON.stringify(p) }
-        broadcast('block_updated', blocks[idx])
-      }
-      return false  // keep the session block alive
-    } else {
-      // Pending confirmation response — update in-place, keep session alive
-      const idx = blocks.findIndex(b => b.blockID === blockID)
-      if (idx >= 0) {
-        const p = JSON.parse(blocks[idx].payload)
-        delete p.pending_confirmation
-        p.is_working = true
-        p.current_tool = 'Bash'
-        p.current_preview = value === 'Fix & Commit' ? 'npm run lint --fix && git commit' : 'git commit'
-        blocks[idx] = { ...blocks[idx], payload: JSON.stringify(p) }
-        broadcast('block_updated', blocks[idx])
-      }
-      // Clear the linked bash-permission block so the script fully exits "Needs Response"
-      const bashIdx = blocks.findIndex(b => b.blockID === 'claudecode-bash-permission')
-      if (bashIdx >= 0) {
-        blocks.splice(bashIdx, 1)
-        broadcast('block_cleared', { blockID: 'claudecode-bash-permission' })
-      }
-      return false  // keep the session block alive
-    }
-  }
-
-  return true  // default: caller should clear
+  return true
 }
+
+// ---- SSE helpers ----
 
 function broadcast(eventName: string, data: unknown) {
   const payload = `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`
@@ -206,23 +303,23 @@ function readBody(req: IncomingMessage): Promise<string> {
   })
 }
 
+// ---- HTTP server ----
+
 const server = http.createServer(async (req, res) => {
   setCORS(res)
 
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
 
   const url = new URL(req.url!, `http://localhost:${PORT}`)
-  const path = url.pathname
+  const p = url.pathname
 
-  // GET /blocks
-  if (req.method === 'GET' && path === '/blocks') {
+  if (req.method === 'GET' && p === '/blocks') {
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ blocks }))
     return
   }
 
-  // GET /events  (SSE)
-  if (req.method === 'GET' && path === '/events') {
+  if (req.method === 'GET' && p === '/events') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -234,40 +331,44 @@ const server = http.createServer(async (req, res) => {
     return
   }
 
-  // POST /respond/:blockID
-  const respondMatch = path.match(/^\/respond\/(.+)$/)
+  const respondMatch = p.match(/^\/respond\/(.+)$/)
   if (req.method === 'POST' && respondMatch) {
     const blockID = respondMatch[1]
     const body = await readBody(req)
     const { value } = JSON.parse(body) as { value: string }
     console.log(`[MockAskMac] respond ${blockID} → "${value}"`)
-    const shouldClear = simulateScriptResponse(blockID, value)
-    if (shouldClear) {
-      const prev = blocks.length
-      blocks = blocks.filter(b => b.blockID !== blockID)
-      if (blocks.length < prev) broadcast('block_cleared', { blockID })
+
+    // Route to live daemon or brew fixture simulation
+    const liveMatch = blockID.match(/^claude3-live-(.+)$/)
+    if (liveMatch) {
+      await respondClaude3(liveMatch[1], value)
+    } else {
+      const shouldClear = simulateBrewResponse(blockID, value)
+      if (shouldClear) {
+        const prev = blocks.length
+        blocks = blocks.filter(b => b.blockID !== blockID)
+        if (blocks.length < prev) broadcast('block_cleared', { blockID })
+      }
     }
+
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ ok: true }))
     return
   }
 
-  // GET /machines
-  if (req.method === 'GET' && path === '/machines') {
+  if (req.method === 'GET' && p === '/machines') {
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ machines: FIXTURE_MACHINES }))
     return
   }
 
-  // GET /tasks
-  if (req.method === 'GET' && path === '/tasks') {
+  if (req.method === 'GET' && p === '/tasks') {
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ tasks: FIXTURE_TASKS }))
     return
   }
 
-  // GET /tasks/:taskID/messages
-  const taskMsgMatch = path.match(/^\/tasks\/([^/]+)\/messages$/)
+  const taskMsgMatch = p.match(/^\/tasks\/([^/]+)\/messages$/)
   if (req.method === 'GET' && taskMsgMatch) {
     const taskID = taskMsgMatch[1]
     const messages = FIXTURE_TASK_MESSAGES[taskID] ?? []
@@ -282,4 +383,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`MockAskMac  http://localhost:${PORT}`)
+  console.log(`  Sessions: ${SESSIONS_PATH}`)
+  console.log(`  Socket:   ${SOCKET_PATH}`)
+  rebuildClaude3Blocks()
 })
