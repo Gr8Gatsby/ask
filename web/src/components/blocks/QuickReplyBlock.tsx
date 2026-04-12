@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import type { Block, QuickReplyPayload } from '../../lib/types'
-import { useTheme } from '../../lib/PlatformContext'
-import UrgencyBadge from '../shared/UrgencyBadge'
+import { useTheme, PlatformIcon } from '../../lib/PlatformContext'
 
 interface Props {
   block: Block
@@ -13,15 +12,35 @@ export default function QuickReplyBlock({ block, payload, onRespond }: Props) {
   const theme = useTheme()
   const [customText, setCustomText] = useState('')
   const [showCustom, setShowCustom] = useState(false)
-  const inline = payload.options.length <= 2 && !payload.allow_custom
+
+  function respond(value: string) {
+    onRespond(block.blockID, value)
+  }
+
+  const urgencyColor = payload.urgency === 'urgent' ? 'text-ask-red'
+    : payload.urgency === 'info' ? 'text-ask-blue'
+    : 'text-ask-orange'
+
+  const urgencyIcon = payload.urgency === 'urgent' ? { ios: '⚠', android: 'warning' }
+    : payload.urgency === 'info' ? { ios: 'ℹ', android: 'info' }
+    : { ios: '⚠', android: 'warning' }
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-3">
+      {/* Header */}
       <div className="flex items-start gap-2">
-        <UrgencyBadge urgency={payload.urgency ?? 'warning'} />
+        <PlatformIcon
+          ios={urgencyIcon.ios}
+          android={urgencyIcon.android}
+          fill
+          size={theme.isAndroid ? 20 : 16}
+          className={urgencyColor}
+        />
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-white leading-snug">{payload.title}</p>
-          {payload.description && <p className="text-xs text-ask-secondary truncate">{payload.description}</p>}
+          <p className={`${theme.typeTitleMedium} text-white`}>{payload.title}</p>
+          {payload.description && (
+            <p className={`${theme.typeBodySmall} text-ask-secondary mt-0.5`}>{payload.description}</p>
+          )}
         </div>
       </div>
 
@@ -32,31 +51,43 @@ export default function QuickReplyBlock({ block, payload, onRespond }: Props) {
             type="text"
             value={customText}
             onChange={e => setCustomText(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && customText.trim()) onRespond(block.blockID, customText.trim()) }}
-            placeholder="Custom reply..."
-            className="flex-1 bg-ask-card2 rounded-lg px-3 py-1.5 text-sm text-white placeholder-ask-secondary outline-none focus:ring-1 focus:ring-ask-blue"
+            onKeyDown={e => { if (e.key === 'Enter' && customText.trim()) respond(customText.trim()) }}
+            placeholder="Custom reply…"
+            className={theme.input}
           />
-          <button onClick={() => setShowCustom(false)} className="text-xs text-ask-secondary hover:text-white">Cancel</button>
+          <button onClick={() => setShowCustom(false)} className={theme.btnText}>
+            Cancel
+          </button>
         </div>
-      ) : (
-        <div className={inline ? 'flex gap-2' : 'flex flex-col gap-1.5'}>
-          {payload.options.map(opt => (
+      ) : theme.isAndroid ? (
+        // Android M3: separate filled-tonal (first) + outlined (rest) pill buttons
+        <div className="flex flex-col gap-2">
+          {payload.options.map((opt, i) => (
             <button
               key={opt}
-              onClick={() => onRespond(block.blockID, opt)}
-              className={`${inline ? 'flex-1' : 'w-full text-left'} py-1.5 px-3 text-sm font-medium active:scale-[0.98] ${theme.buttonOption}`}
+              onClick={() => respond(opt)}
+              className={i === 0 ? theme.optionBtnPrimary : theme.optionBtnSecondary}
             >
               {opt}
             </button>
           ))}
           {payload.allow_custom && (
-            <button
-              onClick={() => setShowCustom(true)}
-              className={`w-full text-left py-1.5 px-3 text-sm text-ask-secondary hover:text-white transition-colors ${
-                theme.isAndroid ? 'rounded-full' : 'rounded-lg'
-              } bg-ask-card2`}
-            >
-              Custom...
+            <button onClick={() => setShowCustom(true)} className={theme.btnOutlined}>
+              Other…
+            </button>
+          )}
+        </div>
+      ) : (
+        // iOS: inset-grouped table view — rounded container, options with hairline dividers
+        <div className={theme.optionContainer}>
+          {payload.options.map(opt => (
+            <button key={opt} onClick={() => respond(opt)} className={theme.optionBtnPrimary}>
+              {opt}
+            </button>
+          ))}
+          {payload.allow_custom && (
+            <button onClick={() => setShowCustom(true)} className={theme.optionBtnSecondary}>
+              Other…
             </button>
           )}
         </div>

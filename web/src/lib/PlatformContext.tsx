@@ -7,72 +7,176 @@ interface PlatformContextType {
   setPlatform: (p: Platform) => void
 }
 
-const PlatformContext = createContext<PlatformContextType>({
-  platform: 'ios',
-  setPlatform: () => {},
-})
+const Ctx = createContext<PlatformContextType>({ platform: 'ios', setPlatform: () => {} })
 
 export function PlatformProvider({ children }: { children: React.ReactNode }) {
-  const [platform, setPlatformState] = useState<Platform>(() => {
-    return (localStorage.getItem('ask-platform') as Platform) ?? 'ios'
-  })
-
+  const [platform, setPlatformState] = useState<Platform>(() =>
+    (localStorage.getItem('ask-platform') as Platform) ?? 'ios'
+  )
   function setPlatform(p: Platform) {
     setPlatformState(p)
     localStorage.setItem('ask-platform', p)
   }
-
-  return (
-    <PlatformContext.Provider value={{ platform, setPlatform }}>
-      {children}
-    </PlatformContext.Provider>
-  )
+  return <Ctx.Provider value={{ platform, setPlatform }}>{children}</Ctx.Provider>
 }
 
-export function usePlatform() {
-  return useContext(PlatformContext)
+export function usePlatform() { return useContext(Ctx) }
+
+// ---------------------------------------------------------------------------
+// PlatformIcon — SF Symbol approximations on iOS, Material Symbols on Android
+// ---------------------------------------------------------------------------
+// Android icons use the Material Symbols Rounded variable font.
+// The `fill` prop renders filled variant (for active states).
+
+interface IconProps {
+  ios: string      // Unicode / emoji approximating an SF Symbol
+  android: string  // Material Symbol ligature name (e.g. "home", "arrow_back")
+  fill?: boolean   // Android only: use filled variant (active state)
+  size?: number    // px, default 20
+  className?: string
 }
 
-// Structural theme helpers — colors come from CSS vars, these cover shapes/borders
+export function PlatformIcon({ ios, android, fill = false, size = 20, className = '' }: IconProps) {
+  const { platform } = usePlatform()
+  if (platform === 'android') {
+    return (
+      <span
+        className={`mat-icon select-none ${className}`}
+        style={{
+          fontSize: size,
+          fontVariationSettings: `'FILL' ${fill ? 1 : 0}, 'wght' 400, 'GRAD' 0, 'opsz' ${size}`,
+        }}
+      >
+        {android}
+      </span>
+    )
+  }
+  // iOS: plain unicode character, sized and styled by caller via className
+  return <span className={`select-none leading-none ${className}`} style={{ fontSize: size }}>{ios}</span>
+}
+
+// ---------------------------------------------------------------------------
+// useTheme — platform-specific design tokens as Tailwind class strings
+//
+// iOS follows Apple HIG: SF Pro typography, 44pt touch targets,
+//   inset-grouped rounded containers, system blue tinted buttons.
+// Android follows Material Design 3: Roboto, 56dp touch targets,
+//   pill buttons, outlined/filled-tonal variants, M3 elevation.
+// ---------------------------------------------------------------------------
+
 export function useTheme() {
   const { platform } = usePlatform()
   const md = platform === 'android'
 
+  if (md) {
+    return {
+      platform,
+      isAndroid: true,
+
+      // M3 Typography (Roboto)
+      // titleLarge 22sp/500, bodyLarge 16sp/400, labelLarge 14sp/500
+      typeTitleLarge:   'text-[22px] font-medium leading-7',
+      typeTitleMedium:  'text-base font-medium leading-6 tracking-[0.15px]',
+      typeBodyLarge:    'text-base font-normal leading-6 tracking-[0.5px]',
+      typeBodyMedium:   'text-sm font-normal leading-5 tracking-[0.25px]',
+      typeLabelLarge:   'text-sm font-medium leading-5 tracking-[0.1px]',
+      typeLabelMedium:  'text-xs font-medium leading-4 tracking-[0.5px]',
+      typeBodySmall:    'text-xs font-normal leading-4 tracking-[0.4px]',
+
+      // Section header — sentence case, bodySmall/labelMedium
+      sectionHeader: 'text-xs font-medium tracking-[0.4px] text-ask-secondary',
+
+      // M3 Cards — no border, elevation shadow
+      card: 'bg-ask-card rounded-2xl shadow-md shadow-black/40',
+
+      // M3 Buttons — pill shaped (fully rounded)
+      // Filled: solid primary bg — highest emphasis
+      btnFilled:     'rounded-full min-h-[40px] px-6 text-sm font-medium tracking-[0.1px] bg-ask-blue text-white active:opacity-90 transition-opacity',
+      // Filled-tonal: primary container bg — medium-high emphasis
+      btnTonal:      'rounded-full min-h-[40px] px-6 text-sm font-medium tracking-[0.1px] bg-ask-blue/20 text-ask-blue active:bg-ask-blue/30 transition-colors',
+      // Outlined: border only — medium emphasis
+      btnOutlined:   'rounded-full min-h-[40px] px-6 text-sm font-medium tracking-[0.1px] border border-ask-sep text-ask-secondary hover:bg-ask-card2 active:bg-ask-card2 transition-colors',
+      // Text: no bg — low emphasis
+      btnText:       'rounded-full min-h-[40px] px-4 text-sm font-medium tracking-[0.1px] text-ask-blue hover:bg-ask-blue/10 transition-colors',
+
+      // Semantic variants
+      btnAllow:      'rounded-full min-h-[40px] px-6 text-sm font-medium tracking-[0.1px] bg-ask-green/20 text-ask-green active:bg-ask-green/30 transition-colors',
+      btnDeny:       'rounded-full min-h-[40px] px-6 text-sm font-medium tracking-[0.1px] bg-ask-red/20 text-ask-red active:bg-ask-red/30 transition-colors',
+
+      // Option list (quick-reply options) — separate tonal buttons stacked
+      optionContainer: 'flex flex-col gap-2',
+      optionBtn: (i: number, total: number) => {
+        void i; void total
+        // First = tonal (primary action), rest = outlined
+        return ''  // handled inline per index
+      },
+      optionBtnPrimary: 'w-full rounded-full min-h-[40px] px-6 text-sm font-medium tracking-[0.1px] bg-ask-blue/20 text-ask-blue active:bg-ask-blue/30 transition-colors',
+      optionBtnSecondary: 'w-full rounded-full min-h-[40px] px-6 text-sm font-medium tracking-[0.1px] border border-ask-sep text-ask-secondary hover:bg-ask-card2 active:bg-ask-card2 transition-colors',
+
+      // M3 Input — OutlinedTextField
+      input: 'w-full rounded-xl border border-ask-sep bg-transparent px-4 py-3 text-base font-normal tracking-[0.5px] text-ask-text placeholder-ask-secondary focus:border-ask-blue outline-none transition-colors',
+
+      // List item — M3 ListTile: 56dp min height, 16dp padding
+      listItem: 'flex items-center gap-4 px-4 min-h-[56px]',
+      listDivider: 'h-px bg-ask-sep/40',
+
+      // Nav back
+      navBackClass: 'flex items-center gap-1 text-ask-text',
+      navBackIcon: <PlatformIcon ios="‹" android="arrow_back" size={22} />,
+    }
+  }
+
+  // iOS HIG
   return {
     platform,
-    isAndroid: md,
+    isAndroid: false,
 
-    // Card: border on iOS, elevation shadow on Android
-    card: md
-      ? 'bg-ask-card rounded-2xl shadow-md shadow-black/50'
-      : 'bg-ask-card rounded-xl border border-ask-sep/50',
+    // SF Pro typography (pt → px approximate: 1pt ≈ 1px on web)
+    // headline 17/semibold, subheadline 15/regular, footnote 13/regular, caption2 11/regular
+    typeTitleLarge:   'text-[17px] font-semibold leading-snug',  // headline
+    typeTitleMedium:  'text-[17px] font-semibold leading-snug',  // headline
+    typeBodyLarge:    'text-[17px] font-normal leading-snug',    // body
+    typeBodyMedium:   'text-[15px] font-normal leading-normal',  // subheadline
+    typeLabelLarge:   'text-[13px] font-normal',                 // footnote
+    typeLabelMedium:  'text-[11px] font-normal',                 // caption2
+    typeBodySmall:    'text-[11px] font-normal',                 // caption2
 
-    // Default option button (e.g. confirmation options, quick-reply options)
-    buttonOption: md
-      ? 'rounded-full border border-ask-sep bg-ask-card2 text-white hover:bg-ask-blue/20 hover:border-ask-blue/40 hover:text-ask-blue transition-colors'
-      : 'rounded-xl bg-ask-card2 text-white hover:bg-ask-blue hover:text-white transition-colors',
+    // Section header — ALL CAPS, footnote, secondary
+    sectionHeader: 'text-[13px] font-semibold uppercase tracking-wider text-ask-secondary',
 
-    // Allow / positive action
-    buttonAllow: md
-      ? 'rounded-full bg-ask-green/20 text-ask-green border border-ask-green/30 hover:bg-ask-green/30 transition-colors'
-      : 'rounded-xl bg-ask-green/15 text-ask-green border border-ask-green/30 hover:bg-ask-green/25 transition-colors',
+    // iOS card — subtle border (0.5pt equivalent), 8pt corner
+    card: 'bg-ask-card rounded-xl border border-ask-sep/30',
 
-    // Deny / destructive
-    buttonDeny: md
-      ? 'rounded-full bg-ask-orange/20 text-ask-orange border border-ask-orange/30 hover:bg-ask-orange/30 transition-colors'
-      : 'rounded-xl bg-ask-orange/15 text-ask-orange border border-ask-orange/30 hover:bg-ask-orange/25 transition-colors',
+    // iOS buttons — rounded-lg (6pt corner), system tint fills
+    // Primary action (filled blue)
+    btnFilled:     'rounded-lg min-h-[32px] px-4 py-1.5 text-[15px] font-semibold bg-ask-blue text-white active:opacity-70 transition-opacity',
+    // Tinted (system tint, 12% opacity)
+    btnTonal:      'rounded-lg min-h-[32px] px-4 py-1.5 text-[15px] font-semibold bg-ask-blue/[0.12] text-ask-blue active:bg-ask-blue/25 transition-colors',
+    // Gray (secondary/cancel)
+    btnOutlined:   'rounded-lg min-h-[32px] px-4 py-1.5 text-[15px] font-semibold bg-ask-card2 text-white active:opacity-70 transition-opacity',
+    // Plain text
+    btnText:       'px-3 py-1.5 text-[17px] font-normal text-ask-blue active:opacity-60',
 
-    // Neutral / cancel
-    buttonNeutral: md
-      ? 'rounded-full bg-ask-card2 text-white hover:bg-ask-card2/80 transition-colors'
-      : 'rounded-xl bg-ask-card2 text-white hover:bg-ask-card2/80 transition-colors',
+    // Semantic
+    btnAllow:      'rounded-lg min-h-[32px] px-4 py-1.5 text-[15px] font-semibold bg-ask-green/[0.12] text-ask-green active:bg-ask-green/25 transition-colors',
+    btnDeny:       'rounded-lg min-h-[32px] px-4 py-1.5 text-[15px] font-semibold bg-ask-orange/[0.12] text-ask-orange active:bg-ask-orange/25 transition-colors',
 
-    // Primary CTA (send, submit)
-    buttonPrimary: md
-      ? 'rounded-full bg-ask-blue text-white font-medium hover:opacity-90 transition-opacity'
-      : 'rounded-xl bg-ask-blue text-white font-semibold hover:opacity-90 transition-opacity',
+    // Option list — iOS inset-grouped table view style
+    // Options live inside a rounded container with hairline separators between them
+    optionContainer: 'rounded-xl overflow-hidden border border-ask-sep/30 bg-ask-card',
+    optionBtn: (_i: number, _total: number) => '',  // handled inline
+    optionBtnPrimary: 'w-full min-h-[44px] px-4 flex items-center text-[15px] font-normal text-ask-blue active:bg-ask-card2 transition-colors border-b border-ask-sep/30 last:border-b-0',
+    optionBtnSecondary: 'w-full min-h-[44px] px-4 flex items-center text-[15px] font-normal text-ask-blue active:bg-ask-card2 transition-colors border-b border-ask-sep/30 last:border-b-0',
 
-    // Chip (alert chips, badges)
-    chip: md ? 'rounded-lg' : 'rounded-full',
+    // iOS input — UITextField .roundedBorder: gray bg, subtle border, 15pt
+    input: 'w-full rounded-lg border border-ask-sep/50 bg-ask-card2 px-3 py-2 text-[15px] font-normal text-white placeholder-ask-secondary focus:border-ask-blue/60 outline-none transition-colors',
+
+    // List item — UITableViewCell: 44pt min height, 10pt+ padding
+    listItem: 'flex items-center gap-3 px-3 min-h-[44px]',
+    listDivider: 'h-px bg-ask-sep/40 ml-3',
+
+    // Nav back — blue chevron + label (iOS NavigationBar back button)
+    navBackClass: 'flex items-center gap-0.5 text-ask-blue text-[17px] font-normal',
+    navBackIcon: <PlatformIcon ios="‹" android="arrow_back" size={22} />,
   }
 }

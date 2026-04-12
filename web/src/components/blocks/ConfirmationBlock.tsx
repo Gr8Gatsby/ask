@@ -1,5 +1,5 @@
 import type { Block, ConfirmationPayload } from '../../lib/types'
-import { useTheme } from '../../lib/PlatformContext'
+import { useTheme, PlatformIcon } from '../../lib/PlatformContext'
 
 interface Props {
   block: Block
@@ -7,42 +7,56 @@ interface Props {
   onRespond: (blockID: string, value: string) => void
 }
 
-// Permission-style block — matches iOS "Permission needed" layout
+// Permission/Bash block — "Permission needed" for shell commands
 function PermissionBlock({ block, payload, onRespond }: Props) {
   const theme = useTheme()
-  const denyOptions = ['Deny', 'Cancel', 'No', 'Reject']
-  const allowOptions = ['Allow', 'Yes', 'Approve', 'Permit']
+  const denyWords = ['deny', 'cancel', 'no', 'reject']
+  const allowWords = ['allow', 'yes', 'approve', 'permit']
+
+  function classify(opt: string) {
+    const l = opt.toLowerCase()
+    if (denyWords.some(w => l.includes(w))) return 'deny'
+    if (allowWords.some(w => l.includes(w))) return 'allow'
+    return 'neutral'
+  }
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-bold text-ask-orange uppercase tracking-wide">Permission needed</span>
+      {/* Header — orange warning label */}
+      <div className="flex items-center gap-1.5">
+        <PlatformIcon ios="⚠" android="security" fill size={theme.isAndroid ? 18 : 14} className="text-ask-orange" />
+        <span className={`${theme.sectionHeader} text-ask-orange`}>Permission needed</span>
       </div>
-      <p className="text-sm font-semibold text-white">{payload.title}</p>
+
+      <p className={`${theme.typeTitleMedium} text-white`}>{payload.title}</p>
+
       {payload.body && (
-        <p className="text-xs text-ask-secondary leading-relaxed">{payload.body}</p>
+        <p className={`${theme.typeBodyMedium} text-ask-secondary`}>{payload.body}</p>
       )}
+
       {payload.command && (
-        <div className="bg-black/40 rounded-lg px-3 py-2.5 border border-ask-sep">
-          <p className="text-[10px] text-ask-secondary mb-1">Bash wants to run:</p>
-          <pre className="text-xs text-white font-mono whitespace-pre-wrap break-all leading-relaxed">
+        <div className={`${theme.isAndroid ? 'rounded-2xl' : 'rounded-xl'} bg-black/50 border border-ask-sep/40 px-3 py-2.5`}>
+          <p className={`${theme.typeLabelMedium} text-ask-secondary mb-1.5`}>
+            {theme.isAndroid ? 'Command' : 'Bash wants to run:'}
+          </p>
+          <pre className="text-xs font-mono text-white whitespace-pre-wrap break-all leading-relaxed">
             {payload.command}
           </pre>
         </div>
       )}
-      <div className="flex flex-col gap-2">
+
+      <div className={`flex flex-col gap-2 ${theme.isAndroid ? 'mt-1' : ''}`}>
         {payload.options.map(opt => {
-          const isDeny = denyOptions.some(d => opt.toLowerCase().includes(d.toLowerCase()))
-          const isAllow = allowOptions.some(a => opt.toLowerCase().includes(a.toLowerCase()))
+          const kind = classify(opt)
           return (
             <button
               key={opt}
               onClick={() => onRespond(block.blockID, opt)}
-              className={`w-full py-2.5 px-3 text-sm font-semibold active:scale-[0.98] ${
-                isDeny ? theme.buttonDeny
-                : isAllow ? theme.buttonAllow
-                : theme.buttonNeutral
-              }`}
+              className={
+                kind === 'allow' ? theme.btnAllow
+                : kind === 'deny' ? theme.btnDeny
+                : theme.isAndroid ? theme.btnOutlined : theme.btnOutlined
+              }
             >
               {opt}
             </button>
@@ -61,36 +75,62 @@ export default function ConfirmationBlock({ block, payload, onRespond }: Props) 
     return <PermissionBlock block={block} payload={payload} onRespond={onRespond} />
   }
 
+  const urgency = payload.urgency ?? 'warning'
+  const urgencyIcon = urgency === 'urgent'
+    ? { ios: '⚠', android: 'error', color: 'text-ask-red' }
+    : urgency === 'info'
+    ? { ios: 'ℹ', android: 'info', color: 'text-ask-blue' }
+    : { ios: '⚠', android: 'warning', color: 'text-ask-orange' }
+
   const inline = payload.options.length <= 2
 
   return (
     <div className="flex flex-col gap-3">
+      {/* Title row with urgency icon */}
       <div className="flex items-start gap-2">
-        <span className={`font-mono text-[10px] font-bold px-1 py-0.5 rounded flex-shrink-0 ${
-          payload.urgency === 'urgent'
-            ? 'text-ask-red bg-ask-red/15'
-            : payload.urgency === 'info'
-            ? 'text-ask-secondary bg-ask-secondary/15'
-            : 'text-ask-orange bg-ask-orange/15'
-        }`}>
-          {payload.urgency === 'urgent' ? '[!]' : payload.urgency === 'info' ? '[i]' : '[~]'}
-        </span>
+        <PlatformIcon
+          ios={urgencyIcon.ios}
+          android={urgencyIcon.android}
+          fill
+          size={theme.isAndroid ? 20 : 16}
+          className={`flex-shrink-0 mt-0.5 ${urgencyIcon.color}`}
+        />
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-white leading-snug">{payload.title}</p>
-          {payload.body && <p className="text-xs text-ask-secondary mt-0.5 leading-relaxed">{payload.body}</p>}
+          <p className={`${theme.typeTitleMedium} text-white leading-snug`}>{payload.title}</p>
+          {payload.body && (
+            <p className={`${theme.typeBodyMedium} text-ask-secondary mt-0.5`}>{payload.body}</p>
+          )}
         </div>
       </div>
-      <div className={inline ? 'flex gap-2' : 'flex flex-col gap-2'}>
-        {payload.options.map(opt => (
-          <button
-            key={opt}
-            onClick={() => onRespond(block.blockID, opt)}
-            className={`${inline ? 'flex-1' : 'w-full'} py-2 px-3 text-sm font-medium active:scale-[0.98] ${theme.buttonOption}`}
-          >
-            {opt}
-          </button>
-        ))}
-      </div>
+
+      {/* Buttons */}
+      {theme.isAndroid ? (
+        // M3: inline row for ≤2 options, stacked for more
+        <div className={inline ? 'flex gap-2 justify-end' : 'flex flex-col gap-2'}>
+          {payload.options.map((opt, i) => (
+            <button
+              key={opt}
+              onClick={() => onRespond(block.blockID, opt)}
+              className={
+                inline
+                  ? (i === payload.options.length - 1 ? theme.btnTonal : theme.btnText)
+                  : (i === 0 ? theme.btnFilled : theme.btnOutlined)
+              }
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+      ) : (
+        // iOS: inset-grouped cell style — rounded container with hairline dividers
+        <div className={theme.optionContainer}>
+          {payload.options.map(opt => (
+            <button key={opt} onClick={() => onRespond(block.blockID, opt)} className={theme.optionBtnPrimary}>
+              {opt}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

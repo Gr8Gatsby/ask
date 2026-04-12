@@ -1,5 +1,6 @@
 import { useNavigate, useParams } from 'react-router-dom'
 import { useBlocks } from '../lib/useBlocks'
+import { useTheme } from '../lib/PlatformContext'
 import type { AgentSessionPayload, ConfirmationPayload } from '../lib/types'
 import BlockRenderer from '../components/blocks/BlockRenderer'
 import ScriptIcon from '../components/shared/ScriptIcon'
@@ -56,6 +57,7 @@ function SessionRow({
 export default function ScriptDetailScreen() {
   const { scriptID } = useParams<{ scriptID: string }>()
   const navigate = useNavigate()
+  const theme = useTheme()
   const { blocks: allBlocks, respond } = useBlocks()
   const blocks = allBlocks.filter(b => b.scriptID === scriptID)
   const first = blocks[0]
@@ -90,8 +92,11 @@ export default function ScriptDetailScreen() {
   return (
     <div className="flex flex-col h-full">
       {/* Nav bar */}
-      <div className="flex items-center gap-3 px-4 pt-3 pb-3 border-b border-ask-sep flex-shrink-0">
-        <button onClick={() => navigate(-1)} className="text-ask-blue text-sm font-medium">‹ Home</button>
+      <div className="flex items-center gap-3 px-4 pt-3 pb-3 border-b border-ask-sep/50 flex-shrink-0">
+        <button onClick={() => navigate(-1)} className={theme.navBackClass}>
+          {theme.navBackIcon}
+          {!theme.isAndroid && <span>Home</span>}
+        </button>
         {first && (
           <div className="flex items-center gap-2 flex-1 min-w-0">
             <ScriptIcon
@@ -101,7 +106,7 @@ export default function ScriptDetailScreen() {
               scriptName={first.scriptName}
               size={24}
             />
-            <span className="text-sm font-semibold text-white truncate">{first.scriptName}</span>
+            <span className={`${theme.typeTitleMedium} text-white truncate`}>{first.scriptName}</span>
           </div>
         )}
       </div>
@@ -122,8 +127,8 @@ export default function ScriptDetailScreen() {
             {/* Sessions section */}
             {sessionBlocks.length > 0 && (
               <div className="mt-1">
-                <p className="px-4 pt-3 pb-1 text-xs font-semibold text-ask-secondary uppercase tracking-wide">
-                  Sessions
+                <p className={`px-4 pt-3 pb-1 ${theme.sectionHeader}`}>
+                  {theme.isAndroid ? 'Sessions' : 'SESSIONS'}
                 </p>
                 {sessionBlocks.map(block => {
                   const payload = parsePayload<AgentSessionPayload>(block.payload)

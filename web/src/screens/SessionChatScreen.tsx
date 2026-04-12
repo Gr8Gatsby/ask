@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useBlocks } from '../lib/useBlocks'
+import { useTheme } from '../lib/PlatformContext'
 import { getTaskMessages } from '../lib/api'
 import type { AgentSessionPayload, TaskMessage } from '../lib/types'
 import Markdown from '../components/shared/Markdown'
@@ -147,6 +148,7 @@ function PendingConfirmationBar({
 export default function SessionChatScreen() {
   const { scriptID, sessionID } = useParams<{ scriptID: string; sessionID: string }>()
   const navigate = useNavigate()
+  const theme = useTheme()
   const { blocks: allBlocks, respond } = useBlocks()
   const [reply, setReply] = useState('')
   const [sending, setSending] = useState(false)
@@ -194,8 +196,9 @@ export default function SessionChatScreen() {
     <div className="flex flex-col h-full">
       {/* Nav bar */}
       <div className="flex items-center gap-3 px-4 pt-3 pb-3 border-b border-ask-sep flex-shrink-0">
-        <button onClick={() => navigate(-1)} className="text-ask-blue text-sm font-medium flex-shrink-0">
-          ‹ Back
+        <button onClick={() => navigate(-1)} className={`flex-shrink-0 ${theme.navBackClass}`}>
+          {theme.navBackIcon}
+          {!theme.isAndroid && <span>Back</span>}
         </button>
         <div className="flex items-center gap-2 flex-1 min-w-0">
           {payload?.is_working && (
@@ -320,8 +323,8 @@ export default function SessionChatScreen() {
 
       {/* Compose bar */}
       {sessionBlock && (
-        <div className="flex-shrink-0 px-4 py-3 border-t border-ask-sep">
-          <div className="flex gap-2">
+        <div className="flex-shrink-0 px-4 py-3 border-t border-ask-sep/50">
+          <div className="flex gap-2 items-center">
             <input
               type="text"
               value={reply}
@@ -329,16 +332,21 @@ export default function SessionChatScreen() {
               placeholder={payload?.placeholder ?? 'Reply to Claude…'}
               disabled={sending}
               onKeyDown={e => { if (e.key === 'Enter') handleSend(reply) }}
-              className="flex-1 bg-ask-card rounded-xl px-4 py-2.5 text-sm text-white placeholder-ask-secondary outline-none focus:ring-1 disabled:opacity-50"
-              style={{ '--tw-ring-color': accentColor } as React.CSSProperties}
+              className={`flex-1 disabled:opacity-50 ${theme.input}`}
             />
             <button
               onClick={() => handleSend(reply)}
               disabled={!reply.trim() || sending}
-              className="px-4 py-2.5 rounded-xl text-white text-sm font-semibold disabled:opacity-40 transition-opacity hover:opacity-80"
+              className={`disabled:opacity-40 flex-shrink-0 ${
+                theme.isAndroid
+                  ? 'w-10 h-10 rounded-full flex items-center justify-center'
+                  : 'px-4 py-2.5 rounded-xl text-sm font-semibold'
+              }`}
               style={{ backgroundColor: accentColor }}
             >
-              {sending ? '…' : '→'}
+              {theme.isAndroid
+                ? <span className="mat-icon text-white" style={{ fontSize: 20, fontVariationSettings: "'FILL' 1, 'wght' 400, 'opsz' 20" }}>send</span>
+                : (sending ? '…' : '→')}
             </button>
           </div>
         </div>

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { Block, PromptPayload } from '../../lib/types'
+import { useTheme } from '../../lib/PlatformContext'
 
 interface Props {
   block: Block
@@ -8,6 +9,7 @@ interface Props {
 }
 
 export default function PromptBlock({ block, payload, onRespond }: Props) {
+  const theme = useTheme()
   const [value, setValue] = useState('')
 
   const submit = () => {
@@ -17,14 +19,15 @@ export default function PromptBlock({ block, payload, onRespond }: Props) {
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-sm font-semibold text-white">{payload.title}</p>
+      <p className={`${theme.typeTitleMedium} text-white`}>{payload.title}</p>
+
       {payload.multiline ? (
         <textarea
           value={value}
           onChange={e => setValue(e.target.value)}
           placeholder={payload.placeholder ?? ''}
           rows={4}
-          className="w-full bg-ask-card2 rounded-lg px-3 py-2 text-sm text-white placeholder-ask-secondary resize-none outline-none focus:ring-1 focus:ring-ask-blue"
+          className={`${theme.input} resize-none`}
         />
       ) : (
         <input
@@ -33,13 +36,14 @@ export default function PromptBlock({ block, payload, onRespond }: Props) {
           onChange={e => setValue(e.target.value)}
           placeholder={payload.placeholder ?? ''}
           onKeyDown={e => { if (e.key === 'Enter') submit() }}
-          className="w-full bg-ask-card2 rounded-lg px-3 py-2 text-sm text-white placeholder-ask-secondary outline-none focus:ring-1 focus:ring-ask-blue"
+          className={theme.input}
         />
       )}
+
       <button
         onClick={submit}
         disabled={!value.trim()}
-        className="w-full py-2 rounded-lg bg-ask-blue text-white text-sm font-semibold disabled:opacity-40 hover:bg-ask-blue/80 transition-colors"
+        className={`${theme.btnFilled} disabled:opacity-40`}
       >
         Submit
       </button>
