@@ -24,6 +24,17 @@ export const FIXTURE_TASKS: AskTask[] = [
     artifactCount: 6,
   },
   {
+    taskID: 'task-brew-001',
+    machineID: 'mac-dev-1',
+    scriptID: 'brew-monitor',
+    scriptName: 'Brew Monitor',
+    title: 'Security update: openssl, git, node',
+    status: 'completed',
+    lastActivityAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+    messageCount: 3,
+    artifactCount: 0,
+  },
+  {
     taskID: 'task-002',
     machineID: 'mac-dev-1',
     scriptID: 'claude-3',
@@ -109,6 +120,33 @@ export const FIXTURE_TASK_MESSAGES: Record<string, TaskMessage[]> = {
       partsJSON: JSON.stringify([{ type: 'text', text: "Set up Vite + React + TypeScript + Tailwind with MockAskMac on port 4242. SSE for live block updates, proxy via Vite config.\n\nImplemented all block renderers and the 4 high-impact functional fixes:\n- ActionQueueCard per script group\n- ScriptDetailScreen two-section layout\n- SessionChatScreen push navigation\n- Confirmation blocks grouped under their session" }]),
       timestamp: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
       sequenceNumber: 1,
+    },
+  ],
+
+  'task-brew-001': [
+    {
+      messageID: 'msg-brew-001',
+      taskID: 'task-brew-001',
+      role: 'assistant',
+      partsJSON: JSON.stringify([{ type: 'text', text: 'Checking for outdated packages…' }]),
+      timestamp: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
+      sequenceNumber: 0,
+    },
+    {
+      messageID: 'msg-brew-002',
+      taskID: 'task-brew-001',
+      role: 'assistant',
+      partsJSON: JSON.stringify([{ type: 'text', text: 'Found 3 packages with updates:\n\n- **openssl** 3.4.0 → 3.4.1 ⚠️ security\n- **git** 2.47.1 → 2.47.2\n- **node** 22.12.0 → 22.13.0\n\nRunning `brew upgrade openssl git node`…' }]),
+      timestamp: new Date(Date.now() - 11 * 60 * 1000).toISOString(),
+      sequenceNumber: 1,
+    },
+    {
+      messageID: 'msg-brew-003',
+      taskID: 'task-brew-001',
+      role: 'assistant',
+      partsJSON: JSON.stringify([{ type: 'text', text: '✓ All 3 packages updated successfully.\n\nopenssl 3.4.1, git 2.47.2, node 22.13.0' }]),
+      timestamp: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      sequenceNumber: 2,
     },
   ],
 
