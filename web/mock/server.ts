@@ -33,13 +33,14 @@ function upsertBlock(b: Block) {
   }
 }
 
-// Simulate what a real script does after the user responds to a block
-function simulateScriptResponse(blockID: string, value: string) {
+// Simulate what a real script does after the user responds to a block.
+// Returns true if the caller should also clear+broadcast the block, false if
+// this function handled the block update itself (agent_session stays alive).
+function simulateScriptResponse(blockID: string, value: string): boolean {
   // ---- Brew Monitor ----
   if (blockID === 'brew-quick-reply') {
     const id = ++feedSeq
     if (value === 'Update All') {
-      // Update tile to show updating then done
       upsertBlock(makeBlock({
         blockID: 'brew-tile',
         scriptID: 'brew-monitor',
@@ -50,6 +51,9 @@ function simulateScriptResponse(blockID: string, value: string) {
       // Clear the alert block too
       const alertIdx = blocks.findIndex(b => b.blockID === 'brew-alert')
       if (alertIdx >= 0) { blocks.splice(alertIdx, 1); broadcast('block_cleared', { blockID: 'brew-alert' }) }
+      // Clear the countdown block
+      const cdIdx = blocks.findIndex(b => b.blockID === 'brew-countdown')
+      if (cdIdx >= 0) { blocks.splice(cdIdx, 1); broadcast('block_cleared', { blockID: 'brew-countdown' }) }
       // After a simulated delay, mark done and add feed entry
       setTimeout(() => {
         upsertBlock(makeBlock({
@@ -72,9 +76,9 @@ function simulateScriptResponse(blockID: string, value: string) {
             color: 'green',
           }),
         }))
-      }, 1500)
+      }, 2000)
     } else {
-      // Skip — just update tile back to idle and add feed entry
+      // Skip — update tile and add feed entry
       upsertBlock(makeBlock({
         blockID: 'brew-tile',
         scriptID: 'brew-monitor',
@@ -96,12 +100,33 @@ function simulateScriptResponse(blockID: string, value: string) {
         }),
       }))
     }
+    return true  // clear the quick_reply block
+  }
+
+  // ---- Claude Code bash permission block ----
+  // Clearing this block should also update the linked session block.
+  if (blockID === 'claudecode-bash-permission') {
+    const sessionIdx = blocks.findIndex(b => b.blockID === 'claudecode-session-a3f91c2b')
+    if (sessionIdx >= 0) {
+      const p = JSON.parse(blocks[sessionIdx].payload)
+      delete p.pending_confirmation
+      if (value === 'Allow') {
+        p.is_working = true
+        p.current_tool = 'Bash'
+        p.current_preview = 'rsync --delete ask/scripts/ ~/.ask/scripts/claude-3/'
+      } else {
+        p.is_working = false
+        p.last_message = 'Permission denied. The command was not run.'
+      }
+      blocks[sessionIdx] = { ...blocks[sessionIdx], payload: JSON.stringify(p) }
+      broadcast('block_updated', blocks[sessionIdx])
+    }
+    return true  // clear the confirmation block
   }
 
   // ---- Claude Code session actions ----
   if (blockID === 'claudecode-session-a3f91c2b') {
     if (value === '__close_session__') {
-      // Add session_event: stopped
       upsertBlock(makeBlock({
         blockID: `event-stopped-${++feedSeq}`,
         scriptID: 'claude-3',
@@ -110,7 +135,6 @@ function simulateScriptResponse(blockID: string, value: string) {
         scriptType: 'tile',
         payload: JSON.stringify({ event: 'stopped', project: 'code/ask [a3f9]', cwd: '/Users/kevin/Documents/code/ask' }),
       }))
-      // Update tile to idle
       upsertBlock(makeBlock({
         blockID: 'claudecode-tile',
         scriptID: 'claude-3',
@@ -118,8 +142,9 @@ function simulateScriptResponse(blockID: string, value: string) {
         blockType: 'tile',
         payload: JSON.stringify({ label: 'Idle', status_color: 'green' }),
       }))
+      return true  // clear the session block on stop
     } else if (value === '__permissions__') {
-      // Toggle permission mode in the session block — update payload
+      // Toggle permission mode — update in-place
       const idx = blocks.findIndex(b => b.blockID === blockID)
       if (idx >= 0) {
         const p = JSON.parse(blocks[idx].payload)
@@ -127,8 +152,9 @@ function simulateScriptResponse(blockID: string, value: string) {
         blocks[idx] = { ...blocks[idx], payload: JSON.stringify(p) }
         broadcast('block_updated', blocks[idx])
       }
+      return false  // keep the session block alive
     } else {
-      // Pending confirmation response — clear it and simulate resuming
+      // Pending confirmation response — update in-place, keep session alive
       const idx = blocks.findIndex(b => b.blockID === blockID)
       if (idx >= 0) {
         const p = JSON.parse(blocks[idx].payload)
@@ -139,8 +165,11 @@ function simulateScriptResponse(blockID: string, value: string) {
         blocks[idx] = { ...blocks[idx], payload: JSON.stringify(p) }
         broadcast('block_updated', blocks[idx])
       }
+      return false  // keep the session block alive
     }
   }
+
+  return true  // default: caller should clear
 }
 
 function broadcast(eventName: string, data: unknown) {
@@ -199,11 +228,11 @@ const server = http.createServer(async (req, res) => {
     const body = await readBody(req)
     const { value } = JSON.parse(body) as { value: string }
     console.log(`[MockAskMac] respond ${blockID} → "${value}"`)
-    const prev = blocks.length
-    blocks = blocks.filter(b => b.blockID !== blockID)
-    if (blocks.length < prev) {
-      broadcast('block_cleared', { blockID })
-      simulateScriptResponse(blockID, value)
+    const shouldClear = simulateScriptResponse(blockID, value)
+    if (shouldClear) {
+      const prev = blocks.length
+      blocks = blocks.filter(b => b.blockID !== blockID)
+      if (blocks.length < prev) broadcast('block_cleared', { blockID })
     }
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ ok: true }))
