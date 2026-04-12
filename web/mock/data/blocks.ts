@@ -21,7 +21,7 @@ export const FIXTURE_BLOCKS: Block[] = [
     scriptName: 'Claude Code',
     blockType: 'tile',
     scriptType: 'tile',
-    payload: JSON.stringify({ label: 'Running', status_color: 'blue', body: 'Refactoring auth middleware...' }),
+    payload: JSON.stringify({ label: 'Running', status_color: 'blue', body: 'Working on agent gap remediation...' }),
   }),
   block({
     blockID: 'claudecode-session-a3f91c2b',
@@ -44,7 +44,7 @@ export const FIXTURE_BLOCKS: Block[] = [
     }),
   }),
   block({
-    blockID: 'claudecode-confirmation-deploy',
+    blockID: 'claudecode-confirmation-lint',
     scriptID: 'claude-3',
     scriptName: 'Claude Code',
     blockType: 'confirmation',
@@ -70,72 +70,7 @@ export const FIXTURE_BLOCKS: Block[] = [
       repos: [
         { name: 'code/ask', path: '/Users/kevin/Documents/code/ask' },
         { name: 'code/api-server', path: '/Users/kevin/Documents/code/api-server' },
-        { name: 'code/dashboard', path: '/Users/kevin/Documents/code/dashboard' },
       ],
-    }),
-  }),
-
-  // ---- Deploy Manager script ----
-  block({
-    blockID: 'deploy-tile',
-    scriptID: 'deploy-manager',
-    scriptName: 'Deploy Manager',
-    blockType: 'tile',
-    scriptType: 'tile',
-    payload: JSON.stringify({ label: 'Idle', status_color: 'green' }),
-  }),
-  block({
-    blockID: 'deploy-status',
-    scriptID: 'deploy-manager',
-    scriptName: 'Deploy Manager',
-    blockType: 'status',
-    scriptType: 'tile',
-    payload: JSON.stringify({ label: 'Deployment Running', detail: 'Step 3 of 7 — uploading assets to S3', color: 'blue' }),
-  }),
-  block({
-    blockID: 'deploy-info-pr',
-    scriptID: 'deploy-manager',
-    scriptName: 'Deploy Manager',
-    blockType: 'info_card',
-    scriptType: 'tile',
-    payload: JSON.stringify({
-      title: 'Pull Request #482',
-      pairs: [
-        { key: 'Branch', value: 'feature/auth' },
-        { key: 'Author', value: 'kevin' },
-        { key: 'Status', value: 'Ready for review' },
-        { key: 'Changed', value: '14 files' },
-      ],
-    }),
-  }),
-  block({
-    blockID: 'deploy-list-prs',
-    scriptID: 'deploy-manager',
-    scriptName: 'Deploy Manager',
-    blockType: 'list',
-    scriptType: 'tile',
-    requiresResponse: 1,
-    payload: JSON.stringify({
-      title: 'Open Pull Requests',
-      items: [
-        { id: 'pr-482', label: '#482 feature/auth', subtitle: 'Ready for review' },
-        { id: 'pr-479', label: '#479 fix/timeout', subtitle: '2 reviewers approved' },
-        { id: 'pr-471', label: '#471 chore/deps', subtitle: 'Needs rebase' },
-      ],
-      actions: ['Refresh'],
-    }),
-  }),
-  block({
-    blockID: 'deploy-picker-env',
-    scriptID: 'deploy-manager',
-    scriptName: 'Deploy Manager',
-    blockType: 'picker',
-    scriptType: 'tile',
-    requiresResponse: 1,
-    payload: JSON.stringify({
-      title: 'Target environment',
-      options: ['staging', 'production', 'canary'],
-      selected: 'staging',
     }),
   }),
 
@@ -189,7 +124,7 @@ export const FIXTURE_BLOCKS: Block[] = [
     }),
   }),
 
-  // ---- Claude Message (no-reply) ----
+  // ---- Claude Code: header blocks ----
   block({
     blockID: 'claude-message-1',
     scriptID: 'claude-3',
@@ -201,8 +136,6 @@ export const FIXTURE_BLOCKS: Block[] = [
       session_id: 'session-a3f91c2b',
     }),
   }),
-
-  // ---- Chat Prompt ----
   block({
     blockID: 'chat-prompt-1',
     scriptID: 'claude-3',
@@ -218,23 +151,6 @@ export const FIXTURE_BLOCKS: Block[] = [
       urgency: 'warning',
     }),
   }),
-
-  // ---- Detail block ----
-  block({
-    blockID: 'deploy-detail-pr482',
-    scriptID: 'deploy-manager',
-    scriptName: 'Deploy Manager',
-    blockType: 'detail',
-    scriptType: 'tile',
-    requiresResponse: 1,
-    payload: JSON.stringify({
-      title: 'PR #482 — feature/auth',
-      body: "Adds OAuth2 token refresh logic to the auth middleware.\nFixes the 401 loop seen in staging after token expiry.\n\nTests: 42 added, 0 failing.\nCoverage: 87% (+3%).",
-      actions: ['Merge', 'Close PR', 'Request Changes'],
-    }),
-  }),
-
-  // ---- Prompt block ----
   block({
     blockID: 'prompt-commit-msg',
     scriptID: 'claude-3',
@@ -260,7 +176,7 @@ export const FIXTURE_BLOCKS: Block[] = [
     scriptType: 'feed',
     payload: JSON.stringify({
       title: 'Session started',
-      body: 'Claude Code is working on ask/auth refactor',
+      body: 'Claude Code is working on ask/agent gap remediation',
       timestamp: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
       color: 'blue',
     }),
