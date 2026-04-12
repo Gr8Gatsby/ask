@@ -1097,6 +1097,8 @@ struct AgentSessionBlockView: View {
     /// we pick up the task_id even if it arrived after view init.
     @Query private var machineTasks: [TaskRecord]
 
+    @Environment(TaskHistoryStore.self) private var taskHistory
+
     @State private var text = ""
     @State private var responding = false
     @State private var sentMessage = ""
@@ -1200,17 +1202,28 @@ struct AgentSessionBlockView: View {
                     Text("This will send Ctrl+C to the terminal and end the \(payload.project) session.")
                 }
 
-                if feedTask != nil {
+                if let tid = payload.taskId, !tid.isEmpty {
                     Button {
-                        feedSheetTask = feedTask
-                        showFeedSheet = true
+                        if let task = feedTask {
+                            feedSheetTask = task
+                            showFeedSheet = true
+                        } else {
+                            Task {
+                                await taskHistory.refresh(machineIDs: [machineID])
+                                if let task = feedTask {
+                                    feedSheetTask = task
+                                    showFeedSheet = true
+                                }
+                            }
+                        }
                     } label: {
                         Image(systemName: "list.bullet")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(feedTask != nil ? .secondary : .tertiary)
                             .padding(.leading, 2)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("agent-session-feed-\(tid)")
                 }
             }
             .padding(.bottom, isCollapsed ? 0 : -4)
@@ -1347,6 +1360,10 @@ struct AgentSessionBlockView: View {
         .onAppear {
             if let msg = payload.lastMessage, !msg.isEmpty {
                 lastSeenMessage = msg
+            }
+            // Populate the task record so the feed button becomes active.
+            if payload.taskId != nil && feedTask == nil {
+                Task { await taskHistory.refresh(machineIDs: [machineID]) }
             }
         }
         .onChange(of: payload.lastMessage) { _, newMsg in
