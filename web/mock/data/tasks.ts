@@ -23,6 +23,17 @@ export const FIXTURE_TASKS: AskTask[] = [
     messageCount: 8,
     artifactCount: 2,
   },
+  {
+    taskID: 'task-003',
+    machineID: 'mac-dev-1',
+    scriptID: 'claude-3',
+    scriptName: 'Claude Code',
+    title: 'Screenshot UI and generate design notes',
+    status: 'completed',
+    lastActivityAt: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+    messageCount: 5,
+    artifactCount: 1,
+  },
 ]
 
 export const FIXTURE_TASK_MESSAGES: Record<string, TaskMessage[]> = {
@@ -101,6 +112,77 @@ export const FIXTURE_TASK_MESSAGES: Record<string, TaskMessage[]> = {
       partsJSON: JSON.stringify([{ type: 'text', text: "**Session stopped**\n\nClaude Code exited in `ask`." }]),
       timestamp: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
       sequenceNumber: 2,
+    },
+  ],
+
+  'task-003': [
+    {
+      messageID: 'msg-301',
+      taskID: 'task-003',
+      role: 'user',
+      partsJSON: JSON.stringify([
+        { type: 'text', text: 'Take a screenshot of the web dev UI and write up design notes.' },
+        {
+          type: 'document',
+          source: {
+            type: 'base64',
+            media_type: 'text/plain',
+            data: btoa('Design brief: focus on parity with iOS app dark palette'),
+            filename: 'design-brief.txt',
+          },
+        },
+      ]),
+      timestamp: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
+      sequenceNumber: 0,
+    },
+    {
+      messageID: 'msg-302',
+      taskID: 'task-003',
+      role: 'assistant',
+      partsJSON: JSON.stringify([
+        {
+          type: 'tool_use',
+          id: 'tu_01',
+          name: 'mcp__playwright__browser_take_screenshot',
+          input: { type: 'png' },
+        },
+      ]),
+      timestamp: new Date(Date.now() - 24 * 60 * 1000).toISOString(),
+      sequenceNumber: 1,
+    },
+    {
+      messageID: 'msg-303',
+      taskID: 'task-003',
+      role: 'user',
+      partsJSON: JSON.stringify([
+        {
+          type: 'tool_result',
+          tool_use_id: 'tu_01',
+          content: 'Screenshot saved to .playwright-mcp/page-2026-04-12.png',
+        },
+        {
+          type: 'image',
+          source: {
+            type: 'url',
+            url: 'https://placehold.co/390x844/1c1c1e/8e8e93?text=Web+Dev+UI',
+          },
+        },
+      ]),
+      timestamp: new Date(Date.now() - 23 * 60 * 1000).toISOString(),
+      sequenceNumber: 2,
+    },
+    {
+      messageID: 'msg-304',
+      taskID: 'task-003',
+      role: 'assistant',
+      partsJSON: JSON.stringify([
+        {
+          type: 'text',
+          text: "## Design notes\n\n**Palette** — matches iOS dark system colors (`#1c1c1e` bg, `#2c2c2e` card). Good.\n\n**Typography** — SF Pro replaced by system font stack; rendering is close but line-height is slightly tighter on web.\n\n**Gaps vs iOS:**\n- Action cards use `bg-ask-card` but iOS uses a blur effect on the card background\n- Session row chevron (`›`) should be `chevron.right` SF Symbol at 12pt, not a text character\n- Countdown block timer font should be monospaced digits\n\n**Recommendation:** Add `tabular-nums` to the countdown and use `backdrop-blur` on cards.",
+        },
+      ]),
+      timestamp: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+      sequenceNumber: 3,
     },
   ],
 }
