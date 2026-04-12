@@ -9,7 +9,7 @@ export default function IconCardBlock({ payload }: Props) {
         <span className="text-xl">📋</span>
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-white leading-tight">{payload.title}</p>
+        <p className="text-sm font-semibold text-ask-text leading-tight">{payload.title}</p>
         {payload.subtitle && (
           <p className="text-xs text-ask-secondary mt-0.5 truncate">{payload.subtitle}</p>
         )}

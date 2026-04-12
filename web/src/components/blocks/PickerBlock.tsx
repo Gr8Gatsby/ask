@@ -12,11 +12,11 @@ export default function PickerBlock({ block, payload, onRespond }: Props) {
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-sm font-semibold text-white">{payload.title}</p>
+      <p className="text-sm font-semibold text-ask-text">{payload.title}</p>
       <select
         value={selected}
         onChange={e => setSelected(e.target.value)}
-        className="w-full bg-ask-card2 rounded-lg px-3 py-2 text-sm text-white outline-none focus:ring-1 focus:ring-ask-blue appearance-none"
+        className="w-full bg-ask-card2 rounded-lg px-3 py-2 text-sm text-ask-text outline-none focus:ring-1 focus:ring-ask-blue appearance-none"
       >
         {payload.options.map(opt => (
           <option key={opt} value={opt}>{opt}</option>

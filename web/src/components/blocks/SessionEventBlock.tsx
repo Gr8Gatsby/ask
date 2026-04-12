@@ -9,7 +9,7 @@ export default function SessionEventBlock({ payload }: Props) {
       <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${started ? 'bg-ask-green' : 'bg-ask-secondary'}`} />
       <span className="text-xs text-ask-secondary">
         {started ? 'Session started' : 'Session stopped'}
-        {payload.project && <> · <span className="text-white/70">{payload.project}</span></>}
+        {payload.project && <> · <span className="text-ask-text/70">{payload.project}</span></>}
       </span>
     </div>
   )

@@ -19,7 +19,7 @@ export default function ChatPromptBlock({ block, payload, onRespond }: Props) {
   return (
     <div className="flex flex-col gap-3">
       {payload.context && (
-        <div className="bg-black/20 rounded-lg p-3 border border-ask-sep">
+        <div className="bg-ask-card2 rounded-lg p-3 border border-ask-sep">
           <div className="flex items-center gap-1.5 mb-2">
             <div className="w-4 h-4 rounded-full bg-[#74AA9C] flex items-center justify-center text-[8px] font-bold text-white">C</div>
             <span className="text-xs font-medium text-ask-secondary">Claude Code</span>
@@ -34,7 +34,7 @@ export default function ChatPromptBlock({ block, payload, onRespond }: Props) {
           onChange={e => setValue(e.target.value)}
           placeholder={payload.placeholder ?? 'Reply to Claude...'}
           onKeyDown={e => { if (e.key === 'Enter') submit() }}
-          className="flex-1 bg-ask-card2 rounded-lg px-3 py-2 text-sm text-white placeholder-ask-secondary outline-none focus:ring-1 focus:ring-ask-blue"
+          className="flex-1 bg-ask-card2 rounded-lg px-3 py-2 text-sm text-ask-text placeholder-ask-secondary outline-none focus:ring-1 focus:ring-ask-blue"
         />
         <button
           onClick={submit}

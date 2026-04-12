@@ -304,7 +304,7 @@ export default function AppShell({ children }: Props) {
               className={`flex flex-col ${isAndroid ? 'platform-android' : ''} ${isLight ? 'theme-light' : ''}`}
               style={{
                 width: 390,
-                height: 'min(calc(100vh - 140px), 844px)',
+                height: 844,
                 borderRadius: innerRadius,
                 overflow: 'hidden',
                 backgroundColor: isAndroid

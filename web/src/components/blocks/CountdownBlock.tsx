@@ -31,7 +31,7 @@ export default function CountdownBlock({ payload }: Props) {
   return (
     <div className="flex items-center gap-2">
       <div className={`w-2 h-2 rounded-full flex-shrink-0 ${overdue ? 'bg-ask-red' : 'bg-ask-orange'}`} />
-      <span className="text-sm font-semibold text-white">{payload.label}</span>
+      <span className="text-sm font-semibold text-ask-text">{payload.label}</span>
       <span className={`text-sm ml-auto font-mono tabular-nums ${overdue ? 'text-ask-red' : 'text-ask-secondary'}`}>{display}</span>
     </div>
   )

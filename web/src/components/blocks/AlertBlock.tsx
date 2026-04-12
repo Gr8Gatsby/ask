@@ -25,7 +25,7 @@ export default function AlertBlock({ payload }: Props) {
           className={`flex-shrink-0 mt-0.5 ${icon.color}`}
         />
         <div className="flex-1 min-w-0">
-          <p className={`${theme.typeBodyLarge} text-white`}>{payload.title}</p>
+          <p className={`${theme.typeBodyLarge} text-ask-text`}>{payload.title}</p>
           {payload.body && (
             <p className={`${theme.typeBodyMedium} text-ask-secondary mt-1`}>{payload.body}</p>
           )}
@@ -46,7 +46,7 @@ export default function AlertBlock({ payload }: Props) {
       />
       <div className="flex-1 min-w-0">
         {/* iOS footnote (13pt) semibold title */}
-        <p className="text-[13px] font-semibold text-white leading-snug">{payload.title}</p>
+        <p className="text-[13px] font-semibold text-ask-text leading-snug">{payload.title}</p>
         {payload.body && (
           /* iOS caption2 (11pt) secondary body */
           <p className="text-[11px] font-normal text-ask-secondary mt-[2px] leading-relaxed">{payload.body}</p>

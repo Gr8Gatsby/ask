@@ -19,7 +19,7 @@ export default function PromptBlock({ block, payload, onRespond }: Props) {
 
   return (
     <div className="flex flex-col gap-3">
-      <p className={`${theme.typeTitleMedium} text-white`}>{payload.title}</p>
+      <p className={`${theme.typeTitleMedium} text-ask-text`}>{payload.title}</p>
 
       {payload.multiline ? (
         <textarea

@@ -23,7 +23,7 @@ function ToolUseCard({ part }: { part: ToolUsePart }) {
     <div className="rounded-lg border border-ask-sep bg-ask-card2/50 overflow-hidden text-xs">
       <button
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-white/5 transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-ask-text/[0.05] transition-colors"
       >
         <span className="text-[10px] font-mono bg-ask-card px-1.5 py-0.5 rounded text-ask-blue border border-ask-sep">
           {part.name}
@@ -52,7 +52,7 @@ function ToolResultCard({ part }: { part: ToolResultPart }) {
     <div className="rounded-lg border border-ask-sep bg-ask-card2/30 overflow-hidden text-xs">
       <button
         onClick={() => truncated && setOpen(o => !o)}
-        className={`w-full flex items-center gap-2 px-3 py-2 text-left ${truncated ? 'hover:bg-white/5 transition-colors cursor-pointer' : 'cursor-default'}`}
+        className={`w-full flex items-center gap-2 px-3 py-2 text-left ${truncated ? 'hover:bg-ask-text/[0.05] transition-colors cursor-pointer' : 'cursor-default'}`}
       >
         <span className="text-[10px] font-mono bg-ask-card px-1.5 py-0.5 rounded text-ask-green border border-ask-sep">result</span>
         <span className="text-ask-secondary flex-1 truncate font-mono">{preview}</span>
@@ -91,7 +91,7 @@ function DocumentCard({ part }: { part: DocumentPart }) {
       <div className="w-8 h-8 rounded bg-ask-card2 flex items-center justify-center text-[9px] font-bold text-ask-secondary flex-shrink-0">
         {ext}
       </div>
-      <span className="text-xs text-white truncate">{filename}</span>
+      <span className="text-xs text-ask-text truncate">{filename}</span>
     </div>
   )
 }
@@ -102,7 +102,7 @@ function ThinkingCard({ part }: { part: ThinkingPart }) {
     <div className="rounded-lg border border-ask-sep bg-ask-card2/20 overflow-hidden text-xs italic">
       <button
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-white/5 transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-ask-text/[0.05] transition-colors"
       >
         <span className="text-ask-secondary/70">thinking…</span>
         <span className="text-ask-secondary text-[10px] ml-auto">{open ? '▾' : '▸'}</span>
@@ -144,7 +144,7 @@ export default function TaskThreadScreen() {
       <div className="flex items-center gap-3 px-4 pt-3 pb-3 border-b border-ask-sep flex-shrink-0">
         <button onClick={() => navigate(-1)} className="text-ask-blue text-sm">‹ Back</button>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-white truncate">{task?.title ?? 'Task'}</p>
+          <p className="text-sm font-semibold text-ask-text truncate">{task?.title ?? 'Task'}</p>
           <p className="text-[10px] text-ask-secondary">{task?.scriptName}</p>
         </div>
       </div>

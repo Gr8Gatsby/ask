@@ -63,7 +63,7 @@ export default function ActionQueueCard({ scriptID, blocks, onRespond }: Props) 
       {/* Script header row — always navigates to script detail */}
       <button
         onClick={() => navigate(`/script/${scriptID}`)}
-        className="w-full flex items-center gap-3 px-3.5 py-3.5 hover:bg-white/5 transition-colors text-left"
+        className="w-full flex items-center gap-3 px-3.5 py-3.5 hover:bg-ask-text/[0.05] transition-colors text-left"
       >
         <ScriptIcon
           scriptIconData={first.scriptIconData}
@@ -73,7 +73,7 @@ export default function ActionQueueCard({ scriptID, blocks, onRespond }: Props) 
           size={30}
         />
         <div className="flex-1 min-w-0">
-          <p className="text-[15px] font-semibold text-white leading-tight">{first.scriptName}</p>
+          <p className="text-[15px] font-semibold text-ask-text leading-tight">{first.scriptName}</p>
           {tilePayload && (
             <div className="flex items-center gap-1.5 mt-0.5">
               <div className={`w-1.5 h-1.5 rounded-full ${DOT[tilePayload.status_color ?? ''] ?? 'bg-ask-secondary'}`} />

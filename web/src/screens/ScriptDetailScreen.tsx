@@ -33,7 +33,7 @@ function SessionRow({
         className={`w-2 h-2 rounded-full flex-shrink-0 ${payload.is_working ? 'bg-ask-blue animate-pulse' : 'bg-ask-card2'}`}
       />
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-white">{payload.project}</p>
+        <p className="text-sm font-semibold text-ask-text">{payload.project}</p>
         <p className="text-xs text-ask-secondary truncate">
           {payload.is_working
             ? `${payload.agent_name ?? 'Claude'} is working…`
@@ -106,7 +106,7 @@ export default function ScriptDetailScreen() {
               scriptName={first.scriptName}
               size={24}
             />
-            <span className={`${theme.typeTitleMedium} text-white truncate`}>{first.scriptName}</span>
+            <span className={`${theme.typeTitleMedium} text-ask-text truncate`}>{first.scriptName}</span>
           </div>
         )}
       </div>

@@ -28,18 +28,18 @@ function PermissionBlock({ block, payload, onRespond }: Props) {
         <span className={`${theme.sectionHeader} text-ask-orange`}>Permission needed</span>
       </div>
 
-      <p className={`${theme.typeTitleMedium} text-white`}>{payload.title}</p>
+      <p className={`${theme.typeTitleMedium} text-ask-text`}>{payload.title}</p>
 
       {payload.body && (
         <p className={`${theme.typeBodyMedium} text-ask-secondary`}>{payload.body}</p>
       )}
 
       {payload.command && (
-        <div className={`${theme.isAndroid ? 'rounded-2xl' : 'rounded-xl'} bg-black/50 border border-ask-sep/40 px-3 py-2.5`}>
+        <div className={`${theme.isAndroid ? 'rounded-2xl' : 'rounded-xl'} bg-ask-card2 border border-ask-sep/40 px-3 py-2.5`}>
           <p className={`${theme.typeLabelMedium} text-ask-secondary mb-1.5`}>
             {theme.isAndroid ? 'Command' : 'Bash wants to run:'}
           </p>
-          <pre className="text-xs font-mono text-white whitespace-pre-wrap break-all leading-relaxed">
+          <pre className="text-xs font-mono text-ask-text whitespace-pre-wrap break-all leading-relaxed">
             {payload.command}
           </pre>
         </div>
@@ -96,7 +96,7 @@ export default function ConfirmationBlock({ block, payload, onRespond }: Props) 
           className={`flex-shrink-0 mt-0.5 ${urgencyIcon.color}`}
         />
         <div className="flex-1 min-w-0">
-          <p className={`${theme.typeTitleMedium} text-white leading-snug`}>{payload.title}</p>
+          <p className={`${theme.typeTitleMedium} text-ask-text leading-snug`}>{payload.title}</p>
           {payload.body && (
             <p className={`${theme.typeBodyMedium} text-ask-secondary mt-0.5`}>{payload.body}</p>
           )}

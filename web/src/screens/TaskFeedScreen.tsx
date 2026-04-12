@@ -42,11 +42,11 @@ function TaskRow({ task, onClick }: { task: AskTask; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      className="w-full flex items-start gap-3 px-4 py-3.5 hover:bg-white/5 transition-colors text-left border-b border-ask-sep"
+      className="w-full flex items-start gap-3 px-4 py-3.5 hover:bg-ask-text/[0.05] transition-colors text-left border-b border-ask-sep"
     >
       <div className="flex-1 min-w-0">
         <div className="flex items-start justify-between gap-2 mb-0.5">
-          <p className="text-sm text-white font-medium leading-snug">{task.title}</p>
+          <p className="text-sm text-ask-text font-medium leading-snug">{task.title}</p>
           <span className="text-[10px] text-ask-secondary flex-shrink-0 mt-0.5">{relativeTime(task.lastActivityAt)}</span>
         </div>
         <div className="flex items-center gap-2">
@@ -90,7 +90,7 @@ export default function TaskFeedScreen() {
   return (
     <div className="flex flex-col h-full">
       <div className="px-4 pt-3 pb-3 border-b border-ask-sep flex-shrink-0">
-        <h1 className="text-xl font-bold text-white">Feed</h1>
+        <h1 className="text-xl font-bold text-ask-text">Feed</h1>
       </div>
 
       <div className="flex-1 overflow-y-auto no-scrollbar">

@@ -27,10 +27,10 @@ export default function AgentSessionBlock({ block, payload, onRespond }: Props) 
       {/* Header row */}
       <div className="flex items-center gap-2">
         <div
-          className="w-2 h-2 rounded-full flex-shrink-0"
-          style={{ backgroundColor: payload.is_working ? accentColor : '#8e8e93' }}
+          className={`w-2 h-2 rounded-full flex-shrink-0 ${!payload.is_working ? 'bg-ask-secondary' : ''}`}
+          style={payload.is_working ? { backgroundColor: accentColor } : undefined}
         />
-        <span className="flex-1 text-sm font-semibold text-white truncate">{payload.project}</span>
+        <span className="flex-1 text-sm font-semibold text-ask-text truncate">{payload.project}</span>
         {payload.task_id && (
           <button
             onClick={() => navigate(`/tasks/${payload.task_id}`)}
@@ -41,7 +41,7 @@ export default function AgentSessionBlock({ block, payload, onRespond }: Props) 
         )}
         <button
           onClick={() => setCollapsed(c => !c)}
-          className="text-ask-secondary text-xs hover:text-white transition-colors"
+          className="text-ask-secondary text-xs hover:text-ask-text transition-colors"
         >
           {collapsed ? '▼' : '▲'}
         </button>
@@ -52,7 +52,7 @@ export default function AgentSessionBlock({ block, payload, onRespond }: Props) 
       ) : (
         <>
           {/* Last message */}
-          <div className="bg-black/20 rounded-lg p-3 border border-ask-sep min-h-[48px]">
+          <div className="bg-ask-card2 rounded-lg p-3 border border-ask-sep min-h-[48px]">
             {payload.is_working ? (
               <div className="flex items-center gap-2">
                 <div className="flex gap-1">
@@ -81,7 +81,7 @@ export default function AgentSessionBlock({ block, payload, onRespond }: Props) 
               onChange={e => setReply(e.target.value)}
               placeholder={payload.placeholder ?? 'Reply to Claude...'}
               onKeyDown={e => { if (e.key === 'Enter') submit() }}
-              className="flex-1 bg-ask-card2 rounded-lg px-3 py-2 text-sm text-white placeholder-ask-secondary outline-none focus:ring-1 focus:ring-ask-blue"
+              className="flex-1 bg-ask-card2 rounded-lg px-3 py-2 text-sm text-ask-text placeholder-ask-secondary outline-none focus:ring-1 focus:ring-ask-blue"
             />
             <button
               onClick={submit}

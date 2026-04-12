@@ -9,7 +9,7 @@ interface Props {
 export default function DetailBlock({ block, payload, onRespond }: Props) {
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-sm font-semibold text-white">{payload.title}</p>
+      <p className="text-sm font-semibold text-ask-text">{payload.title}</p>
       <div className="border-t border-ask-sep pt-2">
         <p className="text-xs text-ask-secondary leading-relaxed whitespace-pre-wrap">{payload.body}</p>
       </div>
@@ -19,7 +19,7 @@ export default function DetailBlock({ block, payload, onRespond }: Props) {
             <button
               key={action}
               onClick={() => onRespond(block.blockID, action)}
-              className="flex-1 min-w-[80px] py-2 rounded-lg bg-ask-card2 text-sm font-medium text-white hover:bg-ask-blue hover:text-white transition-colors"
+              className="flex-1 min-w-[80px] py-2 rounded-lg bg-ask-card2 text-sm font-medium text-ask-text hover:bg-ask-blue hover:text-white transition-colors"
             >
               {action}
             </button>

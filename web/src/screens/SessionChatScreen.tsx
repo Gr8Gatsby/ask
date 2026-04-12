@@ -127,13 +127,13 @@ function PendingConfirmationBar({
 }) {
   return (
     <div className="border-t border-ask-sep/50 bg-ask-orange/5 px-4 pt-3 pb-2" style={{ borderTopColor: `${accentColor}40` }}>
-      <p className="text-xs font-semibold text-white mb-2">{title}</p>
+      <p className="text-xs font-semibold text-ask-text mb-2">{title}</p>
       <div className="flex flex-wrap gap-2">
         {options.map(opt => (
           <button
             key={opt}
             onClick={() => onRespond(opt)}
-            className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-ask-sep bg-ask-card hover:bg-ask-card2 transition-colors text-white"
+            className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-ask-sep bg-ask-card hover:bg-ask-card2 transition-colors text-ask-text"
           >
             {opt}
           </button>
@@ -205,13 +205,13 @@ export default function SessionChatScreen() {
             <div className="w-2 h-2 rounded-full flex-shrink-0 animate-pulse" style={{ backgroundColor: accentColor }} />
           )}
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-white truncate">{payload?.project ?? sessionID}</p>
+            <p className="text-sm font-semibold text-ask-text truncate">{payload?.project ?? sessionID}</p>
             <div className="flex items-center gap-2">
               <p className="text-[10px] text-ask-secondary">{payload?.agent_name ?? 'Claude Code'}</p>
               {payload?.permission_mode && (
                 <button
                   onClick={handlePermissionToggle}
-                  className="text-[10px] px-1.5 py-0.5 rounded bg-ask-card2 text-ask-secondary hover:text-white transition-colors"
+                  className="text-[10px] px-1.5 py-0.5 rounded bg-ask-card2 text-ask-secondary hover:text-ask-text transition-colors"
                 >
                   {payload.permission_mode === 'full-auto' ? 'auto' : 'supervised'}
                 </button>
@@ -261,7 +261,7 @@ export default function SessionChatScreen() {
                   <div className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${
                     msg.role === 'user'
                       ? 'bg-ask-blue text-white rounded-br-sm'
-                      : 'bg-ask-card text-white rounded-bl-sm'
+                      : 'bg-ask-card text-ask-text rounded-bl-sm'
                   }`}>
                     {parts.map((p, i) => renderPart(p, i))}
                   </div>
@@ -340,7 +340,7 @@ export default function SessionChatScreen() {
               className={`disabled:opacity-40 flex-shrink-0 ${
                 theme.isAndroid
                   ? 'w-10 h-10 rounded-full flex items-center justify-center'
-                  : 'px-4 py-2.5 rounded-xl text-sm font-semibold'
+                  : 'px-4 py-2.5 rounded-xl text-sm font-semibold text-white'
               }`}
               style={{ backgroundColor: accentColor }}
             >

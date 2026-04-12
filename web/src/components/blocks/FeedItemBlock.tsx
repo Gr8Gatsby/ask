@@ -17,7 +17,7 @@ export default function FeedItemBlock({ payload }: Props) {
     <div className="flex items-start gap-2">
       <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${dot}`} />
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-white">{payload.title}</p>
+        <p className="text-sm font-semibold text-ask-text">{payload.title}</p>
         {payload.body && <p className="text-xs text-ask-secondary mt-0.5">{payload.body}</p>}
       </div>
       {payload.timestamp && (

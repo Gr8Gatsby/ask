@@ -17,7 +17,7 @@ export default function StatusBlock({ payload }: Props) {
     <div className="flex items-start gap-2">
       <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${dot}`} />
       <div>
-        <p className="text-sm font-semibold text-white">{payload.label}</p>
+        <p className="text-sm font-semibold text-ask-text">{payload.label}</p>
         {payload.detail && <p className="text-xs text-ask-secondary mt-0.5">{payload.detail}</p>}
       </div>
     </div>

@@ -127,7 +127,7 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
     <div className={cardClass}>
       <button
         onClick={() => navigate(`/script/${scriptID}`)}
-        className="w-full flex items-center gap-3 px-3.5 py-3.5 hover:bg-white/5 transition-colors text-left"
+        className="w-full flex items-center gap-3 px-3.5 py-3.5 hover:bg-ask-text/[0.05] transition-colors text-left"
       >
         <ScriptIcon
           scriptIconData={first.scriptIconData}
@@ -137,7 +137,7 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
           size={30}
         />
         <div className="flex-1 min-w-0">
-          <p className="text-[15px] font-semibold text-white leading-tight truncate">{first.scriptName}</p>
+          <p className="text-[15px] font-semibold text-ask-text leading-tight truncate">{first.scriptName}</p>
           {label && (
             <div className="flex items-center gap-1.5 mt-0.5">
               {color && <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${DOT[color] ?? 'bg-ask-secondary'}`} />}
@@ -199,7 +199,7 @@ function ScriptTile({ scriptID, blocks }: { scriptID: string; blocks: Block[] })
         size={30}
       />
       <div className="flex-1 min-w-0">
-        <p className="text-[15px] font-semibold text-white leading-tight truncate">{first.scriptName}</p>
+        <p className="text-[15px] font-semibold text-ask-text leading-tight truncate">{first.scriptName}</p>
         {label && (
           <div className="flex items-center gap-1.5 mt-0.5">
             {color && <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${DOT[color] ?? 'bg-ask-secondary'}`} />}
@@ -255,7 +255,7 @@ export default function HomeScreen() {
     <div className="flex flex-col h-full">
       {/* Nav */}
       <div className="flex items-center justify-between px-4 pt-3 pb-3 flex-shrink-0">
-        <h1 className="text-xl font-bold text-white">Ask</h1>
+        <h1 className="text-xl font-bold text-ask-text">Ask</h1>
         <span className="text-xs text-ask-secondary">MockAskMac</span>
       </div>
 

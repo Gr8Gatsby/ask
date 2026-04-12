@@ -37,7 +37,7 @@ export default function QuickReplyBlock({ block, payload, onRespond }: Props) {
           className={urgencyColor}
         />
         <div className="flex-1 min-w-0">
-          <p className={`${theme.typeTitleMedium} text-white`}>{payload.title}</p>
+          <p className={`${theme.typeTitleMedium} text-ask-text`}>{payload.title}</p>
           {payload.description && (
             <p className={`${theme.typeBodySmall} text-ask-secondary mt-0.5`}>{payload.description}</p>
           )}
