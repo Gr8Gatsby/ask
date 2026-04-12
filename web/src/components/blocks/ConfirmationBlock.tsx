@@ -1,5 +1,4 @@
 import type { Block, ConfirmationPayload } from '../../lib/types'
-import UrgencyBadge from '../shared/UrgencyBadge'
 
 interface Props {
   block: Block
@@ -7,13 +6,73 @@ interface Props {
   onRespond: (blockID: string, value: string) => void
 }
 
+// Permission-style block — matches iOS "Permission needed" layout
+function PermissionBlock({ block, payload, onRespond }: Props) {
+  const denyOptions = ['Deny', 'Cancel', 'No', 'Reject']
+  const allowOptions = ['Allow', 'Yes', 'Approve', 'Permit']
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-bold text-ask-orange uppercase tracking-wide">Permission needed</span>
+      </div>
+      <p className="text-sm font-semibold text-white">{payload.title}</p>
+      {payload.body && (
+        <p className="text-xs text-ask-secondary leading-relaxed">{payload.body}</p>
+      )}
+      {payload.command && (
+        <div className="bg-black/40 rounded-lg px-3 py-2.5 border border-ask-sep">
+          <p className="text-[10px] text-ask-secondary mb-1">Bash wants to run:</p>
+          <pre className="text-xs text-white font-mono whitespace-pre-wrap break-all leading-relaxed">
+            {payload.command}
+          </pre>
+        </div>
+      )}
+      <div className="flex flex-col gap-2">
+        {payload.options.map(opt => {
+          const isDeny = denyOptions.some(d => opt.toLowerCase().includes(d.toLowerCase()))
+          const isAllow = allowOptions.some(a => opt.toLowerCase().includes(a.toLowerCase()))
+          return (
+            <button
+              key={opt}
+              onClick={() => onRespond(block.blockID, opt)}
+              className={`w-full py-2.5 px-3 rounded-xl text-sm font-semibold transition-colors active:scale-[0.98] ${
+                isDeny
+                  ? 'bg-ask-orange/15 text-ask-orange border border-ask-orange/30 hover:bg-ask-orange/25'
+                  : isAllow
+                  ? 'bg-ask-green/15 text-ask-green border border-ask-green/30 hover:bg-ask-green/25'
+                  : 'bg-ask-card2 text-white hover:bg-ask-card2/80'
+              }`}
+            >
+              {opt}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// Standard confirmation block
 export default function ConfirmationBlock({ block, payload, onRespond }: Props) {
+  if (payload.command) {
+    return <PermissionBlock block={block} payload={payload} onRespond={onRespond} />
+  }
+
   const inline = payload.options.length <= 2
 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-start gap-2">
-        <UrgencyBadge urgency={payload.urgency ?? 'warning'} />
+        <span className={`font-mono text-[10px] font-bold px-1 py-0.5 rounded flex-shrink-0 ${
+          payload.urgency === 'urgent'
+            ? 'text-ask-red bg-ask-red/15'
+            : payload.urgency === 'info'
+            ? 'text-ask-secondary bg-ask-secondary/15'
+            : 'text-ask-orange bg-ask-orange/15'
+        }`}>
+          {payload.urgency === 'urgent' ? '[!]' : payload.urgency === 'info' ? '[i]' : '[~]'}
+        </span>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-white leading-snug">{payload.title}</p>
           {payload.body && <p className="text-xs text-ask-secondary mt-0.5 leading-relaxed">{payload.body}</p>}

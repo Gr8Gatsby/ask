@@ -86,6 +86,25 @@ export const FIXTURE_BLOCKS: Block[] = [
     }),
   }),
 
+  // Bash permission block — surfaces on home screen as alert chip
+  block({
+    blockID: 'claudecode-bash-permission',
+    scriptID: 'claude-3',
+    scriptName: 'Claude Code',
+    blockType: 'confirmation',
+    scriptType: 'tile',
+    requiresResponse: 1,
+    showsInInbox: 1,
+    payload: JSON.stringify({
+      title: 'Permission needed',
+      body: 'Claude Code wants to run a shell command.',
+      command: 'rsync --delete /Users/kevin/Documents/code/ask/ask/scripts/\n  ~/.ask/scripts/claude-3/',
+      options: ['Allow', 'Deny'],
+      session_id: 'session-a3f91c2b',
+      urgency: 'urgent',
+    }),
+  }),
+
   block({
     blockID: 'claudecode-start-session',
     scriptID: 'claude-3',

@@ -32,6 +32,8 @@ export interface ConfirmationPayload {
   options: string[]
   session_id?: string
   urgency?: Urgency
+  command?: string   // if present: render as "Permission needed" bash-style block
+  style?: 'default' | 'list'
 }
 
 export interface AlertPayload {
