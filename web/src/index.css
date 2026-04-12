@@ -9,7 +9,7 @@
 
 /* ---- Platform color tokens (RGB channel triplets for Tailwind opacity support) ---- */
 
-/* iOS — Apple HIG dark palette */
+/* iOS dark — Apple HIG dark palette */
 :root {
   --pt-bg:        28 28 30;     /* #1c1c1e */
   --pt-card:      44 44 46;     /* #2c2c2e */
@@ -27,7 +27,23 @@
   --font-mono: "SF Mono", ui-monospace, Menlo, monospace;
 }
 
-/* Android — Material Design 3 dark palette */
+/* iOS light — Apple HIG light palette */
+.theme-light {
+  --pt-bg:        242 242 247;  /* systemGroupedBackground */
+  --pt-card:      255 255 255;  /* white */
+  --pt-card2:     229 229 234;  /* secondarySystemGroupedBackground */
+  --pt-sep:       60 60 67;     /* separator */
+  --pt-text:      0 0 0;
+  --pt-secondary: 108 108 112;  /* secondaryLabel */
+  --pt-blue:      0 122 255;    /* systemBlue light */
+  --pt-green:     52 199 89;    /* systemGreen light */
+  --pt-orange:    255 149 0;    /* systemOrange light */
+  --pt-red:       255 59 48;    /* systemRed light */
+  --pt-yellow:    255 204 0;    /* systemYellow light */
+  --pt-purple:    175 82 222;   /* systemPurple light */
+}
+
+/* Android dark — Material Design 3 dark palette */
 .platform-android {
   --pt-bg:        20 18 24;     /* #141218  M3 background */
   --pt-card:      33 31 38;     /* #211f26  M3 surface-container */
@@ -46,6 +62,22 @@
 
   /* Apply Roboto to all text inside the Android phone shell */
   font-family: var(--font-sans);
+}
+
+/* Android light — Material Design 3 light palette */
+.platform-android.theme-light {
+  --pt-bg:        255 251 254;  /* M3 background light */
+  --pt-card:      237 232 239;  /* M3 surface-container light */
+  --pt-card2:     230 224 233;  /* M3 surface-container-high light */
+  --pt-sep:       121 116 126;  /* M3 outline-variant light */
+  --pt-text:      28 27 31;     /* M3 on-surface light */
+  --pt-secondary: 73 69 79;     /* M3 on-surface-variant light */
+  --pt-blue:      103 80 164;   /* M3 primary light */
+  --pt-green:     55 107 71;    /* M3 tertiary light */
+  --pt-orange:    154 90 0;     /* M3 amber light */
+  --pt-red:       179 38 30;    /* M3 error light */
+  --pt-yellow:    117 92 0;
+  --pt-purple:    103 80 164;
 }
 
 /* Material Symbols utility class */
@@ -69,7 +101,7 @@
 
 @layer base {
   html, body, #root {
-    @apply h-full bg-ask-bg text-ask-text font-sans;
+    @apply min-h-screen text-ask-text font-sans;
   }
 
   * {
