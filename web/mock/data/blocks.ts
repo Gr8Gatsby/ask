@@ -1,4 +1,38 @@
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
 import type { Block } from '../../src/lib/types.js'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const SCRIPTS_DIR = path.resolve(__dirname, '../../../ask/scripts')
+
+function loadScriptIcon(scriptID: string): string | undefined {
+  try {
+    const svgPath = path.join(SCRIPTS_DIR, scriptID, 'icon.svg')
+    let svg = fs.readFileSync(svgPath, 'utf-8').trim()
+    // Ensure the SVG fills its container
+    svg = svg.replace(/\s(width|height)="[^"]*"/g, '')
+    svg = svg.replace('<svg', '<svg width="100%" height="100%"')
+    return svg
+  } catch {
+    return undefined
+  }
+}
+
+function loadScriptName(scriptID: string, fallback: string): string {
+  try {
+    const manifestPath = path.join(SCRIPTS_DIR, scriptID, 'manifest.json')
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'))
+    return manifest.name ?? fallback
+  } catch {
+    return fallback
+  }
+}
+
+export const CLAUDE3_ICON = loadScriptIcon('claude-3')
+export const CLAUDE3_NAME = loadScriptName('claude-3', 'Claude Code')
+export const BREW_ICON = loadScriptIcon('brew-monitor')
+export const BREW_NAME = loadScriptName('brew-monitor', 'Brew Monitor')
 
 function block(partial: Omit<Block, 'machineID' | 'createdAt' | 'requiresResponse' | 'showsInInbox'> & {
   requiresResponse?: number
@@ -18,7 +52,8 @@ export const FIXTURE_BLOCKS: Block[] = [
   block({
     blockID: 'claudecode-tile',
     scriptID: 'claude-3',
-    scriptName: 'Claude Code',
+    scriptName: CLAUDE3_NAME,
+    scriptIconSVG: CLAUDE3_ICON,
     blockType: 'tile',
     scriptType: 'tile',
     payload: JSON.stringify({ label: 'Working', status_color: 'blue', body: 'Editing SessionChatScreen.tsx…' }),
@@ -28,7 +63,8 @@ export const FIXTURE_BLOCKS: Block[] = [
   block({
     blockID: 'claudecode-event-start',
     scriptID: 'claude-3',
-    scriptName: 'Claude Code',
+    scriptName: CLAUDE3_NAME,
+    scriptIconSVG: CLAUDE3_ICON,
     blockType: 'session_event',
     scriptType: 'tile',
     payload: JSON.stringify({
@@ -42,7 +78,8 @@ export const FIXTURE_BLOCKS: Block[] = [
   block({
     blockID: 'claudecode-activity',
     scriptID: 'claude-3',
-    scriptName: 'Claude Code',
+    scriptName: CLAUDE3_NAME,
+    scriptIconSVG: CLAUDE3_ICON,
     blockType: 'activity_feed',
     scriptType: 'tile',
     payload: JSON.stringify({
@@ -61,7 +98,8 @@ export const FIXTURE_BLOCKS: Block[] = [
   block({
     blockID: 'claudecode-session-a3f91c2b',
     scriptID: 'claude-3',
-    scriptName: 'Claude Code',
+    scriptName: CLAUDE3_NAME,
+    scriptIconSVG: CLAUDE3_ICON,
     blockType: 'agent_session',
     scriptType: 'tile',
     requiresResponse: 1,
@@ -96,7 +134,8 @@ export const FIXTURE_BLOCKS: Block[] = [
   block({
     blockID: 'claudecode-bash-permission',
     scriptID: 'claude-3',
-    scriptName: 'Claude Code',
+    scriptName: CLAUDE3_NAME,
+    scriptIconSVG: CLAUDE3_ICON,
     blockType: 'confirmation',
     scriptType: 'tile',
     requiresResponse: 1,
@@ -114,7 +153,8 @@ export const FIXTURE_BLOCKS: Block[] = [
   block({
     blockID: 'claudecode-start-session',
     scriptID: 'claude-3',
-    scriptName: 'Claude Code',
+    scriptName: CLAUDE3_NAME,
+    scriptIconSVG: CLAUDE3_ICON,
     blockType: 'start_session',
     scriptType: 'tile',
     requiresResponse: 1,
@@ -130,7 +170,8 @@ export const FIXTURE_BLOCKS: Block[] = [
   block({
     blockID: 'brew-tile',
     scriptID: 'brew-monitor',
-    scriptName: 'Brew Monitor',
+    scriptName: BREW_NAME,
+    scriptIconSVG: BREW_ICON,
     blockType: 'tile',
     scriptType: 'tile',
     payload: JSON.stringify({ label: '3 updates available', status_color: 'orange', action_required: true }),
@@ -138,7 +179,8 @@ export const FIXTURE_BLOCKS: Block[] = [
   block({
     blockID: 'brew-alert',
     scriptID: 'brew-monitor',
-    scriptName: 'Brew Monitor',
+    scriptName: BREW_NAME,
+    scriptIconSVG: BREW_ICON,
     blockType: 'alert',
     scriptType: 'tile',
     payload: JSON.stringify({
@@ -150,7 +192,8 @@ export const FIXTURE_BLOCKS: Block[] = [
   block({
     blockID: 'brew-countdown',
     scriptID: 'brew-monitor',
-    scriptName: 'Brew Monitor',
+    scriptName: BREW_NAME,
+    scriptIconSVG: BREW_ICON,
     blockType: 'countdown',
     scriptType: 'tile',
     payload: JSON.stringify({
@@ -161,7 +204,8 @@ export const FIXTURE_BLOCKS: Block[] = [
   block({
     blockID: 'brew-quick-reply',
     scriptID: 'brew-monitor',
-    scriptName: 'Brew Monitor',
+    scriptName: BREW_NAME,
+    scriptIconSVG: BREW_ICON,
     blockType: 'quick_reply',
     scriptType: 'tile',
     requiresResponse: 1,
@@ -179,7 +223,8 @@ export const FIXTURE_BLOCKS: Block[] = [
   block({
     blockID: 'claude-message-1',
     scriptID: 'claude-3',
-    scriptName: 'Claude Code',
+    scriptName: CLAUDE3_NAME,
+    scriptIconSVG: CLAUDE3_ICON,
     blockType: 'claude_message',
     scriptType: 'tile',
     payload: JSON.stringify({
@@ -190,7 +235,8 @@ export const FIXTURE_BLOCKS: Block[] = [
   block({
     blockID: 'chat-prompt-1',
     scriptID: 'claude-3',
-    scriptName: 'Claude Code',
+    scriptName: CLAUDE3_NAME,
+    scriptIconSVG: CLAUDE3_ICON,
     blockType: 'chat_prompt',
     scriptType: 'tile',
     requiresResponse: 1,
@@ -205,7 +251,8 @@ export const FIXTURE_BLOCKS: Block[] = [
   block({
     blockID: 'prompt-commit-msg',
     scriptID: 'claude-3',
-    scriptName: 'Claude Code',
+    scriptName: CLAUDE3_NAME,
+    scriptIconSVG: CLAUDE3_ICON,
     blockType: 'prompt',
     scriptType: 'tile',
     requiresResponse: 1,

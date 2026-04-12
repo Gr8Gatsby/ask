@@ -84,6 +84,7 @@ export interface AgentSessionPayload {
   permission_mode?: 'supervised' | 'full-auto'
   pending_confirmation?: {    // inline permission prompt from the script
     title: string
+    body?: string
     options: string[]
   }
   tool_history?: Array<{ tool: string; preview: string; timestamp: string }>

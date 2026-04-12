@@ -515,6 +515,17 @@ class Claude3:
         project = msg.get('project', '') or (os.path.basename(cwd.rstrip('/')) if cwd else '')
         if not raw_id:
             return
+
+        # Clean up any stale transient sessions that overlap with this session
+        # by TTY or CWD so they don't linger as duplicates.
+        for sid, s in list(self._registry.sessions.items()):
+            if not s.is_transient:
+                continue
+            if (tty and s.tty == tty) or (cwd and s.cwd == cwd):
+                _log(f'removing stale transient {sid} (tty={s.tty} cwd={s.cwd!r}) — superseded by hook session')
+                await self.clear_block(self._session_block_id(sid))
+                self._registry.remove(sid)
+
         session = self._registry.ensure(raw_id=raw_id, tty=tty, cwd=cwd, project=project)
         session.state = 'idle'
         session.permission_mode = _load_permission_mode()
@@ -777,15 +788,17 @@ class Claude3:
     # ------------------------------------------------------------------
 
     async def _discover_active_processes(self):
-        """Scan running processes and create transient sessions for any Claude Code
-        instances not already tracked via hooks.
+        """Scan running processes and backfill TTY for hook-registered sessions
+        that started before the daemon could capture their terminal.
 
         Matching priority:
-        1. TTY alias — session was created with a known TTY, already indexed.
+        1. TTY alias — session is already fully tracked, nothing to do.
         2. CWD match — session exists but its TTY was never captured (hook
            failed to detect the terminal). Link the discovered TTY to that
-           session so routing works and avoid emitting a duplicate block.
-        3. No match — create a transient 'pid-XXXXX' session as a last resort.
+           session so routing and liveness checks work.
+
+        Unknown processes (no TTY or CWD match) are ignored — they will
+        self-register via hook events when their next tool or prompt fires.
         """
         processes = discover_claude_processes()
         for proc in processes:
@@ -812,15 +825,8 @@ class Claude3:
                     await self._emit_session_block(session)
                     continue
 
-            # 3. Unknown process — surface as transient session.
-            session = self._registry.ensure(
-                tty=tty,
-                project=f'pid-{proc["pid"]}',
-                is_transient=True,
-            )
-            session.state = 'idle'
-            await self._emit_session_block(session)
-            _log(f'discovered process pid={proc["pid"]} tty={tty}')
+            # Unknown process — skip. Hook events will register it properly.
+            _log(f'process discovery: skipping unmatched pid={proc["pid"]} tty={tty} cwd={cwd!r}')
         await self._emit_tile()
 
     # ------------------------------------------------------------------
@@ -947,7 +953,7 @@ class Claude3:
                 asyncio.create_task(self._tm_register(session))
             # Only evict if we have a known TTY and it is confirmed dead.
             # An empty TTY means we haven't resolved routing yet — keep the session alive.
-            if session.tty and not tty_is_live(session.tty) and not session.is_transient:
+            if session.tty and not tty_is_live(session.tty):
                 _log(f'session {session.session_id} TTY gone — marking stopped')
                 await self._append_structured_message(
                     session, 'Session ended', 'Terminal closed.')

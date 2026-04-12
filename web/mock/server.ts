@@ -1,6 +1,6 @@
 import http from 'http'
 import type { IncomingMessage, ServerResponse } from 'http'
-import { FIXTURE_BLOCKS } from './data/blocks.js'
+import { FIXTURE_BLOCKS, CLAUDE3_NAME, CLAUDE3_ICON, BREW_NAME, BREW_ICON } from './data/blocks.js'
 import { FIXTURE_MACHINES } from './data/machines.js'
 import { FIXTURE_TASKS, FIXTURE_TASK_MESSAGES } from './data/tasks.js'
 import type { Block } from '../src/lib/types.js'
@@ -44,7 +44,8 @@ function simulateScriptResponse(blockID: string, value: string): boolean {
       upsertBlock(makeBlock({
         blockID: 'brew-tile',
         scriptID: 'brew-monitor',
-        scriptName: 'Brew Monitor',
+        scriptName: BREW_NAME,
+        scriptIconSVG: BREW_ICON,
         blockType: 'tile',
         payload: JSON.stringify({ label: 'Updating…', status_color: 'blue' }),
       }))
@@ -59,14 +60,16 @@ function simulateScriptResponse(blockID: string, value: string): boolean {
         upsertBlock(makeBlock({
           blockID: 'brew-tile',
           scriptID: 'brew-monitor',
-          scriptName: 'Brew Monitor',
+          scriptName: BREW_NAME,
+        scriptIconSVG: BREW_ICON,
           blockType: 'tile',
           payload: JSON.stringify({ label: 'Up to date', status_color: 'green' }),
         }))
         upsertBlock(makeBlock({
           blockID: `feed-brew-${id}`,
           scriptID: 'brew-monitor',
-          scriptName: 'Brew Monitor',
+          scriptName: BREW_NAME,
+        scriptIconSVG: BREW_ICON,
           blockType: 'feed_item',
           scriptType: 'feed',
           payload: JSON.stringify({
@@ -82,14 +85,16 @@ function simulateScriptResponse(blockID: string, value: string): boolean {
       upsertBlock(makeBlock({
         blockID: 'brew-tile',
         scriptID: 'brew-monitor',
-        scriptName: 'Brew Monitor',
+        scriptName: BREW_NAME,
+        scriptIconSVG: BREW_ICON,
         blockType: 'tile',
         payload: JSON.stringify({ label: 'Updates skipped', status_color: 'orange' }),
       }))
       upsertBlock(makeBlock({
         blockID: `feed-brew-${id}`,
         scriptID: 'brew-monitor',
-        scriptName: 'Brew Monitor',
+        scriptName: BREW_NAME,
+        scriptIconSVG: BREW_ICON,
         blockType: 'feed_item',
         scriptType: 'feed',
         payload: JSON.stringify({
@@ -130,7 +135,8 @@ function simulateScriptResponse(blockID: string, value: string): boolean {
       upsertBlock(makeBlock({
         blockID: `event-stopped-${++feedSeq}`,
         scriptID: 'claude-3',
-        scriptName: 'Claude Code',
+        scriptName: CLAUDE3_NAME,
+        scriptIconSVG: CLAUDE3_ICON,
         blockType: 'session_event',
         scriptType: 'tile',
         payload: JSON.stringify({ event: 'stopped', project: 'code/ask [a3f9]', cwd: '/Users/kevin/Documents/code/ask' }),
@@ -138,7 +144,8 @@ function simulateScriptResponse(blockID: string, value: string): boolean {
       upsertBlock(makeBlock({
         blockID: 'claudecode-tile',
         scriptID: 'claude-3',
-        scriptName: 'Claude Code',
+        scriptName: CLAUDE3_NAME,
+        scriptIconSVG: CLAUDE3_ICON,
         blockType: 'tile',
         payload: JSON.stringify({ label: 'Idle', status_color: 'green' }),
       }))
