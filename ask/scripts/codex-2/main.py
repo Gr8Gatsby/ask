@@ -1636,6 +1636,12 @@ class CodexController:
             tmux_target=msg.get('tmux_target', ''),
         ) if raw_id else ''
 
+        # If MCP isn't ready, fall through to Codex's built-in prompt rather
+        # than hard-blocking with a spurious "denied" message.
+        if not self._initialized:
+            _log(f'Skipping permission block (not yet initialized) — allowing {tool!r}', 'WARN')
+            return ''
+
         block_id = self._permission_block_id(session_id or 'unknown', tool)
         loop = asyncio.get_running_loop()
         fut = loop.create_future()
@@ -1653,11 +1659,12 @@ class CodexController:
         try:
             await self.emit_block(block_id, 'confirmation', payload, inbox=True)
         except Exception as e:
-            _log(f'emit_block for permission failed: {e}', 'WARN')
+            _log(f'emit_block for permission failed: {e} — allowing {tool!r}', 'WARN')
             self._pending_permissions.pop(block_id, None)
             self._active_perm_blocks.discard(block_id)
             _save_active_blocks(self._active_perm_blocks)
-            return 'Deny'
+            # Fall through to Codex's built-in prompt rather than blocking
+            return ''
 
         # Mark session as working while waiting for permission
         if session_id in self._sessions:
@@ -1673,8 +1680,8 @@ class CodexController:
         try:
             value = await asyncio.wait_for(fut, timeout=120.0)
         except asyncio.TimeoutError:
-            _log(f'Permission timed out for {tool!r}', 'WARN')
-            value = 'Deny'
+            _log(f'Permission timed out for {tool!r} — allowing', 'WARN')
+            value = ''
         finally:
             self._pending_permissions.pop(block_id, None)
             self._active_perm_blocks.discard(block_id)

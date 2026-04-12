@@ -232,9 +232,11 @@ private struct AlertPreview: View {
             VStack(alignment: .leading, spacing: 2) {
                 if let title = payload["title"] as? String, !title.isEmpty {
                     Text(title).font(.caption).fontWeight(.medium)
+                        .accessibilityIdentifier("alert-title")
                 }
                 if let body = payload["body"] as? String, !body.isEmpty {
                     Text(body).font(.caption2).foregroundStyle(.secondary).lineLimit(4)
+                        .accessibilityIdentifier("alert-body")
                 }
             }
             Spacer()

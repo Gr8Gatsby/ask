@@ -170,16 +170,12 @@ final class MacAlertBlockTests: AskMacUITestCase {
 
     func test_alertBlock_titleVisible() {
         launch(scenario: "alert")
-        let pred = NSPredicate(format: "label CONTAINS[c] %@", "terminal-manager")
-        let el = scriptsWindow.staticTexts.matching(pred).firstMatch
-        assertExists(el, "Alert title should be visible in detail pane")
+        assertExists(scriptsWindow.staticTexts["alert-title"], "Alert title should be visible")
     }
 
     func test_alertBlock_bodyVisible() {
         launch(scenario: "alert")
-        let pred = NSPredicate(format: "label CONTAINS[c] %@", "TUI detection")
-        let el = scriptsWindow.staticTexts.matching(pred).firstMatch
-        assertExists(el, "Alert body should be visible in detail pane")
+        assertExists(scriptsWindow.staticTexts["alert-body"], "Alert body should be visible")
     }
 
     func test_alertBlock_noConfirmationButtons() {

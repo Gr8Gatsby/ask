@@ -630,6 +630,19 @@ class MCPClient:
         reply_mode is one of: 'numbered', 'yn', 'arrow'
         """
         import re
+
+        # Claude Code's own UI contains these strings during diff review / streaming.
+        # They must never be mistaken for user-actionable prompts.
+        _CLAUDE_CODE_UI_PATTERNS = [
+            'accept edits on',
+            'shift+tab to cycle',
+            'esc to interrupt',
+            'tab to interrupt',
+        ]
+        content_lower = content.lower()
+        if any(p in content_lower for p in _CLAUDE_CODE_UI_PATTERNS):
+            return None
+
         lines = content.splitlines()
 
         # Format 1: Numbered menu (e.g. "1. Option") with a footer line
@@ -1075,6 +1088,9 @@ class MCPClient:
             norm_tty = self._normalize_tty(tty)
             if any(info.get('claude_pid') == pid or self._normalize_tty(info.get('tty', '')) == norm_tty
                    for info in self._sessions.values()):
+                # Clear any lingering CloudKit block for this PID so it doesn't appear
+                # as a ghost session on iOS after a daemon restart.
+                asyncio.create_task(self.clear_block(self._session_block_id(synthetic_id)))
                 continue
             if self._register_session(synthetic_id, cwd, claude_pid=pid):
                 self._sessions[synthetic_id]['tty'] = tty

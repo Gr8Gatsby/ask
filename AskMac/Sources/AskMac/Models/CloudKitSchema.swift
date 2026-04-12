@@ -302,7 +302,8 @@ struct FeedScheduleRecord: Sendable {
 
 // MARK: - AskTask record
 
-struct AskTaskRecord: Sendable {
+struct AskTaskRecord: Sendable, Identifiable {
+    var id: String { recordName }
     let taskID: String
     let machineID: String
     let scriptID: String
@@ -317,6 +318,41 @@ struct AskTaskRecord: Sendable {
 
     /// Record name includes machineID+scriptID so different machines/scripts don't collide.
     var recordName: String { "\(machineID)-\(scriptID)-\(taskID)" }
+
+    init(
+        taskID: String, machineID: String, scriptID: String, scriptName: String,
+        scriptIcon: String?, scriptIconData: String?,
+        title: String, status: String, lastActivityAt: Date,
+        messageCount: Int, artifactCount: Int
+    ) {
+        self.taskID = taskID; self.machineID = machineID; self.scriptID = scriptID
+        self.scriptName = scriptName; self.scriptIcon = scriptIcon; self.scriptIconData = scriptIconData
+        self.title = title; self.status = status; self.lastActivityAt = lastActivityAt
+        self.messageCount = messageCount; self.artifactCount = artifactCount
+    }
+
+    init?(from record: CKRecord) {
+        guard
+            let taskID      = record[CKSchema.AskTask.taskID]        as? String,
+            let machineID   = record[CKSchema.AskTask.machineID]     as? String,
+            let scriptID    = record[CKSchema.AskTask.scriptID]      as? String,
+            let scriptName  = record[CKSchema.AskTask.scriptName]    as? String,
+            let title       = record[CKSchema.AskTask.title]         as? String,
+            let status      = record[CKSchema.AskTask.status]        as? String,
+            let lastActivityAt = record[CKSchema.AskTask.lastActivityAt] as? Date
+        else { return nil }
+        self.taskID         = taskID
+        self.machineID      = machineID
+        self.scriptID       = scriptID
+        self.scriptName     = scriptName
+        self.scriptIcon     = record[CKSchema.AskTask.scriptIcon]     as? String
+        self.scriptIconData = record[CKSchema.AskTask.scriptIconData] as? String
+        self.title          = title
+        self.status         = status
+        self.lastActivityAt = lastActivityAt
+        self.messageCount   = record[CKSchema.AskTask.messageCount]  as? Int ?? 0
+        self.artifactCount  = record[CKSchema.AskTask.artifactCount] as? Int ?? 0
+    }
 
     func toCKRecord() -> CKRecord {
         let record = CKRecord(recordType: CKSchema.RecordType.askTask,

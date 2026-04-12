@@ -1,6 +1,7 @@
 #if canImport(AskMacCore)
 import AskMacCore
 #endif
+import CloudKit
 import Security
 import SwiftUI
 import UniformTypeIdentifiers
@@ -319,7 +320,7 @@ private struct MacAppMockView: View {
                             onOpenScript: { selectedScriptID = $0 }
                         )
                     case .feed:
-                        MacAppFeedScreen(scriptManager: scriptManager)
+                        MacAppFeedScreen()
                     }
                 }
             }
@@ -423,61 +424,548 @@ private struct MacAppHomeScreen: View {
     }
 }
 
-private struct MacAppFeedScreen: View {
-    let scriptManager: ScriptManager
+// MARK: - Task thread display models
 
-    private var feedBlocks: [LiveBlock] {
-        let feedScriptIDs = Set(
-            scriptManager.scripts
-                .filter { $0.scriptType == "feed" }
-                .map(\.id)
-        )
-        let feedBlockTypes: Set<String> = [
-            "feed_item",
-            "activity_feed",
-            "compact_summary",
-            "session_event"
-        ]
+struct TaskMessageDisplay: Identifiable {
+    let id: String
+    let role: String
+    let text: String
+    let timestamp: Date
+    let sequenceNumber: Int
 
-        return scriptManager.activeBlocks
-            .flatMap { scriptID, blocksByID in
-                blocksByID.values.filter { block in
-                    feedScriptIDs.contains(scriptID) || feedBlockTypes.contains(block.blockType)
-                }
-            }
-            .sorted { $0.id < $1.id }
+    init?(from record: CKRecord) {
+        guard
+            let messageID = record[CKSchema.AskTaskMessage.messageID] as? String,
+            let role      = record[CKSchema.AskTaskMessage.role]      as? String,
+            let partsJSON = record[CKSchema.AskTaskMessage.partsJSON] as? String,
+            let timestamp = record[CKSchema.AskTaskMessage.timestamp] as? Date
+        else { return nil }
+        self.id              = messageID
+        self.role            = role
+        self.timestamp       = timestamp
+        self.sequenceNumber  = record[CKSchema.AskTaskMessage.sequenceNumber] as? Int ?? 0
+        // Extract text from parts JSON: [{type:"text",text:"..."},...]
+        if let data = partsJSON.data(using: .utf8),
+           let parts = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            self.text = parts.compactMap { $0["text"] as? String }.joined(separator: "\n")
+        } else {
+            self.text = partsJSON
+        }
     }
+}
+
+struct TaskArtifactDisplay: Identifiable {
+    let id: String
+    let filename: String
+    let mimeType: String
+    let description: String?
+    let sizeBytes: Int
+    let localURL: URL?   // CKAsset temp file URL — available immediately after fetch
+    let updatedAt: Date
+
+    init?(from record: CKRecord) {
+        guard
+            let artifactID = record[CKSchema.AskArtifact.artifactID] as? String,
+            let filename   = record[CKSchema.AskArtifact.filename]   as? String,
+            let mimeType   = record[CKSchema.AskArtifact.mimeType]   as? String,
+            let updatedAt  = record[CKSchema.AskArtifact.updatedAt]  as? Date
+        else { return nil }
+        self.id          = artifactID
+        self.filename    = filename
+        self.mimeType    = mimeType
+        self.description = record[CKSchema.AskArtifact.description] as? String
+        self.sizeBytes   = record[CKSchema.AskArtifact.sizeBytes]   as? Int ?? 0
+        self.updatedAt   = updatedAt
+        self.localURL    = (record[CKSchema.AskArtifact.content] as? CKAsset)?.fileURL
+    }
+
+    var formattedSize: String {
+        ByteCountFormatter.string(fromByteCount: Int64(sizeBytes), countStyle: .file)
+    }
+}
+
+// MARK: - Task feed store
+
+@Observable
+private final class TaskFeedStore {
+    var tasks: [AskTaskRecord] = []
+    var isLoading = false
+    var errorMessage: String?
+
+    var activeTasks: [AskTaskRecord] {
+        tasks
+            .filter { $0.status == "working" || $0.status == "input-required" }
+            .sorted {
+                if $0.status != $1.status { return $0.status == "input-required" }
+                return $0.lastActivityAt > $1.lastActivityAt
+            }
+    }
+
+    var recentTasks: [AskTaskRecord] {
+        tasks
+            .filter { $0.status == "completed" || $0.status == "failed" || $0.status == "cancelled" }
+            .sorted { $0.lastActivityAt > $1.lastActivityAt }
+    }
+
+    @MainActor
+    func refresh(cloudKit: CloudKitService, machineID: String) async {
+        isLoading = true
+        errorMessage = nil
+        do {
+            tasks = try await cloudKit.fetchTasks(machineID: machineID)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
+    }
+}
+
+// MARK: - Feed screen
+
+private struct MacAppFeedScreen: View {
+    @Environment(CloudKitService.self) private var cloudKit
+    @Environment(AppSettings.self) private var settings
+    @State private var store = TaskFeedStore()
+    @State private var selectedTask: AskTaskRecord?
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Feed")
-                        .font(.largeTitle)
-                        .fontWeight(.semibold)
-                    Text("Local block-rendered feed surface, aligned with the app feed model rather than script detail or desktop action history.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-
-                if feedBlocks.isEmpty {
+            VStack(alignment: .leading, spacing: 20) {
+                if store.isLoading && store.tasks.isEmpty {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 40)
+                } else if let err = store.errorMessage {
                     ContentUnavailableView(
-                        "No Feed Items",
-                        systemImage: "scroll",
-                        description: Text("Feed blocks will appear here when local scripts emit feed content.")
+                        "Could not load feed",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text(err)
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 20)
+                } else if store.activeTasks.isEmpty && store.recentTasks.isEmpty {
+                    ContentUnavailableView(
+                        "No Tasks Yet",
+                        systemImage: "checklist",
+                        description: Text("Tasks from running scripts will appear here.")
                     )
                     .frame(maxWidth: .infinity)
                     .padding(.top, 20)
                 } else {
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach(feedBlocks) { block in
-                            BlockPreviewView(block: block)
-                        }
+                    if !store.activeTasks.isEmpty {
+                        feedSection("Active", tasks: store.activeTasks)
+                    }
+                    if !store.recentTasks.isEmpty {
+                        feedSection("Recent", tasks: store.recentTasks)
                     }
                 }
             }
+            .padding(.vertical, 8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .refreshable { await store.refresh(cloudKit: cloudKit, machineID: settings.machineID) }
+        .task { await store.refresh(cloudKit: cloudKit, machineID: settings.machineID) }
+        .sheet(item: $selectedTask) { task in
+            TaskThreadSheet(task: task)
+                .environment(cloudKit)
+                .environment(settings)
+        }
+    }
+
+    @ViewBuilder
+    private func feedSection(_ title: String, tasks: [AskTaskRecord]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+            VStack(spacing: 0) {
+                ForEach(tasks, id: \.recordName) { task in
+                    Button { selectedTask = task } label: {
+                        TaskFeedRow(task: task)
+                    }
+                    .buttonStyle(.plain)
+                    if task.recordName != tasks.last?.recordName {
+                        Divider().padding(.leading, 50)
+                    }
+                }
+            }
+            .background(.background.secondary)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 12)
+        }
+    }
+}
+
+private struct TaskFeedRow: View {
+    let task: AskTaskRecord
+
+    var body: some View {
+        HStack(spacing: 12) {
+            statusIcon
+                .frame(width: 28, height: 28)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(task.title)
+                    .font(.callout)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                    .foregroundStyle(.primary)
+                HStack(spacing: 4) {
+                    Image(systemName: "terminal")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(task.scriptName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(task.lastActivityAt, style: .relative)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                if task.artifactCount > 0 {
+                    Label("\(task.artifactCount)", systemImage: "paperclip")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        switch task.status {
+        case "working":
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 20, height: 20)
+        case "input-required":
+            Image(systemName: "ellipsis.bubble")
+                .foregroundStyle(.orange)
+                .font(.title3)
+        case "completed":
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .font(.title3)
+        case "failed":
+            Image(systemName: "xmark.circle.fill")
+                .foregroundStyle(.red)
+                .font(.title3)
+        case "cancelled":
+            Image(systemName: "minus.circle.fill")
+                .foregroundStyle(.secondary)
+                .font(.title3)
+        default:
+            Image(systemName: "circle")
+                .foregroundStyle(.secondary)
+                .font(.title3)
+        }
+    }
+}
+
+// MARK: - Task thread sheet
+
+@Observable
+private final class TaskThreadStore {
+    var messages: [TaskMessageDisplay] = []
+    var artifacts: [TaskArtifactDisplay] = []
+    var isLoading = false
+    var errorMessage: String?
+
+    @MainActor
+    func load(task: AskTaskRecord, cloudKit: CloudKitService) async {
+        isLoading = true
+        errorMessage = nil
+        do {
+            async let msgs = cloudKit.fetchTaskMessages(taskID: task.taskID, machineID: task.machineID)
+            async let arts = cloudKit.fetchTaskArtifacts(taskID: task.taskID, machineID: task.machineID)
+            (messages, artifacts) = try await (msgs, arts)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
+    }
+}
+
+private struct TaskThreadSheet: View {
+    let task: AskTaskRecord
+    @Environment(CloudKitService.self) private var cloudKit
+    @Environment(\.dismiss) private var dismiss
+    @State private var store = TaskThreadStore()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(task.title)
+                        .font(.headline)
+                    Text(task.scriptName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.escape)
+            }
+            .padding()
+            Divider()
+
+            if store.isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let err = store.errorMessage {
+                ContentUnavailableView("Could not load", systemImage: "exclamationmark.triangle",
+                                       description: Text(err))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        // Messages
+                        ForEach(store.messages) { msg in
+                            MessageRow(message: msg)
+                        }
+                        // Artifacts
+                        if !store.artifacts.isEmpty {
+                            Divider().padding(.vertical, 8)
+                            Text("Attachments")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 16)
+                                .padding(.bottom, 6)
+                            ForEach(store.artifacts) { artifact in
+                                ArtifactRow(artifact: artifact)
+                            }
+                        }
+                        if store.messages.isEmpty && store.artifacts.isEmpty {
+                            ContentUnavailableView("No content", systemImage: "bubble.left",
+                                                   description: Text("This task has no messages yet."))
+                                .padding(.top, 20)
+                        }
+                    }
+                    .padding(.vertical, 8)
+                }
+            }
+        }
+        .frame(minWidth: 520, minHeight: 420)
+        .task { await store.load(task: task, cloudKit: cloudKit) }
+    }
+}
+
+// MARK: - Relative time (single most-significant unit)
+
+private func simpleRelativeTime(_ date: Date) -> String {
+    let seconds = max(0, Int(-date.timeIntervalSinceNow))
+    if seconds < 60  { return "< 1 min" }
+    let minutes = seconds / 60
+    if minutes < 60  { return "\(minutes) min" }
+    let hours = minutes / 60
+    if hours   < 24  { return "\(hours) hr" }
+    let days   = hours / 24
+    if days    < 30  { return "\(days) day\(days == 1 ? "" : "s")" }
+    let months = days / 30
+    if months  < 12  { return "\(months) mo" }
+    return "\(months / 12) yr"
+}
+
+// MARK: - Simple Markdown renderer
+
+private enum MDBlock {
+    case heading(level: Int, text: String)
+    case code(String)
+    case paragraph(String)
+}
+
+private func parseMarkdownBlocks(_ raw: String) -> [MDBlock] {
+    var blocks: [MDBlock] = []
+    let lines  = raw.components(separatedBy: "\n")
+    var i      = 0
+    while i < lines.count {
+        let line = lines[i]
+        // Heading: 1–6 # characters followed by a space
+        let hashes = line.prefix(while: { $0 == "#" })
+        let level  = hashes.count
+        if level >= 1 && level <= 6 && line.count > level,
+           line[line.index(line.startIndex, offsetBy: level)] == " " {
+            blocks.append(.heading(level: level, text: String(line.dropFirst(level + 1))))
+            i += 1
+            continue
+        }
+        // Fenced code block
+        if line.hasPrefix("```") {
+            var code = ""
+            i += 1
+            while i < lines.count && !lines[i].hasPrefix("```") {
+                if !code.isEmpty { code += "\n" }
+                code += lines[i]
+                i += 1
+            }
+            i += 1 // skip closing ```
+            if !code.isEmpty { blocks.append(.code(code)) }
+            continue
+        }
+        // Blank line
+        if line.trimmingCharacters(in: .whitespaces).isEmpty {
+            i += 1
+            continue
+        }
+        // Paragraph — collect until blank / heading / code fence
+        var para: [String] = []
+        while i < lines.count {
+            let l = lines[i]
+            if l.trimmingCharacters(in: .whitespaces).isEmpty { break }
+            if l.hasPrefix("#") { break }
+            if l.hasPrefix("```") { break }
+            para.append(l)
+            i += 1
+        }
+        if !para.isEmpty { blocks.append(.paragraph(para.joined(separator: "\n"))) }
+    }
+    return blocks
+}
+
+private struct MarkdownBlock: View {
+    let block: MDBlock
+
+    var body: some View {
+        switch block {
+        case .heading(let level, let text):
+            Text(text)
+                .font(level <= 2 ? .callout.weight(.bold) : .callout.weight(.semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .code(let code):
+            Text(code)
+                .font(.system(.caption, design: .monospaced))
+                .padding(6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.primary.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+        case .paragraph(let text):
+            // AttributedString renders inline Markdown: **bold**, *italic*, `code`, [links](url)
+            let attr = (try? AttributedString(
+                markdown: text,
+                options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+            )) ?? AttributedString(text)
+            Text(attr)
+                .font(.callout)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct SimpleMarkdownView: View {
+    let text: String
+
+    var body: some View {
+        let blocks = parseMarkdownBlocks(text)
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                MarkdownBlock(block: block)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - Message bubble
+
+private struct MessageRow: View {
+    let message: TaskMessageDisplay
+    private var isUser: Bool { message.role == "user" }
+
+    @ViewBuilder
+    private var bubbleContent: some View {
+        if isUser {
+            Text(message.text.isEmpty ? "(empty)" : message.text)
+                .font(.callout)
+        } else {
+            SimpleMarkdownView(text: message.text.isEmpty ? "(empty)" : message.text)
+        }
+    }
+
+    var body: some View {
+        HStack {
+            if isUser { Spacer(minLength: 60) }
+            VStack(alignment: isUser ? .trailing : .leading, spacing: 3) {
+                bubbleContent
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(isUser ? Color.accentColor : Color.secondary.opacity(0.15))
+                    .foregroundStyle(isUser ? .white : .primary)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                Text(simpleRelativeTime(message.timestamp))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if !isUser { Spacer(minLength: 60) }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+    }
+}
+
+private struct ArtifactRow: View {
+    let artifact: TaskArtifactDisplay
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: iconName)
+                .font(.title2)
+                .foregroundStyle(.secondary)
+                .frame(width: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(artifact.filename)
+                    .font(.callout)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(artifact.formattedSize)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let desc = artifact.description, !desc.isEmpty {
+                        Text("·")
+                            .foregroundStyle(.secondary)
+                        Text(desc)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            Spacer()
+            if let url = artifact.localURL {
+                Button {
+                    let dest = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+                        .appendingPathComponent(artifact.filename)
+                    try? FileManager.default.copyItem(at: url, to: dest)
+                    NSWorkspace.shared.activateFileViewerSelecting([dest])
+                } label: {
+                    Label("Save", systemImage: "arrow.down.circle")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    private var iconName: String {
+        if artifact.mimeType.hasPrefix("image/") { return "photo" }
+        if artifact.mimeType.hasPrefix("text/") { return "doc.text" }
+        if artifact.mimeType.contains("pdf") { return "doc.richtext" }
+        if artifact.mimeType.contains("zip") || artifact.mimeType.contains("gzip") { return "archivebox" }
+        return "doc"
     }
 }
 
@@ -520,6 +1008,7 @@ private struct MacAppActionCard: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.tertiary)
                 }
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
@@ -606,11 +1095,12 @@ private struct MacAppTileCard: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.tertiary)
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(RoundedRectangle(cornerRadius: 18).fill(Color.secondary.opacity(0.07)))
+            .contentShape(RoundedRectangle(cornerRadius: 18))
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .background(RoundedRectangle(cornerRadius: 18).fill(Color.secondary.opacity(0.07)))
     }
 
     @ViewBuilder

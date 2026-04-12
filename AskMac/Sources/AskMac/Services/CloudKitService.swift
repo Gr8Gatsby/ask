@@ -333,6 +333,18 @@ final class CloudKitService {
 
     // MARK: - Task history (A2A protocol)
 
+    /// Fetches all AskTask records for this machine, sorted newest-first.
+    func fetchTasks(machineID: String) async throws -> [AskTaskRecord] {
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.AskTask.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.askTask, predicate: predicate)
+        query.sortDescriptors = [NSSortDescriptor(key: CKSchema.AskTask.lastActivityAt, ascending: false)]
+        let (results, _) = try await database.records(matching: query, resultsLimit: 100)
+        return results.compactMap { _, result in
+            guard let record = try? result.get() else { return nil }
+            return AskTaskRecord(from: record)
+        }
+    }
+
     /// Creates or updates an AskTask record. Uses the task's recordName as the CloudKit record ID
     /// so re-opening the same task is an upsert, not a duplicate insert.
     func saveTask(_ task: AskTaskRecord) async throws {
@@ -360,6 +372,38 @@ final class CloudKitService {
         let saved = try await save(record)
         cachedRecords[message.messageID] = saved
         logger.info("saveTaskMessage — taskID: \(message.taskID) seq: \(message.sequenceNumber)")
+    }
+
+    /// Fetches all messages for a task, sorted by sequence number.
+    func fetchTaskMessages(taskID: String, machineID: String) async throws -> [TaskMessageDisplay] {
+        let predicate = NSPredicate(
+            format: "%K == %@ AND %K == %@",
+            CKSchema.AskTaskMessage.taskID, taskID,
+            CKSchema.AskTaskMessage.machineID, machineID
+        )
+        let query = CKQuery(recordType: CKSchema.RecordType.askTaskMessage, predicate: predicate)
+        query.sortDescriptors = [NSSortDescriptor(key: CKSchema.AskTaskMessage.sequenceNumber, ascending: true)]
+        let (results, _) = try await database.records(matching: query, resultsLimit: 200)
+        return results.compactMap { _, result in
+            guard let record = try? result.get() else { return nil }
+            return TaskMessageDisplay(from: record)
+        }
+    }
+
+    /// Fetches all artifacts for a task.
+    func fetchTaskArtifacts(taskID: String, machineID: String) async throws -> [TaskArtifactDisplay] {
+        let predicate = NSPredicate(
+            format: "%K == %@ AND %K == %@",
+            CKSchema.AskArtifact.taskID, taskID,
+            CKSchema.AskArtifact.machineID, machineID
+        )
+        let query = CKQuery(recordType: CKSchema.RecordType.askArtifact, predicate: predicate)
+        query.sortDescriptors = [NSSortDescriptor(key: CKSchema.AskArtifact.updatedAt, ascending: true)]
+        let (results, _) = try await database.records(matching: query, resultsLimit: 50)
+        return results.compactMap { _, result in
+            guard let record = try? result.get() else { return nil }
+            return TaskArtifactDisplay(from: record)
+        }
     }
 
     /// Creates or updates an AskArtifact record, attaching the local file as a CKAsset.

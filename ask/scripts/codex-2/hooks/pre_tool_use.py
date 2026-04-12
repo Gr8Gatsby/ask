@@ -146,14 +146,14 @@ try:
     sock.close()
 
     response = json.loads(b''.join(chunks).decode())
-    value = response.get('value', 'Deny')
+    value = response.get('value', '')
 
 except Exception as e:
     print(f'[pre_tool_use] socket error: {e}', file=sys.stderr)
     # Daemon not running — allow by default so Codex isn't blocked
     sys.exit(0)
 
-if value in ('Allow', 'Always Allow', 'Yes'):
+if value in ('Allow', 'Always Allow', 'Yes', ''):
     sys.exit(0)
 else:
     print(f'Permission denied by user on iPhone.', file=sys.stderr)
