@@ -30,7 +30,7 @@ export const FIXTURE_BLOCKS: Block[] = [
     blockType: 'agent_session',
     scriptType: 'tile',
     requiresResponse: 1,
-    showsInInbox: 1,
+    showsInInbox: 0,
     payload: JSON.stringify({
       session_id: 'session-a3f91c2b',
       task_id: 'task-001',
