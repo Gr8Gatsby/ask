@@ -7,15 +7,70 @@ enum CKSchema {
     static let containerID = "iCloud.simple.ask"
 
     enum RecordType {
-        static let machine = "Machine"
-        static let event = "AskEvent"
-        static let response = "AskResponse"
-        static let message = "AskMessage"
-        static let session = "AskSession"
-        static let rkBlock = "RKBlock"
-        static let rkResponse = "RKResponse"
-        static let device = "AskDevice"
+        static let machine      = "Machine"
+        static let rkBlock      = "RKBlock"
+        static let rkResponse   = "RKResponse"
+        static let message      = "AskMessage"
+        static let device       = "AskDevice"
         static let feedSchedule = "FeedSchedule"
+        // Task history (A2A protocol)
+        static let askTask        = "AskTask"
+        static let askTaskMessage = "AskTaskMessage"
+        static let askArtifact    = "AskArtifact"
+        // Script invoke requests — written by iOS, drained by AskMac ResponsePoller.
+        static let askInvokeRequest = "AskInvokeRequest"
+        // Script registry — one record per script per machine, always up to date.
+        static let askScript = "AskScript"
+        // Deprecated — dead code, no longer written or read.
+        // CloudKit record types cannot be deleted from production containers;
+        // these constants are kept only so purgeOldRecords can clean up stale records.
+        static let event    = "AskEvent"
+        static let response = "AskResponse"
+        static let session  = "AskSession"
+    }
+
+    // MARK: - AskTask
+
+    enum AskTask {
+        static let taskID        = "taskID"
+        static let machineID     = "machineID"
+        static let scriptID      = "scriptID"
+        static let scriptName    = "scriptName"
+        static let scriptIcon    = "scriptIcon"
+        static let scriptIconData = "scriptIconData"
+        static let title         = "title"
+        static let status        = "status"
+        static let lastActivityAt = "lastActivityAt"
+        static let messageCount  = "messageCount"
+        static let artifactCount = "artifactCount"
+    }
+
+    // MARK: - AskTaskMessage
+
+    enum AskTaskMessage {
+        static let messageID      = "messageID"
+        static let taskID         = "taskID"
+        static let machineID      = "machineID"
+        static let scriptID       = "scriptID"
+        static let role           = "role"
+        static let partsJSON      = "partsJSON"
+        static let timestamp      = "timestamp"
+        static let sequenceNumber = "sequenceNumber"
+    }
+
+    // MARK: - AskArtifact
+
+    enum AskArtifact {
+        static let artifactID   = "artifactID"
+        static let taskID       = "taskID"
+        static let machineID    = "machineID"
+        static let scriptID     = "scriptID"
+        static let filename     = "filename"
+        static let mimeType     = "mimeType"
+        static let description  = "description"
+        static let sizeBytes    = "sizeBytes"
+        static let content      = "content"
+        static let updatedAt    = "updatedAt"
     }
 
     enum Device {
@@ -41,6 +96,25 @@ enum CKSchema {
         static let scriptType = "scriptType"  // "tile" (default) or "feed"
         static let requiresResponse = "requiresResponse"  // 1 if the block needs user input, 0 otherwise
         static let showsInInbox = "showsInInbox"  // 1 if the block should appear in the in-app inbox
+    }
+
+    enum AskInvokeRequest {
+        static let machineID   = "machineID"
+        static let scriptID    = "scriptID"
+        static let requestedAt = "requestedAt"
+    }
+
+    enum AskScript {
+        static let machineID   = "machineID"
+        static let scriptID    = "scriptID"
+        static let scriptName  = "scriptName"
+        static let scriptType  = "scriptType"   // "feed", "tile", "system"
+        static let scriptIcon  = "scriptIcon"
+        static let version     = "version"
+        static let status      = "status"       // "running", "idle", "disabled", "crashed"
+        static let lastRunAt   = "lastRunAt"
+        static let nextRunAt   = "nextRunAt"
+        static let updatedAt   = "updatedAt"
     }
 
     enum FeedSchedule {
@@ -226,6 +300,106 @@ struct FeedScheduleRecord: Sendable {
     }
 }
 
+// MARK: - AskTask record
+
+struct AskTaskRecord: Sendable, Identifiable {
+    var id: String { recordName }
+    let taskID: String
+    let machineID: String
+    let scriptID: String
+    let scriptName: String
+    let scriptIcon: String?
+    let scriptIconData: String?
+    let title: String
+    var status: String
+    var lastActivityAt: Date
+    var messageCount: Int
+    var artifactCount: Int
+
+    /// Record name includes machineID+scriptID so different machines/scripts don't collide.
+    var recordName: String { "\(machineID)-\(scriptID)-\(taskID)" }
+
+    init(
+        taskID: String, machineID: String, scriptID: String, scriptName: String,
+        scriptIcon: String?, scriptIconData: String?,
+        title: String, status: String, lastActivityAt: Date,
+        messageCount: Int, artifactCount: Int
+    ) {
+        self.taskID = taskID; self.machineID = machineID; self.scriptID = scriptID
+        self.scriptName = scriptName; self.scriptIcon = scriptIcon; self.scriptIconData = scriptIconData
+        self.title = title; self.status = status; self.lastActivityAt = lastActivityAt
+        self.messageCount = messageCount; self.artifactCount = artifactCount
+    }
+
+    init?(from record: CKRecord) {
+        guard
+            let taskID      = record[CKSchema.AskTask.taskID]        as? String,
+            let machineID   = record[CKSchema.AskTask.machineID]     as? String,
+            let scriptID    = record[CKSchema.AskTask.scriptID]      as? String,
+            let scriptName  = record[CKSchema.AskTask.scriptName]    as? String,
+            let title       = record[CKSchema.AskTask.title]         as? String,
+            let status      = record[CKSchema.AskTask.status]        as? String,
+            let lastActivityAt = record[CKSchema.AskTask.lastActivityAt] as? Date
+        else { return nil }
+        self.taskID         = taskID
+        self.machineID      = machineID
+        self.scriptID       = scriptID
+        self.scriptName     = scriptName
+        self.scriptIcon     = record[CKSchema.AskTask.scriptIcon]     as? String
+        self.scriptIconData = record[CKSchema.AskTask.scriptIconData] as? String
+        self.title          = title
+        self.status         = status
+        self.lastActivityAt = lastActivityAt
+        self.messageCount   = record[CKSchema.AskTask.messageCount]  as? Int ?? 0
+        self.artifactCount  = record[CKSchema.AskTask.artifactCount] as? Int ?? 0
+    }
+
+}
+
+// MARK: - AskTaskMessage record
+
+struct AskTaskMessageRecord: Sendable {
+    let messageID: String
+    let taskID: String
+    let machineID: String
+    let scriptID: String
+    let role: String
+    let partsJSON: String
+    let timestamp: Date
+    let sequenceNumber: Int
+
+    func toCKRecord() -> CKRecord {
+        let record = CKRecord(recordType: CKSchema.RecordType.askTaskMessage,
+                              recordID: CKRecord.ID(recordName: messageID))
+        record[CKSchema.AskTaskMessage.messageID]      = messageID
+        record[CKSchema.AskTaskMessage.taskID]         = taskID
+        record[CKSchema.AskTaskMessage.machineID]      = machineID
+        record[CKSchema.AskTaskMessage.scriptID]       = scriptID
+        record[CKSchema.AskTaskMessage.role]           = role
+        record[CKSchema.AskTaskMessage.partsJSON]      = partsJSON
+        record[CKSchema.AskTaskMessage.timestamp]      = timestamp
+        record[CKSchema.AskTaskMessage.sequenceNumber] = sequenceNumber as CKRecordValue
+        return record
+    }
+}
+
+// MARK: - AskArtifact record
+
+struct AskArtifactRecord: Sendable {
+    let artifactID: String
+    let taskID: String
+    let machineID: String
+    let scriptID: String
+    let filename: String
+    let mimeType: String
+    let artifactDescription: String?
+    let sizeBytes: Int
+    let contentURL: URL   // local temp file — used to build CKAsset
+    let updatedAt: Date
+
+    var recordName: String { "\(machineID)-\(scriptID)-\(artifactID)" }
+}
+
 // MARK: - Device
 
 struct DeviceRecord: Sendable {
@@ -252,4 +426,22 @@ struct DeviceRecord: Sendable {
         let enabledInt = record[CKSchema.Device.enabled] as? Int64 ?? 1
         self.enabled = enabledInt != 0
     }
+}
+
+// MARK: - AskScript record
+
+struct AskScriptRecord: Sendable {
+    let machineID:  String
+    let scriptID:   String
+    let scriptName: String
+    let scriptType: String   // "feed", "tile", "system"
+    let scriptIcon: String?
+    let version:    String?
+    var status:     String   // "running", "idle", "disabled", "crashed"
+    var lastRunAt:  Date?
+    var nextRunAt:  Date?
+    let updatedAt:  Date
+
+    var recordName: String { "script-\(machineID)-\(scriptID)" }
+
 }

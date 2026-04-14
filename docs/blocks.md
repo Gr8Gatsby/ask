@@ -304,6 +304,7 @@ Collapsed state shows last message inline in the header row.
 | Field | Type | JSON Key | Description |
 |---|---|---|---|
 | `session_id` | `String` | `session_id` | Unique session identifier |
+| `task_id` | `String?` | `task_id` | A2A task ID for this session — used by iOS to navigate to the full task feed |
 | `project` | `String` | `project` | Display label (e.g. `code/myapp [a3f9]`) |
 | `cwd` | `String` | `cwd` | Working directory of the session |
 | `last_message` | `String?` | `last_message` | Agent's most recent text response |
@@ -804,3 +805,4 @@ Response: JSON object — `{"run_tests": true, "verbose": false}`.
 | Removed emoji from ASCII art diagrams | Layout fix |
 | `agent_session` iOS navigation | Now renders as a `SessionRowView` in the script detail session list; tapping opens a full-screen `SessionChatView` with local SwiftData history. `AgentSessionBlockView` retained for Mac Blocks builder preview. |
 | `start_session` iOS rendering | "+" button in `ScriptDetailView` bottom bar; shown only when the block is active. |
+| Added `task_id` to `agent_session` | Links a session to its A2A task history. iOS shows the last message above the reply input and a "View Feed" button to open the full task thread. |

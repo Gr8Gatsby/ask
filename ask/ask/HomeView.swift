@@ -176,6 +176,7 @@ struct ScriptGroup: Identifiable {
 struct HomeView: View {
     @Environment(iOSCloudKitService.self) private var cloudKit
     @Environment(ActionInboxStore.self) private var actionInbox
+    @Environment(TaskHistoryStore.self) private var taskHistory
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var machines: [AskMachine] = []
@@ -295,7 +296,7 @@ struct HomeView: View {
                 } else if machines.isEmpty {
                     emptyState
                 } else if selectedTab == .feed {
-                    FeedView(machines: visibleMachines, activeMachineID: machineFilter)
+                    TaskFeedView(machines: visibleMachines)
                 } else {
                     content
                 }
@@ -394,6 +395,7 @@ struct HomeView: View {
         .sheet(isPresented: $showSettings) {
             SettingsSheetView()
                 .environment(cloudKit)
+                .environment(taskHistory)
         }
         .sheet(
             isPresented: Binding(
@@ -463,6 +465,8 @@ struct HomeView: View {
                                     onTap: { selectedScriptID = group.scriptID },
                                     onRespond: { value in await respondToGroup(group, value: value) }
                                 )
+                                .accessibilityElement(children: .contain)
+                                .accessibilityIdentifier("script-group-\(group.scriptID)")
                             }
                         }
                         .padding(.horizontal, 16)
@@ -472,9 +476,11 @@ struct HomeView: View {
                     // Recent section
                     if !recentGroups.isEmpty {
                         queueSectionHeader("Recent", count: nil)
-                        LazyVStack(spacing: 8) {
+                        VStack(spacing: 8) {
                             ForEach(recentGroups) { group in
                                 ScriptTileView(group: group) { selectedScriptID = group.scriptID }
+                                    .accessibilityElement(children: .contain)
+                                    .accessibilityIdentifier("script-group-\(group.scriptID)")
                             }
                         }
                         .padding(.horizontal, 16)
@@ -522,22 +528,80 @@ struct HomeView: View {
     // MARK: - Custom bottom bar (avoids UIKitToolbar subview warning on iOS 26)
 
     private var bottomBar: some View {
-        HStack(spacing: 14) {
-            machineMenuButton
-            tabSwitcher
-            NotificationBellButton()
-            Button { showSettings = true } label: {
-                Image(systemName: "gearshape")
+        VStack(spacing: 0) {
+            // Alert chips — one per script that needs a response, shown above main controls.
+            if !needsResponseGroups.isEmpty {
+                globalAlertChips
+                    .padding(.bottom, 8)
+                Divider()
+                    .padding(.horizontal, -4)
+                    .padding(.bottom, 6)
+            }
+
+            HStack(spacing: 14) {
+                machineMenuButton
+                tabSwitcher
+                Spacer()
+                Button { showSettings = true } label: {
+                    Image(systemName: "gearshape")
+                }
             }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
-        .background(Color(.systemBackground), in: Capsule())
-        .overlay(Capsule().strokeBorder(.primary.opacity(0.12), lineWidth: 1))
+        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 28))
+        .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(.primary.opacity(0.12), lineWidth: 1))
         .shadow(color: .black.opacity(0.22), radius: 16, y: 6)
-        .padding(.horizontal, 32)
+        .padding(.horizontal, 20)
         .padding(.bottom, 16)
         .padding(.top, 4)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: needsResponseGroups.map(\.scriptID))
+    }
+
+    // Horizontal scrolling row of chips, one per script needing response.
+    private var globalAlertChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(needsResponseGroups) { group in
+                    Button {
+                        selectedScriptID = group.scriptID
+                        Task { await load() }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(.white.opacity(0.85))
+                                .frame(width: 5, height: 5)
+                            Text(group.name)
+                                .font(.caption2.weight(.semibold))
+                                .lineLimit(1)
+                            let inboxCount = group.blocks.filter { $0.showsInInbox }.count
+                            if inboxCount > 1 {
+                                Text("\(inboxCount)")
+                                    .font(.caption2.weight(.bold))
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(.white.opacity(0.25), in: Capsule())
+                            }
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(alertChipColor(for: group), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func alertChipColor(for group: ScriptGroup) -> Color {
+        switch group.dominantUrgency {
+        case .urgent:  return .red
+        case .warning: return .orange
+        case .info:    return .blue
+        case nil:      return group.brandHighlight ?? .orange
+        }
     }
 
     private var tabSwitcher: some View {
@@ -684,7 +748,7 @@ struct HomeView: View {
 
         let filtered = allFetched
             .filter { !$0.isFeedBlock || $0.requiresResponse }
-            .filter { $0.blockType != .alert }
+            .filter { UITestingSupport.isUITesting || $0.blockType != .alert }
             .filter { $0.blockType != .activityFeed }
             .filter { $0.blockType != .sessionEvent }
 
@@ -781,7 +845,7 @@ struct HomeView: View {
 
                 let filtered = allFetched
                     .filter { !$0.isFeedBlock || $0.requiresResponse }
-                    .filter { $0.blockType != .alert }
+                    .filter { UITestingSupport.isUITesting || $0.blockType != .alert }
                     .filter { $0.blockType != .activityFeed }
                     .filter { $0.blockType != .sessionEvent }
 
@@ -922,6 +986,7 @@ private struct ScriptTileView: View {
     }
 
     var body: some View {
+        Group {
         Button(action: onTap) {
             HStack(spacing: 12) {
                 ScriptIconView(
@@ -998,6 +1063,7 @@ private struct ScriptTileView: View {
         }
         .buttonStyle(.plain)
         .environment(\.colorScheme, effectiveColorScheme)
+        } // Group
     }
 }
 
@@ -1304,16 +1370,18 @@ struct ScriptDetailView: View {
 
     /// Non-session, non-tile, non-feed blocks shown in the header strip above sessions.
     private var headerBlocks: [RKBlock] {
-        group.blocks.filter {
+        let liveSessionIDs = Set(sessionBlocks.compactMap { $0.agentSessionPayload?.sessionId })
+        return group.blocks.filter {
             $0.blockType != .agentSession &&
             $0.blockType != .tile &&
             $0.blockType != .startSession &&
             $0.blockType != .feedItem &&
             $0.blockType != .detail &&
             $0.blockType != .diagnostics &&  // lives on log page, not detail view
-            // Confirmation blocks with a sessionId are shown inline under their session.
-            // Confirmation blocks without a sessionId (e.g. global settings toggles) belong here.
-            !($0.blockType == .confirmation && $0.confirmationPayload?.sessionId != nil)
+            // Confirmation blocks with a live sessionId are shown inline under their session.
+            // Orphaned confirmations still belong in the header so they remain actionable.
+            !($0.blockType == .confirmation &&
+              ($0.confirmationPayload?.sessionId).map { liveSessionIDs.contains($0) } == true)
         }
     }
 
@@ -1325,6 +1393,47 @@ struct ScriptDetailView: View {
         group.blocks.filter {
             $0.blockType == .confirmation && $0.confirmationPayload?.sessionId == sessionId
         }
+    }
+
+    @ViewBuilder
+    private func sessionPendingConfirmationRow(pc: RKPendingConfirmation, block: RKBlock) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(pc.title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(pc.options, id: \.self) { option in
+                    Button {
+                        Task { await onRespond(block, option) }
+                    } label: {
+                        Text(option)
+                            .font(.caption)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.orange)
+                }
+            }
+        }
+    }
+
+    /// Persists an assistant message into ChatEntry so history is available even when
+    /// SessionChatView was not open when the message arrived.
+    private func seedAssistantMessageToChatEntry(msg: String, sessionId: String) {
+        let descriptor = FetchDescriptor<ChatEntry>(
+            predicate: #Predicate { $0.sessionId == sessionId && $0.role == "assistant" && $0.text == msg }
+        )
+        guard (try? modelContext.fetch(descriptor))?.isEmpty ?? true else { return }
+        modelContext.insert(ChatEntry(
+            sessionId: sessionId,
+            role: "assistant",
+            entryKind: "message",
+            text: msg
+        ))
+        try? modelContext.save()
     }
 
     /// Persists a session-linked confirmation block into ChatEntry so it's visible in Chat
@@ -1356,6 +1465,7 @@ struct ScriptDetailView: View {
                         BlockView(block: block, onRespond: { value in
                             await onRespond(block, value)
                         }, isWaiting: isWaiting)
+                        .accessibilityElement(children: .contain)
                     }
                 }
 
@@ -1374,7 +1484,7 @@ struct ScriptDetailView: View {
                                     )
                                 }
                                 .listRowBackground(
-                                    confCount > 0
+                                    (confCount > 0 || payload.pendingConfirmation != nil)
                                         ? Color.orange.opacity(0.07)
                                         : nil
                                 )
@@ -1385,6 +1495,13 @@ struct ScriptDetailView: View {
                                     })
                                     .listRowBackground(Color.orange.opacity(0.05))
                                     .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 5, trailing: 16))
+                                }
+                                // Inline pending_confirmation from agent_session payload
+                                // (shown when there are no linked .confirmation blocks)
+                                if confs.isEmpty, let pc = payload.pendingConfirmation {
+                                    sessionPendingConfirmationRow(pc: pc, block: block)
+                                        .listRowBackground(Color.orange.opacity(0.05))
+                                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                                 }
                             }
                         }
@@ -1412,6 +1529,16 @@ struct ScriptDetailView: View {
                 for block in group.blocks where block.blockType == .confirmation {
                     guard let sessionId = block.confirmationPayload?.sessionId else { continue }
                     seedConfirmationToChatEntry(block: block, sessionId: sessionId)
+                }
+            }
+            .onChange(of: sessionBlocks.compactMap { $0.agentSessionPayload?.lastMessage }) { _, messages in
+                // Persist assistant messages immediately when they arrive, even if SessionChatView
+                // is not open. This prevents blank chat history when the user opens the view later.
+                for block in sessionBlocks {
+                    guard let payload = block.agentSessionPayload,
+                          let msg = payload.lastMessage, !msg.isEmpty
+                    else { continue }
+                    seedAssistantMessageToChatEntry(msg: msg, sessionId: payload.sessionId)
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
@@ -1445,23 +1572,36 @@ struct ScriptDetailView: View {
                 if let block = startSessionBlock, let payload = block.startSessionPayload {
                     RepoPickerSheet(repos: payload.repos) { repo in
                         showRepoPicker = false
-                        Task { await onRespond(block, repo.path) }
+                        Task { await onRespond(block, repo.value ?? repo.path) }
                     }
                 }
             }
             // Session chat navigation
             .navigationDestination(for: AgentSessionNavValue.self) { nav in
                 let livePayload = allBlocks.first(where: { $0.id == nav.blockID })?.agentSessionPayload
-                SessionChatView(
-                    sessionBlockID: nav.blockID,
-                    sessionID: nav.sessionID,
-                    project: nav.project,
-                    livePayload: livePayload,
-                    allBlocks: allBlocks,
-                    scriptID: scriptID,
-                    machineID: nav.machineID,
-                    onRespond: onRespond
-                )
+                if scriptID == "codex-3" {
+                    SessionFeedView(
+                        sessionBlockID: nav.blockID,
+                        sessionID: nav.sessionID,
+                        project: nav.project,
+                        livePayload: livePayload,
+                        allBlocks: allBlocks,
+                        scriptID: scriptID,
+                        machineID: nav.machineID,
+                        onRespond: onRespond
+                    )
+                } else {
+                    SessionChatView(
+                        sessionBlockID: nav.blockID,
+                        sessionID: nav.sessionID,
+                        project: nav.project,
+                        livePayload: livePayload,
+                        allBlocks: allBlocks,
+                        scriptID: scriptID,
+                        machineID: nav.machineID,
+                        onRespond: onRespond
+                    )
+                }
             }
             // Detail block push (list→detail pattern)
             .navigationDestination(isPresented: $isShowingDetail) {
@@ -1750,6 +1890,8 @@ private func blockStatusColor(_ colorString: String?) -> Color {
 
 struct SettingsSheetView: View {
     @Environment(iOSCloudKitService.self) private var cloudKit
+    @Environment(TaskHistoryStore.self) private var taskHistory
+    @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
 
     @AppStorage("showBlockDebugInfo") private var showDebugInfo: Bool = false
@@ -1757,10 +1899,13 @@ struct SettingsSheetView: View {
     @AppStorage("hiddenMachineIDs") private var hiddenMachineIDsRaw: String = ""
     @State private var machines: [AskMachine] = []
     @State private var showQueueReview = false
-    @State private var feedSchedules: [String: String] = [:]
     @State private var machineToDelete: AskMachine?
     @State private var showDeleteConfirm = false
     @State private var isDeleting = false
+    @State private var showClearAllTasksConfirm = false
+
+    @Query(sort: \TaskRecord.lastActivityAt, order: .reverse)
+    private var taskRecords: [TaskRecord]
 
     private var hiddenMachineIDs: Set<String> {
         Set(hiddenMachineIDsRaw.split(separator: ",").map(String.init))
@@ -1791,21 +1936,69 @@ struct SettingsSheetView: View {
         machineToDelete = nil
     }
 
-    @Query(sort: \FeedHistoryEntry.createdAt, order: .reverse)
-    private var feedHistory: [FeedHistoryEntry]
+    private var queue: OfflineQueue { .shared }
 
-    private var feedScripts: [(id: String, name: String)] {
-        var seen = Set<String>()
-        var result: [(id: String, name: String)] = []
-        for entry in feedHistory {
-            if seen.insert(entry.scriptID).inserted {
-                result.append((id: entry.scriptID, name: entry.scriptName ?? entry.scriptID))
+    // MARK: - Task History section
+
+    /// Groups task records by (machineID, scriptID) for display.
+    private var taskHistoryGroups: [(machineID: String, scriptID: String, scriptName: String, count: Int, latest: Date)] {
+        var groups: [String: (machineID: String, scriptID: String, scriptName: String, count: Int, latest: Date)] = [:]
+        for task in taskRecords {
+            let key = "\(task.machineID)/\(task.scriptID)"
+            if var g = groups[key] {
+                g.count += 1
+                if task.lastActivityAt > g.latest { g.latest = task.lastActivityAt }
+                groups[key] = g
+            } else {
+                groups[key] = (task.machineID, task.scriptID, task.scriptName, 1, task.lastActivityAt)
             }
         }
-        return result
+        return groups.values.sorted { $0.latest > $1.latest }
     }
 
-    private var queue: OfflineQueue { .shared }
+    @ViewBuilder
+    private var taskHistorySection: some View {
+        if !taskRecords.isEmpty {
+            Section {
+                ForEach(taskHistoryGroups, id: \.scriptID) { group in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(group.scriptName)
+                                .font(.subheadline)
+                            Text("\(group.count) task\(group.count == 1 ? "" : "s") · \(group.latest.briefRelative)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            try? taskHistory.clearHistory(machineID: group.machineID, scriptID: group.scriptID)
+                        } label: {
+                            Label("Clear", systemImage: "trash")
+                        }
+                    }
+                }
+                Button(role: .destructive) {
+                    showClearAllTasksConfirm = true
+                } label: {
+                    Label("Clear All Task History", systemImage: "trash")
+                }
+            } header: {
+                Text("Task History")
+            } footer: {
+                Text("Stored locally. Swipe a script to clear its task history.")
+            }
+            .confirmationDialog("Clear All Task History?", isPresented: $showClearAllTasksConfirm, titleVisibility: .visible) {
+                Button("Clear All", role: .destructive) {
+                    try? taskHistory.clearAllHistory()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This removes all stored task history and downloaded files from this device.")
+            }
+        }
+    }
 
     private var appVersion: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
@@ -1876,30 +2069,7 @@ struct SettingsSheetView: View {
                     }
                 }
 
-                if !feedScripts.isEmpty {
-                    Section("Feed Schedules") {
-                        ForEach(feedScripts, id: \.id) { script in
-                            FeedScheduleRow(
-                                scriptName: script.name,
-                                schedule: Binding(
-                                    get: { feedSchedules[script.id] ?? "0 * * * *" },
-                                    set: { newSchedule in
-                                        feedSchedules[script.id] = newSchedule
-                                        if let machine = machines.first {
-                                            Task {
-                                                try? await cloudKit.saveFeedSchedule(
-                                                    machineID: machine.id,
-                                                    scriptID: script.id,
-                                                    schedule: newSchedule
-                                                )
-                                            }
-                                        }
-                                    }
-                                )
-                            )
-                        }
-                    }
-                }
+                taskHistorySection
 
                 Section("Appearance") {
                     Toggle("Script Brand Colors", isOn: $useBrandColors)
@@ -1932,12 +2102,6 @@ struct SettingsSheetView: View {
             }
             .task {
                 machines = (try? await cloudKit.fetchMachines()) ?? []
-                if let machine = machines.first,
-                   let schedules = try? await cloudKit.fetchFeedSchedules(machineID: machine.id) {
-                    var map: [String: String] = [:]
-                    for (scriptID, schedule) in schedules { map[scriptID] = schedule }
-                    feedSchedules = map
-                }
             }
             .sheet(isPresented: $showQueueReview) {
                 QueueReviewSheet(isPresented: $showQueueReview)
@@ -1966,53 +2130,7 @@ struct SettingsSheetView: View {
     }
 }
 
-// MARK: - Feed schedule row
 
-private struct FeedScheduleRow: View {
-    let scriptName: String
-    @Binding var schedule: String
-
-    private let presets: [(label: String, cron: String)] = [
-        ("Every Hour",   "0 * * * *"),
-        ("Daily 9am",    "0 9 * * *"),
-        ("Daily 6pm",    "0 18 * * *"),
-        ("Weekly Mon",   "0 9 * * 1"),
-    ]
-
-    private var presetLabel: String {
-        presets.first(where: { $0.cron == schedule })?.label ?? "Custom"
-    }
-
-    var body: some View {
-        HStack {
-            Text(scriptName)
-                .lineLimit(1)
-            Spacer()
-            Menu {
-                ForEach(presets, id: \.cron) { preset in
-                    Button {
-                        schedule = preset.cron
-                    } label: {
-                        if preset.cron == schedule {
-                            Label(preset.label, systemImage: "checkmark")
-                        } else {
-                            Text(preset.label)
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(presetLabel)
-                        .font(.subheadline)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                .foregroundStyle(Color.accentColor)
-            }
-        }
-    }
-}
 
 // MARK: - Queue Review Sheet
 

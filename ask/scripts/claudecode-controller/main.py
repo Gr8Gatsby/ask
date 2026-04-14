@@ -25,7 +25,9 @@ BLOCK_TILE     = 'claudecode-controller-tile'
 SESSIONS_PATH  = os.environ.get('ASK_SESSIONS_PATH', os.path.expanduser('~/.ask/claudecode_sessions.json'))
 STATUS_PATH    = os.path.expanduser('~/.ask/status/claudecode-controller.json')
 LOG_PATH       = os.path.expanduser('~/.ask/logs/claudecode-controller.log')
-SESSION_TTL    = 3600  # seconds — block TTL and session load cutoff
+SESSION_BLOCK_TTL = 3600   # seconds — how long an agent_session block lives in CloudKit
+SESSION_DISK_TTL  = 86400  # seconds — how long sessions are kept in the on-disk registry
+SESSION_TTL       = SESSION_BLOCK_TTL  # backward-compat alias
 
 
 def _log(msg: str):
@@ -70,6 +72,7 @@ class MCPClient:
         self._active_confirmations = 0
         self._tile_body: Optional[str] = None
         self._initialized = False  # True after MCP handshake completes
+        self._tm_healthy: Optional[bool] = None  # None = unknown, True/False after health check
 
     # ------------------------------------------------------------------
     # terminal-manager integration helpers
@@ -177,6 +180,53 @@ class MCPClient:
             await self._emit_session_block(session_id, last_message=info.get('last_message', ''), touch_last_seen=False)
         await self._emit_start_session_block()
         await self._emit_diagnostics_block()
+        # Check terminal-manager is reachable
+        try:
+            await asyncio.wait_for(
+                self._rpc('tools/call', {'name': 'list_sessions', 'arguments': {}}),
+                timeout=5.0
+            )
+            self._tm_healthy = True
+            _log('[claudecode] terminal-manager: reachable')
+        except Exception as tm_err:
+            self._tm_healthy = False
+            _log(f'[claudecode] terminal-manager: unreachable ({tm_err})')
+            await self.emit_block('claudecode-tm-diagnostic', 'alert', {
+                'title': 'terminal-manager not running',
+                'body': 'TUI detection and keyboard input are unavailable. Start the terminal-manager script to enable interactive prompts.',
+            }, ttl=300)
+        asyncio.create_task(self._session_keepalive())
+
+    async def _session_keepalive(self):
+        """Re-emit session blocks and refresh last_seen every 30 minutes.
+
+        Two jobs:
+        1. Disk freshness — updates last_seen so sessions survive daemon restarts
+           across the 24-hour SESSION_DISK_TTL window.
+        2. Block freshness — re-emits any agent_session block whose last_emitted is
+           more than half SESSION_BLOCK_TTL ago, preventing CloudKit TTL expiry from
+           making sessions appear to vanish while the daemon is still running.
+           This also recovers blocks that expired during a previous daemon outage."""
+        while True:
+            await asyncio.sleep(1800)  # 30 minutes
+            if not self._sessions:
+                continue
+            now = time.time()
+            stale_threshold = SESSION_BLOCK_TTL / 2  # re-emit at 50% of TTL remaining
+            refreshed = 0
+            for session_id, info in list(self._sessions.items()):
+                if session_id.startswith('pid-'):
+                    continue
+                info['last_seen'] = now
+                last_emitted = info.get('last_emitted', 0)
+                if now - last_emitted >= stale_threshold:
+                    try:
+                        await self._emit_session_block(session_id)
+                        refreshed += 1
+                    except Exception as e:
+                        _log(f'[claudecode] keepalive re-emit failed for {session_id[:8]}: {e}')
+            self._save_sessions()
+            _log(f'[claudecode] keepalive: refreshed {len(self._sessions)} session(s), re-emitted {refreshed} block(s)')
 
     async def emit_block(self, block_id, block_type, payload, ttl=None, inbox=False):
         args = {'blockId': block_id, 'blockType': block_type, 'payload': payload}
@@ -575,28 +625,78 @@ class MCPClient:
 
     @staticmethod
     def _parse_tmux_prompt(content: str):
-        """Detect a numbered interactive menu in tmux pane output.
-        Returns (body, options) or None if no prompt found."""
+        """Detect an interactive prompt in tmux pane output.
+        Returns (body, options, reply_mode) or None if no prompt found.
+        reply_mode is one of: 'numbered', 'yn', 'arrow'
+        """
         import re
+
+        # Claude Code's own UI contains these strings during diff review / streaming.
+        # They must never be mistaken for user-actionable prompts.
+        _CLAUDE_CODE_UI_PATTERNS = [
+            'accept edits on',
+            'shift+tab to cycle',
+            'esc to interrupt',
+            'tab to interrupt',
+        ]
+        content_lower = content.lower()
+        if any(p in content_lower for p in _CLAUDE_CODE_UI_PATTERNS):
+            return None
+
+        lines = content.splitlines()
+
+        # Format 1: Numbered menu (e.g. "1. Option") with a footer line
         option_re = re.compile(r'^\s*[>❯]?\s*(\d+)[.)]\s+(.+)$')
         footer_re = re.compile(r'press\s+enter|to\s+continue|to\s+confirm|esc\s+to', re.IGNORECASE)
-        lines = content.splitlines()
-        options = []
+        options_numbered = []
         body_lines = []
         found_options = False
         for line in lines:
             m = option_re.match(line)
             if m:
                 found_options = True
-                options.append(m.group(2).strip())
+                options_numbered.append(m.group(2).strip())
             elif not found_options:
-                stripped = line.strip()
-                if stripped and not re.match(r'^[$%#>]\s', stripped):
-                    body_lines.append(stripped)
+                s = line.strip()
+                if s and not re.match(r'^[$%#>]\s', s):
+                    body_lines.append(s)
         has_footer = any(footer_re.search(l) for l in lines)
-        if len(options) >= 2 and has_footer:
+        if len(options_numbered) >= 2 and has_footer:
             body = ' '.join(body_lines[-2:]) if body_lines else 'Choose an option'
-            return body, options
+            return body, options_numbered, 'numbered'
+
+        # Format 2: Arrow-key menu (lines prefixed with ❯ or >, no numbers)
+        # e.g. "❯ Yes, proceed" / "  No, exit" or Claude Code trust prompt
+        arrow_re = re.compile(r'^[❯>]\s+(.+)$')
+        plain_re = re.compile(r'^\s{2,}(\S.+)$')
+        arrow_options = []
+        in_menu = False
+        menu_body_lines = []
+        for line in lines:
+            ma = arrow_re.match(line.rstrip())
+            if ma:
+                in_menu = True
+                arrow_options.append(ma.group(1).strip())
+            elif in_menu:
+                mp = plain_re.match(line.rstrip())
+                if mp:
+                    arrow_options.append(mp.group(1).strip())
+                elif line.strip():
+                    in_menu = False
+            elif not in_menu and line.strip() and not re.match(r'^[$%#❯>]', line.strip()):
+                menu_body_lines.append(line.strip())
+        if len(arrow_options) >= 2:
+            body = ' '.join(menu_body_lines[-2:]) if menu_body_lines else 'Choose an option'
+            return body, arrow_options, 'arrow'
+
+        # Format 3: y/n inline prompt
+        yn_re = re.compile(r'(\(y[/\\]n\)|\[y[/\\]N\]|\[Y[/\\]n\])\s*[›>]?\s*$', re.IGNORECASE)
+        for line in lines:
+            m = yn_re.search(line)
+            if m:
+                body = line.strip()
+                return body, ['Yes', 'No'], 'yn'
+
         return None
 
     async def _monitor_tmux_pane(self, tmux_target: str):
@@ -620,18 +720,18 @@ class MCPClient:
             except Exception:
                 break  # pane is gone
 
-            result = self._parse_tmux_prompt(content)
+            parse_result = self._parse_tmux_prompt(content)
             content_hash = _hl.md5(content.encode()).hexdigest()[:8]
 
-            if result:
+            if parse_result:
                 idle_streak = 0
                 poll_interval = 1
                 if content_hash != last_hash:
                     last_hash = content_hash
-                    body, options = result
-                    captured = (tmux_target, options, block_id)
+                    body, options, reply_mode = parse_result
+                    captured = (tmux_target, options, block_id, reply_mode)
                     self._response_callbacks[block_id] = (
-                        lambda v, c=captured: self._on_tmux_prompt_reply(c[0], c[1], v, c[2])
+                        lambda v, c=captured: self._on_tmux_prompt_reply(c[0], c[1], v, c[2], c[3])
                     )
                     payload = {'title': body, 'body': '', 'options': options, 'urgency': 'warning'}
                     try:
@@ -652,6 +752,7 @@ class MCPClient:
                     poll_interval = 5  # slow down after startup phase
 
         # Pane gone — clean up
+
         self._tmux_monitors.pop(tmux_target, None)
         self._response_callbacks.pop(block_id, None)
         try:
@@ -659,31 +760,56 @@ class MCPClient:
         except Exception:
             pass
 
-    async def _on_tmux_prompt_reply(self, tmux_target: str, options: list, value: str, block_id: str):
+    async def _on_tmux_prompt_reply(self, tmux_target: str, options: list, value: str, block_id: str, reply_mode: str = 'numbered'):
         """Send the user's selection to the tmux pane."""
         try:
-            idx = options.index(value)  # 0-based
-        except ValueError:
-            return
-        try:
-            for _ in range(idx):
+            if reply_mode == 'yn':
+                key = 'y' if value == 'Yes' else 'n'
                 p = await asyncio.create_subprocess_exec(
-                    'tmux', 'send-keys', '-t', tmux_target, 'Down',
+                    'tmux', 'send-keys', '-t', tmux_target, key, 'Enter',
                     stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
                 )
                 await p.communicate()
-                await asyncio.sleep(0.05)
-            p = await asyncio.create_subprocess_exec(
-                'tmux', 'send-keys', '-t', tmux_target, 'Enter',
-                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
-            )
-            await p.communicate()
-            await asyncio.sleep(0.4)
-            p = await asyncio.create_subprocess_exec(
-                'tmux', 'send-keys', '-t', tmux_target, 'Enter',
-                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
-            )
-            await p.communicate()
+            elif reply_mode == 'arrow':
+                try:
+                    idx = options.index(value)
+                except ValueError:
+                    idx = 0
+                for _ in range(idx):
+                    p = await asyncio.create_subprocess_exec(
+                        'tmux', 'send-keys', '-t', tmux_target, 'Down',
+                        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await p.communicate()
+                    await asyncio.sleep(0.05)
+                p = await asyncio.create_subprocess_exec(
+                    'tmux', 'send-keys', '-t', tmux_target, 'Enter',
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                )
+                await p.communicate()
+            else:  # numbered
+                try:
+                    idx = options.index(value)
+                except ValueError:
+                    idx = 0
+                for _ in range(idx):
+                    p = await asyncio.create_subprocess_exec(
+                        'tmux', 'send-keys', '-t', tmux_target, 'Down',
+                        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await p.communicate()
+                    await asyncio.sleep(0.05)
+                p = await asyncio.create_subprocess_exec(
+                    'tmux', 'send-keys', '-t', tmux_target, 'Enter',
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                )
+                await p.communicate()
+                await asyncio.sleep(0.4)
+                p = await asyncio.create_subprocess_exec(
+                    'tmux', 'send-keys', '-t', tmux_target, 'Enter',
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                )
+                await p.communicate()
         except Exception as e:
             print(f'[claudecode-controller] tmux prompt reply failed: {e}', file=sys.stderr)
         self._response_callbacks.pop(block_id, None)
@@ -735,6 +861,22 @@ class MCPClient:
                     break
                 continue
 
+            # Don't scan for TUI prompts while Claude is actively streaming a
+            # response — markdown output (numbered lists, ❯ arrows) false-positives.
+            if session_id in self._working_sessions:
+                if last_hash:
+                    # Clear any stale pending_confirmation from before work started.
+                    last_hash = ''
+                    active_options = []
+                    session = self._sessions.get(session_id, {})
+                    session.pop('pending_confirmation', None)
+                    session_block_id = self._session_block_id(session_id)
+                    self._response_callbacks[session_block_id] = (
+                        lambda v, sid=session_id: self._on_session_reply(sid, v)
+                    )
+                    await self._emit_session_block(session_id)
+                continue
+
             parsed = self._parse_tmux_prompt(content)
             content_hash = _hl.md5(content.encode()).hexdigest()[:8]
 
@@ -743,7 +885,7 @@ class MCPClient:
                 poll_interval = 1
                 if content_hash != last_hash:
                     last_hash = content_hash
-                    body, options = parsed
+                    body, options, _reply_mode = parsed
                     active_options = options
                     # Embed the confirmation in the session block so it appears
                     # inside the session card rather than floating above all sessions.
@@ -864,7 +1006,11 @@ class MCPClient:
             pass
 
     def _load_sessions(self):
-        """Load persisted sessions, discarding any older than SESSION_TTL.
+        """Load persisted sessions, discarding any older than SESSION_DISK_TTL.
+
+        Uses a 24-hour cutoff (SESSION_DISK_TTL) instead of the 1-hour block TTL
+        so that long-running sessions survive daemon restarts without disappearing.
+        Dead sessions are evicted by _prune_dead_pid_sessions / _prune_dead_real_sessions.
 
         After loading, deduplicate by TTY: only one session per TTY is allowed.
         When multiple sessions share a TTY, the real (non-pid-*) session wins;
@@ -872,7 +1018,7 @@ class MCPClient:
         try:
             with open(SESSIONS_PATH) as f:
                 data = json.load(f)
-            cutoff = time.time() - SESSION_TTL
+            cutoff = time.time() - SESSION_DISK_TTL
             self._sessions = {
                 sid: info for sid, info in data.items()
                 if isinstance(info, dict) and info.get('last_seen', 0) >= cutoff
@@ -942,6 +1088,9 @@ class MCPClient:
             norm_tty = self._normalize_tty(tty)
             if any(info.get('claude_pid') == pid or self._normalize_tty(info.get('tty', '')) == norm_tty
                    for info in self._sessions.values()):
+                # Clear any lingering CloudKit block for this PID so it doesn't appear
+                # as a ghost session on iOS after a daemon restart.
+                asyncio.create_task(self.clear_block(self._session_block_id(synthetic_id)))
                 continue
             if self._register_session(synthetic_id, cwd, claude_pid=pid):
                 self._sessions[synthetic_id]['tty'] = tty
@@ -987,24 +1136,43 @@ class MCPClient:
         return dead
 
     async def _prune_dead_real_sessions(self):
-        """Remove hook-registered sessions that are no longer registered in terminal-manager.
-        Only prunes when list_sessions returns at least one result — if it returns empty we
-        can't tell 'no processes' from 'tool unavailable', so we skip pruning."""
-        active = await self.list_terminal_sessions()
-        if not active:
-            return []
-        active_ids = {s.get('session_id') for s in active if s.get('session_id')}
+        """Remove hook-registered sessions whose claude process has died.
+
+        Two-pass approach:
+        1. Always prune sessions whose stored claude_pid is no longer alive.
+        2. If TM returns a non-empty session list, also prune any real session
+           absent from TM (TM returning empty just means it restarted and lost
+           state — we can't use that as a signal that all sessions are dead)."""
         dead = []
+
+        # Pass 1: PID-based liveness — works even when TM has no state.
         for session_id, info in list(self._sessions.items()):
             if session_id.startswith('pid-'):
                 continue
-            if session_id not in active_ids:
+            claude_pid = info.get('claude_pid')
+            if claude_pid and not self._is_pid_alive(claude_pid):
                 self._sessions.pop(session_id, None)
                 self._working_sessions.discard(session_id)
                 dead.append(session_id)
                 asyncio.create_task(self._tm_unregister(session_id))
                 cwd = info.get('cwd', '')
-                print(f'[claudecode-controller] pruned dead session {session_id[:8]} ({cwd})', file=sys.stderr)
+                print(f'[claudecode-controller] pruned dead session {session_id[:8]} pid={claude_pid} ({cwd})', file=sys.stderr)
+
+        # Pass 2: TM-based cross-check (only when TM has sessions to report).
+        active = await self.list_terminal_sessions()
+        if active:
+            active_ids = {s.get('session_id') for s in active if s.get('session_id')}
+            for session_id, info in list(self._sessions.items()):
+                if session_id.startswith('pid-') or session_id in dead:
+                    continue
+                if session_id not in active_ids:
+                    self._sessions.pop(session_id, None)
+                    self._working_sessions.discard(session_id)
+                    dead.append(session_id)
+                    asyncio.create_task(self._tm_unregister(session_id))
+                    cwd = info.get('cwd', '')
+                    print(f'[claudecode-controller] pruned dead session {session_id[:8]} (not in TM, {cwd})', file=sys.stderr)
+
         if dead:
             self._save_sessions()
         return dead
@@ -1151,6 +1319,12 @@ class MCPClient:
             if self._normalize_tty(self._sessions[sid].get('tty', '')) == tty:
                 _log(f'[claudecode] evicting {sid} — TTY {tty} superseded by {keep_session_id[:8]}')
                 asyncio.create_task(self.clear_block(self._session_block_id(sid)))
+                # Also clear any pending confirmation blocks linked to this session
+                # so the ghost session card with orange badge disappears on iOS.
+                for block_ids in list(self._tool_block_map.keys()):
+                    if block_ids[0] == sid:
+                        for bid in self._tool_block_map.pop(block_ids, []):
+                            asyncio.create_task(self.clear_block(bid))
                 del self._sessions[sid]
         self._save_sessions()
 
@@ -1181,16 +1355,8 @@ class MCPClient:
     def _handle_session_stop(self, msg):
         session_id = msg.get('session_id', '')
         cwd = msg.get('cwd', '')
-        last_message = msg.get('last_message', '')
         if not session_id:
             return
-        self._register_session(session_id, cwd)
-        if session_id in self._sessions:
-            if cwd:
-                self._sessions[session_id]['cwd'] = cwd
-                self._sessions[session_id]['project'] = self._project_label(cwd, session_id)
-            self._sessions[session_id]['last_seen'] = time.time()
-        self._working_sessions.discard(session_id)
         # Cancel any pane/TTY monitors for this session
         tmux_target = self._sessions.get(session_id, {}).get('tmux_target')
         if tmux_target:
@@ -1200,10 +1366,18 @@ class MCPClient:
         tty_task = self._tty_monitors.pop(session_id, None)
         if tty_task:
             tty_task.cancel()
-        print(f'[claudecode-controller] session stopped: {session_id}', file=sys.stderr)
+        # Remove the session and clear its iOS block immediately.
+        # Re-emitting with is_working=false left ghost sessions visible for up to
+        # SESSION_TTL (1h), causing duplicates when a new session started in the same repo.
+        info = self._sessions.pop(session_id, {})
+        self._working_sessions.discard(session_id)
+        self._current_tools.pop(session_id, None)
+        self._tool_histories.pop(session_id, None)
+        self._save_sessions()
+        project = info.get('project') or (os.path.basename(cwd) if cwd else 'Claude Code')
+        print(f'[claudecode-controller] session stopped: {session_id} ({project})', file=sys.stderr)
         asyncio.create_task(self._tm_unregister(session_id))
-        asyncio.create_task(self._emit_session_block(session_id, last_message=last_message))
-        project = self._sessions.get(session_id, {}).get('project', 'Claude Code')
+        asyncio.create_task(self.clear_block(self._session_block_id(session_id)))
         asyncio.create_task(self.emit_block(str(uuid.uuid4()), 'session_event', {
             'event': 'stopped', 'project': project, 'cwd': cwd, 'ts': time.time()
         }, ttl=3600))
@@ -1434,11 +1608,14 @@ class MCPClient:
                 'name': 'wait_for_idle',
                 'arguments': {
                     'session_id': session_id,
-                    'timeout': 300,
-                    'poll_interval': 1,
+                    'timeout': 1800,
+                    'poll_interval': 2,
                     'stable_count': 2,
+                    # Match Claude's idle '>' prompt OR the diff-viewer '>> accept edits'
+                    # line — both mean Claude has finished streaming and is waiting for input.
+                    'prompt_pattern': r'^\s*(>\s*$|>>\s)',
                 }
-            }, timeout=320.0)
+            }, timeout=1820.0)
             if isinstance(result, dict) and result.get('idle') and result.get('output'):
                 response = result['output']
                 _log(f'[claudecode] TTY response captured for {session_id[:8]} ({len(response)} chars)')
@@ -1480,48 +1657,70 @@ class MCPClient:
 
         # ── TTY sessions ─────────────────────────────────────────────────────
         if not tmux_target:
-            # Priority 1: inject_tty — TIOCSTI, no clipboard, no focus needed
-            try:
-                result = await self._rpc('tools/call', {
-                    'name': 'inject_tty',
-                    'arguments': {'session_id': session_id, 'text': text}
-                }, timeout=3.0)
-                if isinstance(result, dict) and result.get('ok'):
-                    _log(f'[claudecode] routed via inject_tty: {session_id[:8]}')
-                    asyncio.create_task(self._capture_tty_response(session_id))
-                    return
-            except Exception as e:
-                _log(f'[claudecode] inject_tty failed, falling back: {e}')
+            # Priority 1: inject_tty — TIOCSTI, no clipboard, no focus needed.
+            # Retry once with re-registration: TM may have restarted and lost
+            # its session registry, causing "Unknown session" → -32601.
+            for attempt in range(2):
+                try:
+                    result = await self._rpc('tools/call', {
+                        'name': 'inject_tty',
+                        'arguments': {'session_id': session_id, 'text': text}
+                    }, timeout=3.0)
+                    if isinstance(result, dict) and result.get('ok'):
+                        _log(f'[claudecode] routed via inject_tty: {session_id[:8]}')
+                        asyncio.create_task(self._capture_tty_response(session_id))
+                        return
+                    break  # got a valid response (ok=False), no point retrying
+                except Exception as e:
+                    if attempt == 0:
+                        _log(f'[claudecode] inject_tty failed, re-registering and retrying: {e}')
+                        await self._tm_register(session_id)
+                    else:
+                        _log(f'[claudecode] inject_tty failed after re-register, falling back: {e}')
 
-            # Priority 2: send_text via terminal-manager (osascript, focuses window)
-            try:
-                result = await self._rpc('tools/call', {
-                    'name': 'send_text',
-                    'arguments': {'session_id': session_id, 'text': text}
-                }, timeout=3.0)
-                if isinstance(result, dict) and result.get('ok'):
-                    _log(f'[claudecode] routed via send_text: {session_id[:8]}')
-                    asyncio.create_task(self._capture_tty_response(session_id))
-                    return
-            except Exception as e:
-                _log(f'[claudecode] send_text failed, falling back to osascript: {e}')
+            # Priority 2: send_text via terminal-manager (osascript, focuses window).
+            # Same retry-with-reregister pattern.
+            for attempt in range(2):
+                try:
+                    result = await self._rpc('tools/call', {
+                        'name': 'send_text',
+                        'arguments': {'session_id': session_id, 'text': text}
+                    }, timeout=3.0)
+                    if isinstance(result, dict) and result.get('ok'):
+                        _log(f'[claudecode] routed via send_text: {session_id[:8]}')
+                        asyncio.create_task(self._capture_tty_response(session_id))
+                        return
+                    break
+                except Exception as e:
+                    if attempt == 0:
+                        _log(f'[claudecode] send_text failed, re-registering and retrying: {e}')
+                        await self._tm_register(session_id)
+                    else:
+                        _log(f'[claudecode] send_text failed after re-register, falling back to osascript: {e}')
 
             # Priority 3 handled below (pbcopy + osascript)
 
         # ── tmux sessions ─────────────────────────────────────────────────────
         else:
-            # Primary: terminal-manager send_text
-            try:
-                result = await self._rpc('tools/call', {
-                    'name': 'send_text',
-                    'arguments': {'session_id': session_id, 'text': text}
-                }, timeout=3.0)
-                if isinstance(result, dict) and result.get('ok'):
-                    _log(f'[claudecode] routed via terminal-manager send_text: {session_id[:8]}')
-                    asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
-                    return
-            except Exception as e:
-                _log(f'[claudecode] send_text failed, falling back: {e}')
+            # Primary: terminal-manager send_text.
+            # Retry once with re-registration on error (TM may have restarted).
+            for attempt in range(2):
+                try:
+                    result = await self._rpc('tools/call', {
+                        'name': 'send_text',
+                        'arguments': {'session_id': session_id, 'text': text}
+                    }, timeout=3.0)
+                    if isinstance(result, dict) and result.get('ok'):
+                        _log(f'[claudecode] routed via terminal-manager send_text: {session_id[:8]}')
+                        asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
+                        return
+                    break
+                except Exception as e:
+                    if attempt == 0:
+                        _log(f'[claudecode] send_text failed, re-registering and retrying: {e}')
+                        await self._tm_register(session_id)
+                    else:
+                        _log(f'[claudecode] send_text failed after re-register, falling back: {e}')
 
             # Fallback: direct tmux send-keys
             try:
@@ -2024,10 +2223,11 @@ end tell
         # Evict any other session on this TTY — only one session per terminal.
         if tty:
             self._evict_sessions_for_tty(tty, session_id)
-        # Start TTY prompt monitor if not already running
-        if tty and session_id not in self._tty_monitors:
-            task = asyncio.create_task(self._monitor_tty_session(session_id))
-            self._tty_monitors[session_id] = task
+        # Hook-registered sessions have full hook coverage (PostToolUse, Stop, etc.)
+        # so TTY polling is redundant and causes false-positive prompt detection
+        # when Claude Code's own UI (e.g. "accept edits on (shift+tab to cycle)")
+        # is misidentified as an interactive menu. TTY monitor is only useful for
+        # pid-* sessions (discovered processes without hook control).
         if is_new:
             session = self._sessions.get(session_id, {})
             if session.get('tty') or session.get('tmux_target'):
@@ -2157,10 +2357,11 @@ async def _session_heartbeat(client):
                 await client.clear_block(client._session_block_id(session_id))
             except Exception:
                 pass
-        # Deduplicate: one session per TTY — newer (most-recently-seen) wins.
+        # Deduplicate: one session per TTY — hook-registered (UUID) sessions beat
+        # pid-discovered sessions; within the same type, newer (most-recently-seen) wins.
         seen_ttys: dict = {}
         for sid, info in sorted(client._sessions.items(),
-                                key=lambda x: -x[1].get('last_seen', 0)):
+                                key=lambda x: (x[0].startswith('pid-'), -x[1].get('last_seen', 0))):
             tty = client._normalize_tty(info.get('tty', ''))
             if not tty:
                 continue

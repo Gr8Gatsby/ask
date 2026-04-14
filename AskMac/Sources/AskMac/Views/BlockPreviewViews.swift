@@ -149,6 +149,7 @@ private struct ConfirmationPreview: View {
                         .controlSize(.small)
                         .tint(idx == 0 ? .accentColor : Color(.tertiaryLabelColor))
                         .disabled(onRespond == nil)
+                        .accessibilityIdentifier("confirm-option-\(opt)")
                     }
                     Spacer()
                 }
@@ -173,6 +174,7 @@ private struct ConfirmationPreview: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(onRespond == nil)
+                        .accessibilityIdentifier("confirm-option-\(opt)")
                         if idx < options.count - 1 {
                             Divider().padding(.leading, 8)
                         }
@@ -230,9 +232,11 @@ private struct AlertPreview: View {
             VStack(alignment: .leading, spacing: 2) {
                 if let title = payload["title"] as? String, !title.isEmpty {
                     Text(title).font(.caption).fontWeight(.medium)
+                        .accessibilityIdentifier("alert-title")
                 }
                 if let body = payload["body"] as? String, !body.isEmpty {
                     Text(body).font(.caption2).foregroundStyle(.secondary).lineLimit(4)
+                        .accessibilityIdentifier("alert-body")
                 }
             }
             Spacer()
@@ -475,13 +479,24 @@ private struct AgentSessionPreview: View {
     var onRespond: ((String) -> Void)?
 
     @State private var replyText = ""
-    @State private var responded = false
+    @State private var respondedText: String? = nil
+    @State private var confirmationResponse: String? = nil
 
-    private var agentName: String { payload["agent_name"] as? String ?? "Claude" }
+    private var agentName: String { payload["agent_name"] as? String ?? "Agent" }
     private var isWorking: Bool   { payload["is_working"] as? Bool ?? false }
     private var lastMessage: String? { payload["last_message"] as? String }
     private var placeholder: String { payload["placeholder"] as? String ?? "Reply to \(agentName)…" }
     private var project: String?  { payload["project"] as? String }
+    private var currentPreview: String? { payload["current_preview"] as? String ?? payload["preview"] as? String }
+    private var statusText: String? { payload["status_text"] as? String }
+
+    private var pendingConfirmation: (title: String, options: [String])? {
+        guard let pending = payload["pending_confirmation"] as? [String: Any],
+              let title = pending["title"] as? String
+        else { return nil }
+        let options = pending["options"] as? [String] ?? []
+        return (title, options)
+    }
 
     private var brandColor: Color {
         hexColor(payload["brand_color"] as? String) ?? .accentColor
@@ -505,24 +520,43 @@ private struct AgentSessionPreview: View {
                 }
             }
 
-            // Message / working state
+            // Last assistant message — shown above the status indicator
+            if let msg = lastMessage, !msg.isEmpty {
+                markdownText(msg)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+            }
+
+            // Status indicator
             Group {
-                if isWorking, let msg = lastMessage, !msg.isEmpty {
-                    markdownText(msg)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .italic()
-                        .lineLimit(4)
+                if let pending = pendingConfirmation {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(pending.title)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        if let preview = currentPreview, !preview.isEmpty {
+                            markdownText(preview)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(4)
+                        } else if let status = statusText, !status.isEmpty {
+                            Text(status)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 } else if isWorking {
                     HStack(spacing: 4) {
-                        Text("Working…").font(.caption).foregroundStyle(.secondary).italic()
+                        ProgressView().controlSize(.mini).tint(brandColor)
+                        if let tool = payload["current_tool"] as? String, !tool.isEmpty {
+                            Text(tool)
+                                .font(.caption).foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        } else {
+                            Text(statusText ?? "Working…").font(.caption).foregroundStyle(.secondary)
+                        }
                     }
-                } else if let msg = lastMessage, !msg.isEmpty {
-                    markdownText(msg)
-                        .font(.caption)
-                        .foregroundStyle(.primary)
-                        .lineLimit(6)
-                        .textSelection(.enabled)
                 } else {
                     Text("Waiting for input…")
                         .font(.caption).foregroundStyle(.secondary).italic()
@@ -533,29 +567,64 @@ private struct AgentSessionPreview: View {
             .background(Color.secondary.opacity(0.1))
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
+            if let pending = pendingConfirmation, let respond = onRespond {
+                VStack(alignment: .leading, spacing: 8) {
+                    if let confirmationResponse {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                            Text(confirmationResponse)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    } else {
+                        HStack(spacing: 8) {
+                            ForEach(pending.options, id: \.self) { option in
+                                Button(option) {
+                                    confirmationResponse = option
+                                    respond(option)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(option.lowercased().contains("deny") ? .red : brandColor)
+                                .controlSize(.small)
+                                .accessibilityIdentifier("agent-session-option-\(option)")
+                            }
+                        }
+                    }
+                }
+            }
+
             // Reply row
-            if responded {
+            if let respondedText {
                 HStack(spacing: 4) {
                     Image(systemName: "checkmark.circle.fill").font(.caption).foregroundStyle(.secondary)
-                    Text(replyText).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(respondedText).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             } else if let respond = onRespond {
                 HStack(spacing: 6) {
                     TextField(placeholder, text: $replyText)
                         .textFieldStyle(.roundedBorder)
                         .font(.caption)
+                        .accessibilityIdentifier("agent-session-reply")
                         .onSubmit {
                             guard !replyText.isEmpty else { return }
-                            respond(replyText); responded = true
+                            let value = replyText
+                            respond(value)
+                            respondedText = value
                         }
                     Button {
                         guard !replyText.isEmpty else { return }
-                        respond(replyText); responded = true
+                        let value = replyText
+                        respond(value)
+                        respondedText = value
                     } label: {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.title3)
                             .foregroundStyle(replyText.isEmpty ? Color.secondary : brandColor)
                     }
+                    .accessibilityIdentifier("agent-session-send")
                     .buttonStyle(.plain)
                     .disabled(replyText.isEmpty)
                 }
@@ -614,11 +683,11 @@ private struct StartSessionPreview: View {
 
     @State private var expanded = false
 
-    private var repos: [(name: String, path: String)] {
+    private var repos: [(name: String, path: String, value: String)] {
         guard let raw = payload["repos"] as? [[String: Any]] else { return [] }
         return raw.compactMap { d in
             guard let n = d["name"] as? String, let p = d["path"] as? String else { return nil }
-            return (n, p)
+            return (n, p, (d["value"] as? String) ?? p)
         }
     }
 
@@ -656,7 +725,7 @@ private struct StartSessionPreview: View {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(repos.enumerated()), id: \.offset) { idx, repo in
                         RepoRowView(name: repo.name, path: repo.path) {
-                            onRespond?(repo.path)
+                            onRespond?(repo.value)
                             expanded = false
                         }
                         .disabled(onRespond == nil)

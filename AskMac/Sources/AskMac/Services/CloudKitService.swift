@@ -189,12 +189,6 @@ final class CloudKitService {
         }
     }
 
-    /// Deletes a Device record by its record name.
-    func deleteDevice(recordName: String) async throws {
-        let recordID = CKRecord.ID(recordName: recordName)
-        try await database.deleteRecord(withID: recordID)
-    }
-
     /// Sets the enabled flag on a Device record. Does nothing if the record doesn't exist yet.
     func setDeviceEnabled(recordName: String, enabled: Bool) async throws {
         let recordID = CKRecord.ID(recordName: recordName)
@@ -210,6 +204,19 @@ final class CloudKitService {
         let record = block.toCKRecord()
         let saved = try await save(record)
         cachedRecords[block.blockID] = saved
+    }
+
+    /// Fetches all non-expired RKBlock records for a machine. Used to seed activeBlocks on startup.
+    func fetchActiveBlocks(machineID: String) async -> [CKRecord] {
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.RKBlock.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.rkBlock, predicate: predicate)
+        guard let (results, _) = try? await database.records(matching: query, resultsLimit: 500) else { return [] }
+        let now = Date()
+        return results.compactMap { _, result -> CKRecord? in
+            guard let record = try? result.get() else { return nil }
+            if let expiresAt = record[CKSchema.RKBlock.expiresAt] as? Date, expiresAt < now { return nil }
+            return record
+        }
     }
 
     /// Deletes all expired RKBlock records for a machine. Called by HeartbeatService on each cycle.
@@ -281,6 +288,147 @@ final class CloudKitService {
             _ = try? await database.modifyRecords(saving: [], deleting: toDelete, savePolicy: .allKeys, atomically: false)
         }
         return found
+    }
+
+    /// Upserts an AskScript record representing the current state of one script on this machine.
+    func upsertScript(_ script: AskScriptRecord) async throws {
+        let record = existingRecord(named: script.recordName, type: CKSchema.RecordType.askScript)
+        record[CKSchema.AskScript.machineID]  = script.machineID
+        record[CKSchema.AskScript.scriptID]   = script.scriptID
+        record[CKSchema.AskScript.scriptName] = script.scriptName
+        record[CKSchema.AskScript.scriptType] = script.scriptType
+        record[CKSchema.AskScript.scriptIcon] = script.scriptIcon as CKRecordValueProtocol?
+        record[CKSchema.AskScript.version]    = script.version as CKRecordValueProtocol?
+        record[CKSchema.AskScript.status]     = script.status
+        record[CKSchema.AskScript.lastRunAt]  = script.lastRunAt as CKRecordValueProtocol?
+        record[CKSchema.AskScript.nextRunAt]  = script.nextRunAt as CKRecordValueProtocol?
+        record[CKSchema.AskScript.updatedAt]  = script.updatedAt
+        let saved = try await database.save(record)
+        cachedRecords[script.recordName] = saved
+    }
+
+    /// Deletes the AskScript record for a script that has been uninstalled or permanently disabled.
+    func deleteScript(machineID: String, scriptID: String) async {
+        let recordName = "script-\(machineID)-\(scriptID)"
+        cachedRecords.removeValue(forKey: recordName)
+        _ = try? await database.deleteRecord(withID: CKRecord.ID(recordName: recordName))
+    }
+
+    /// Fetches and deletes all AskInvokeRequest records addressed to this machine.
+    /// Returns the list of scriptIDs to invoke.
+    func drainInvokeRequests(machineID: String) async throws -> [String] {
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.AskInvokeRequest.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.askInvokeRequest, predicate: predicate)
+        let (results, _) = try await database.records(matching: query, resultsLimit: 50)
+
+        var scriptIDs: [String] = []
+        var toDelete: [CKRecord.ID] = []
+
+        for (recordID, result) in results {
+            guard let record = try? result.get(),
+                  let scriptID = record[CKSchema.AskInvokeRequest.scriptID] as? String
+            else { continue }
+            scriptIDs.append(scriptID)
+            toDelete.append(recordID)
+        }
+
+        if !toDelete.isEmpty {
+            _ = try? await database.modifyRecords(saving: [], deleting: toDelete, savePolicy: .allKeys, atomically: false)
+        }
+        return scriptIDs
+    }
+
+    // MARK: - Task history (A2A protocol)
+
+    /// Fetches all AskTask records for this machine, sorted newest-first.
+    func fetchTasks(machineID: String) async throws -> [AskTaskRecord] {
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.AskTask.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.askTask, predicate: predicate)
+        query.sortDescriptors = [NSSortDescriptor(key: CKSchema.AskTask.lastActivityAt, ascending: false)]
+        let (results, _) = try await database.records(matching: query, resultsLimit: 100)
+        return results.compactMap { _, result in
+            guard let record = try? result.get() else { return nil }
+            return AskTaskRecord(from: record)
+        }
+    }
+
+    /// Creates or updates an AskTask record. Uses the task's recordName as the CloudKit record ID
+    /// so re-opening the same task is an upsert, not a duplicate insert.
+    func saveTask(_ task: AskTaskRecord) async throws {
+        let record = existingRecord(named: task.recordName, type: CKSchema.RecordType.askTask)
+        // Apply all fields from the struct
+        record[CKSchema.AskTask.taskID]        = task.taskID
+        record[CKSchema.AskTask.machineID]     = task.machineID
+        record[CKSchema.AskTask.scriptID]      = task.scriptID
+        record[CKSchema.AskTask.scriptName]    = task.scriptName
+        record[CKSchema.AskTask.scriptIcon]    = task.scriptIcon as CKRecordValueProtocol?
+        record[CKSchema.AskTask.scriptIconData] = task.scriptIconData as CKRecordValueProtocol?
+        record[CKSchema.AskTask.title]         = task.title
+        record[CKSchema.AskTask.status]        = task.status
+        record[CKSchema.AskTask.lastActivityAt] = task.lastActivityAt
+        record[CKSchema.AskTask.messageCount]  = task.messageCount as CKRecordValue
+        record[CKSchema.AskTask.artifactCount] = task.artifactCount as CKRecordValue
+        let saved = try await save(record)
+        cachedRecords[task.recordName] = saved
+        logger.info("saveTask — \(task.recordName) status: \(task.status)")
+    }
+
+    /// Creates a new AskTaskMessage record. Message IDs are UUIDs; always a fresh insert.
+    func saveTaskMessage(_ message: AskTaskMessageRecord) async throws {
+        let record = message.toCKRecord()
+        let saved = try await save(record)
+        cachedRecords[message.messageID] = saved
+        logger.info("saveTaskMessage — taskID: \(message.taskID) seq: \(message.sequenceNumber)")
+    }
+
+    /// Fetches all messages for a task, sorted by sequence number.
+    func fetchTaskMessages(taskID: String, machineID: String) async throws -> [TaskMessageDisplay] {
+        let predicate = NSPredicate(
+            format: "%K == %@ AND %K == %@",
+            CKSchema.AskTaskMessage.taskID, taskID,
+            CKSchema.AskTaskMessage.machineID, machineID
+        )
+        let query = CKQuery(recordType: CKSchema.RecordType.askTaskMessage, predicate: predicate)
+        query.sortDescriptors = [NSSortDescriptor(key: CKSchema.AskTaskMessage.sequenceNumber, ascending: true)]
+        let (results, _) = try await database.records(matching: query, resultsLimit: 200)
+        return results.compactMap { _, result in
+            guard let record = try? result.get() else { return nil }
+            return TaskMessageDisplay(from: record)
+        }
+    }
+
+    /// Fetches all artifacts for a task.
+    func fetchTaskArtifacts(taskID: String, machineID: String) async throws -> [TaskArtifactDisplay] {
+        let predicate = NSPredicate(
+            format: "%K == %@ AND %K == %@",
+            CKSchema.AskArtifact.taskID, taskID,
+            CKSchema.AskArtifact.machineID, machineID
+        )
+        let query = CKQuery(recordType: CKSchema.RecordType.askArtifact, predicate: predicate)
+        query.sortDescriptors = [NSSortDescriptor(key: CKSchema.AskArtifact.updatedAt, ascending: true)]
+        let (results, _) = try await database.records(matching: query, resultsLimit: 50)
+        return results.compactMap { _, result in
+            guard let record = try? result.get() else { return nil }
+            return TaskArtifactDisplay(from: record)
+        }
+    }
+
+    /// Creates or updates an AskArtifact record, attaching the local file as a CKAsset.
+    func saveArtifact(_ artifact: AskArtifactRecord) async throws {
+        let record = existingRecord(named: artifact.recordName, type: CKSchema.RecordType.askArtifact)
+        record[CKSchema.AskArtifact.artifactID]  = artifact.artifactID
+        record[CKSchema.AskArtifact.taskID]      = artifact.taskID
+        record[CKSchema.AskArtifact.machineID]   = artifact.machineID
+        record[CKSchema.AskArtifact.scriptID]    = artifact.scriptID
+        record[CKSchema.AskArtifact.filename]    = artifact.filename
+        record[CKSchema.AskArtifact.mimeType]    = artifact.mimeType
+        record[CKSchema.AskArtifact.description] = artifact.artifactDescription as CKRecordValueProtocol?
+        record[CKSchema.AskArtifact.sizeBytes]   = artifact.sizeBytes as CKRecordValue
+        record[CKSchema.AskArtifact.content]     = CKAsset(fileURL: artifact.contentURL)
+        record[CKSchema.AskArtifact.updatedAt]   = artifact.updatedAt
+        let saved = try await save(record)
+        cachedRecords[artifact.recordName] = saved
+        logger.info("saveArtifact — \(artifact.recordName) filename: \(artifact.filename) size: \(artifact.sizeBytes)")
     }
 
     // MARK: - Private helpers

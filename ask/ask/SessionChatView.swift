@@ -19,6 +19,7 @@ struct SessionRowView: View {
                         .font(.subheadline)
                         .fontWeight(.semibold)
                         .lineLimit(1)
+                        .accessibilityIdentifier("session-row-project")
                 }
                 Group {
                     if let msg = payload.lastMessage, !msg.isEmpty {
@@ -87,11 +88,17 @@ struct SessionChatView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @Environment(iOSCloudKitService.self) private var cloudKit
+    @Environment(TaskHistoryStore.self) private var taskHistory
     @Query private var entries: [ChatEntry]
+    /// All tasks for this machine — filtered at render time by livePayload.taskId
+    /// so we pick up the task_id even if it arrived after view init.
+    @Query private var machineTasks: [TaskRecord]
 
     @State private var draft = ""
     @State private var isSending = false
     @State private var showStopConfirm = false
+    @State private var showFeedSheet = false
+    @State private var feedSheetTask: TaskRecord? = nil
     /// Tracks per-entry send status for outgoing messages while this view is open.
     @State private var sendStatuses: [String: MessageSendStatus] = [:]
     /// Maps entryID → messageID for messages pending Mac delivery confirmation.
@@ -127,9 +134,19 @@ struct SessionChatView: View {
             sort: \.timestamp,
             order: .forward
         )
+        let mid = machineID
+        _machineTasks = Query(filter: #Predicate<TaskRecord> { $0.machineID == mid })
     }
 
     // MARK: - Derived live state
+
+    /// The A2A task backing this session, looked up by task_id from the live payload.
+    /// Filtered at render time so changes to livePayload.taskId are picked up without
+    /// requiring a view re-init.
+    private var feedTask: TaskRecord? {
+        guard let tid = livePayload?.taskId, !tid.isEmpty else { return nil }
+        return machineTasks.first { $0.taskID == tid }
+    }
 
     private var liveBlock: RKBlock? {
         allBlocks.first { $0.id == sessionBlockID }
@@ -169,17 +186,21 @@ struct SessionChatView: View {
                 reconnectingBanner
             }
             chatThread
-            if isActive, let pc = livePayload?.pendingConfirmation, let block = liveBlock {
-                pendingConfirmationBar(pc: pc, block: block)
-            }
-            ForEach(pendingLinkedConfirmations, id: \.id) { block in
-                if let cp = block.confirmationPayload {
-                    pendingLinkedConfirmationBar(block: block, cp: cp)
+            if isActive {
+                // Prefer linked confirmation blocks (explicit) — fall back to inline pending_confirmation
+                if !pendingLinkedConfirmations.isEmpty {
+                    ForEach(pendingLinkedConfirmations) { confBlock in
+                        if let cp = confBlock.confirmationPayload {
+                            pendingLinkedConfirmationBar(block: confBlock, cp: cp)
+                        }
+                    }
+                } else if let pc = livePayload?.pendingConfirmation, let block = liveBlock {
+                    pendingConfirmationBar(pc: pc, block: block)
                 }
             }
             Divider()
             composeBar
-            if isActive, scriptID == "codex-controller", let block = liveBlock {
+            if isActive, scriptID == "codex-2", let block = liveBlock {
                 modeToggle(block: block)
             }
         }
@@ -190,6 +211,16 @@ struct SessionChatView: View {
                     Text(displayProject)
                         .font(.headline)
                     statusLabel
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                if feedTask != nil {
+                    Button {
+                        feedSheetTask = feedTask
+                        showFeedSheet = true
+                    } label: {
+                        Image(systemName: "list.bullet")
+                    }
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -212,11 +243,30 @@ struct SessionChatView: View {
                     }
                     .confirmationDialog("Stop Session?", isPresented: $showStopConfirm) {
                         Button("Stop Session", role: .destructive) {
-                            Task { await onRespond(block, "__close_session__") }
+                            Task {
+                                // Clear stale chat history so the next session starts clean.
+                                for entry in entries { modelContext.delete(entry) }
+                                try? modelContext.save()
+                                await onRespond(block, "__close_session__")
+                            }
                         }
                     } message: {
-                        Text("Sends Ctrl+C to the running Codex session.")
+                        Text("Stops the active session and clears its chat history.")
                     }
+                }
+            }
+        }
+        .sheet(isPresented: $showFeedSheet) {
+            if let task = feedSheetTask {
+                NavigationStack {
+                    TaskThreadView(task: task)
+                        .environment(taskHistory)
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { showFeedSheet = false }
+                            }
+                        }
                 }
             }
         }
@@ -240,21 +290,27 @@ struct SessionChatView: View {
         }
         .onChange(of: isActive) { wasActive, nowActive in
             if wasActive && !nowActive {
-                modelContext.insert(ChatEntry(
-                    sessionId: sessionId, role: "system", entryKind: "event", text: "Session ended"
-                ))
-                try? modelContext.save()
-                // Auto-pop back to script screen after a brief moment
+                // Deduplicate: don't stack multiple "Session ended" events from repeated
+                // block drops (e.g. daemon restarts while the chat view is open).
+                let lastEvent = entries.last(where: { $0.entryKind == "event" })
+                if lastEvent?.text != "Session ended" {
+                    modelContext.insert(ChatEntry(
+                        sessionId: sessionId, role: "system", entryKind: "event", text: "Session ended"
+                    ))
+                    try? modelContext.save()
+                }
+                // Dismiss after a brief delay so the "Session ended" entry is visible.
                 Task {
-                    try? await Task.sleep(for: .milliseconds(800))
+                    try? await Task.sleep(for: .milliseconds(600))
                     dismiss()
                 }
             }
         }
-        // Reconnecting banner handles the disconnected UI state.
-        // History is preserved through script restarts.
     }
 
+    // MARK: - Last message context bar
+
+    @ViewBuilder
     // MARK: - Reconnecting banner
 
     private var reconnectingBanner: some View {
@@ -385,20 +441,24 @@ struct SessionChatView: View {
             Text(pc.title)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(pc.options, id: \.self) { option in
-                        Button(option) {
-                            Task { await onRespond(block, option) }
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.orange)
-                        .font(.footnote)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(pc.options, id: \.self) { option in
+                    Button {
+                        Task { await onRespond(block, option) }
+                    } label: {
+                        Text(option)
+                            .font(.footnote)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .buttonStyle(.bordered)
+                    .tint(.orange)
                 }
-                .padding(.horizontal)
             }
+            .padding(.horizontal)
         }
         .padding(.vertical, 10)
         .background(.ultraThinMaterial)
@@ -406,30 +466,45 @@ struct SessionChatView: View {
 
     @ViewBuilder
     private func pendingLinkedConfirmationBar(block: RKBlock, cp: RKConfirmationPayload) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(cp.title)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
+        if cp.style == "list" {
+            // TUI-style menu: render as full inline block so it flows naturally in the view
+            BlockView(block: block, onRespond: { value in
+                await onRespond(block, value)
+                markLinkedConfirmationResolved(block: block, value: value)
+            })
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(cp.title)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                VStack(alignment: .leading, spacing: 6) {
                     ForEach(cp.options, id: \.self) { option in
-                        Button(option) {
+                        Button {
                             Task {
                                 await onRespond(block, option)
                                 markLinkedConfirmationResolved(block: block, value: option)
                             }
+                        } label: {
+                            Text(option)
+                                .font(.footnote)
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .buttonStyle(.bordered)
                         .tint(.orange)
-                        .font(.footnote)
                     }
                 }
                 .padding(.horizontal)
             }
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial)
         }
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial)
     }
 
     @ViewBuilder
@@ -482,20 +557,18 @@ struct SessionChatView: View {
     // MARK: - History helpers
 
     private func seedInitialEntries() {
-        guard entries.isEmpty else {
-            for block in linkedConfirmations { appendInlineBlockEntry(block) }
-            return
-        }
-        modelContext.insert(ChatEntry(
-            sessionId: sessionId, role: "system", entryKind: "event", text: "Session started"
-        ))
-        if let msg = livePayload?.lastMessage, !msg.isEmpty {
+        if entries.isEmpty {
             modelContext.insert(ChatEntry(
-                sessionId: sessionId, role: "assistant", entryKind: "message", text: msg
+                sessionId: sessionId, role: "system", entryKind: "event", text: "Session started"
             ))
+            try? modelContext.save()
+        }
+        // Always catch up on lastMessage — handles reopening the view after Claude
+        // responded while it was closed (onChange never fires for a value already set).
+        if let msg = livePayload?.lastMessage, !msg.isEmpty {
+            appendAssistantEntry(msg)
         }
         for block in linkedConfirmations { appendInlineBlockEntry(block) }
-        try? modelContext.save()
     }
 
     private func captureActivityGroup() {
@@ -605,17 +678,24 @@ struct SessionChatView: View {
         sendStatuses[entry.entryID] = .sending
 
         do {
-            try await cloudKit.sendMessage(
-                machineID: machineID,
-                text: text,
-                messageID: entry.entryID,
-                sessionID: sessionId,
-                scriptID: scriptID
-            )
-            sendStatuses[entry.entryID] = .sent
-            // Watch for Mac delivery confirmation
-            pendingDelivery[entry.entryID] = entry.entryID
-            Task { await pollDelivery(entryID: entry.entryID) }
+            if scriptID == "codex-2", let block = liveBlock {
+                await onRespond(block, text)
+                sendStatuses[entry.entryID] = .delivered
+                try? await Task.sleep(for: .seconds(4))
+                sendStatuses.removeValue(forKey: entry.entryID)
+            } else {
+                try await cloudKit.sendMessage(
+                    machineID: machineID,
+                    text: text,
+                    messageID: entry.entryID,
+                    sessionID: sessionId,
+                    scriptID: scriptID
+                )
+                sendStatuses[entry.entryID] = .sent
+                // Watch for Mac delivery confirmation
+                pendingDelivery[entry.entryID] = entry.entryID
+                Task { await pollDelivery(entryID: entry.entryID) }
+            }
         } catch {
             sendStatuses[entry.entryID] = .failed
         }

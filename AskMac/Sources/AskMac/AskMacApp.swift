@@ -1,6 +1,7 @@
 #if canImport(AskMacCore)
 import AskMacCore
 #endif
+import CloudKit
 import SwiftUI
 
 @main
@@ -17,6 +18,7 @@ struct AskMacApp: App {
     @State private var responsePoller: ResponsePoller
     @State private var scriptUpdater = ScriptUpdateService()
     @State private var scriptCatalog = ScriptCatalogService()
+    private let localHTTPServer = LocalHTTPServer(port: 4242)
 
     init() {
         let s = settings
@@ -33,14 +35,50 @@ struct AskMacApp: App {
         _scriptManager = State(initialValue: sm)
         _responsePoller = State(initialValue: rp)
 
-        Task {
-            await ck.checkAccountStatus()
-            hb.start()
-            mw.start(scriptManager: sm)
-            sm.start()
-            rp.start(scriptManager: sm)
-            // Purge old records in the background after services are running.
-            await ck.purgeOldRecords(machineID: s.machineID)
+        if MacUITestingSupport.isUITesting {
+            sm.loadMockScenario(MacUITestingSupport.scenario)
+        } else {
+            let lhs = localHTTPServer
+            Task {
+                await ck.checkAccountStatus()
+                hb.start()
+                mw.start(scriptManager: sm)
+                sm.start()
+                rp.start(scriptManager: sm)
+                // Purge old records in the background after services are running.
+                await ck.purgeOldRecords(machineID: s.machineID)
+                // Start local HTTP server for MockAskMac dev UI
+                await MainActor.run {
+                    lhs.configure(scriptManager: sm, machineName: s.machineName)
+                    lhs.start()
+                    sm.localHTTPServer = lhs
+                }
+                // Seed HTTP server with existing CloudKit blocks so sessions
+                // that were active before this AskMac session are visible immediately.
+                let ckRecords = await ck.fetchActiveBlocks(machineID: s.machineID)
+                let ckDicts = ckRecords.compactMap { record -> [String: Any]? in
+                    guard let blockID  = record[CKSchema.RKBlock.blockID]  as? String,
+                          let scriptID = record[CKSchema.RKBlock.scriptID] as? String,
+                          let payload  = record[CKSchema.RKBlock.payload]  as? String
+                    else { return nil }
+                    let createdAt = (record[CKSchema.RKBlock.createdAt] as? Date) ?? Date()
+                    var dict: [String: Any] = [
+                        "blockID":          blockID,
+                        "machineID":        s.machineID,
+                        "scriptID":         scriptID,
+                        "scriptName":       record[CKSchema.RKBlock.scriptName]  as? String ?? scriptID,
+                        "blockType":        record[CKSchema.RKBlock.blockType]   as? String ?? "tile",
+                        "scriptType":       record[CKSchema.RKBlock.scriptType]  as? String ?? "tile",
+                        "createdAt":        ISO8601DateFormatter().string(from: createdAt),
+                        "requiresResponse": record[CKSchema.RKBlock.requiresResponse] as? Int ?? 0,
+                        "showsInInbox":     record[CKSchema.RKBlock.showsInInbox]     as? Int ?? 0,
+                        "payload":          payload,
+                    ]
+                    if let svg = record[CKSchema.RKBlock.scriptIconSVG] as? String { dict["scriptIconSVG"] = svg }
+                    return dict
+                }
+                await MainActor.run { lhs.seedFromCloudKit(ckDicts) }
+            }
         }
     }
 

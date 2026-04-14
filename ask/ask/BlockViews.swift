@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 import UIKit
 import CoreText
 import Combine
@@ -127,6 +128,7 @@ struct BlockView: View {
         case .confirmation:
             if let p = block.confirmationPayload {
                 ConfirmationBlockView(payload: p, onRespond: onRespond)
+                    .id(p.title + p.options.joined())
             }
         case .alert:
             if let p = block.alertPayload {
@@ -154,7 +156,7 @@ struct BlockView: View {
             }
         case .agentSession:
             if let p = block.agentSessionPayload {
-                AgentSessionBlockView(payload: p, onRespond: onRespond)
+                AgentSessionBlockView(payload: p, machineID: block.machineID, onRespond: onRespond)
             }
         case .iconCard:
             if let p = block.iconCardPayload {
@@ -250,14 +252,14 @@ struct ConfirmationBlockView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            if payload.options.count <= 2 {
+            if payload.style == "list" || payload.options.count > 2 {
+                optionList
+            } else {
                 HStack(spacing: 8) {
                     ForEach(payload.options, id: \.self) { option in
                         optionButton(option)
                     }
                 }
-            } else {
-                optionList
             }
         }
         .padding(.vertical, BlockStyle.blockVerticalPadding)
@@ -292,6 +294,7 @@ struct ConfirmationBlockView: View {
         .disabled(responding)
         .opacity(responding && !isSelected ? 0.4 : 1)
         .animation(.easeInOut(duration: 0.15), value: responding)
+        .accessibilityIdentifier("confirm-option-\(option)")
     }
 
     private var optionList: some View {
@@ -332,6 +335,7 @@ struct ConfirmationBlockView: View {
                 .disabled(responding)
                 .opacity(responding && !isSelected ? 0.4 : 1)
                 .animation(.easeInOut(duration: 0.15), value: responding)
+                .accessibilityIdentifier("confirm-option-\(option)")
 
                 if idx < payload.options.count - 1 {
                     Divider().padding(.leading, 36)
@@ -360,14 +364,18 @@ struct AlertBlockView: View {
                 Text(payload.title)
                     .font(.footnote)
                     .fontWeight(.medium)
+                    .accessibilityIdentifier("alert-title")
                 if !payload.body.isEmpty {
                     Text(payload.body)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("alert-body")
                 }
             }
+            .accessibilityElement(children: .contain)
         }
         .padding(.vertical, BlockStyle.blockVerticalPadding)
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -1082,7 +1090,14 @@ struct ClaudeMessageBlockView: View {
 
 struct AgentSessionBlockView: View {
     let payload: RKAgentSessionPayload
+    let machineID: String
     let onRespond: (String) async -> Void
+
+    /// All tasks for this machine — filtered at render time by payload.taskId so
+    /// we pick up the task_id even if it arrived after view init.
+    @Query private var machineTasks: [TaskRecord]
+
+    @Environment(TaskHistoryStore.self) private var taskHistory
 
     @State private var text = ""
     @State private var responding = false
@@ -1091,9 +1106,24 @@ struct AgentSessionBlockView: View {
     @State private var showCloseConfirmation = false
     @State private var isClosing = false
     @State private var closeTimedOut = false
+    @State private var showFeedSheet = false
+    @State private var feedSheetTask: TaskRecord? = nil
     /// Holds the last non-empty message we received. Never cleared when status
     /// transitions to "working" or "waiting" so the user retains context.
     @State private var lastSeenMessage: String = ""
+
+    init(payload: RKAgentSessionPayload, machineID: String, onRespond: @escaping (String) async -> Void) {
+        self.payload = payload
+        self.machineID = machineID
+        self.onRespond = onRespond
+        let mid = machineID
+        _machineTasks = Query(filter: #Predicate<TaskRecord> { $0.machineID == mid })
+    }
+
+    private var feedTask: TaskRecord? {
+        guard let tid = payload.taskId, !tid.isEmpty else { return nil }
+        return machineTasks.first { $0.taskID == tid }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: BlockStyle.innerSpacing + 2) {
@@ -1138,6 +1168,7 @@ struct AgentSessionBlockView: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("agent-session-project")
 
                 Button {
                     showCloseConfirmation = true
@@ -1170,10 +1201,39 @@ struct AgentSessionBlockView: View {
                 } message: {
                     Text("This will send Ctrl+C to the terminal and end the \(payload.project) session.")
                 }
+
+                if let tid = payload.taskId, !tid.isEmpty {
+                    Button {
+                        if let task = feedTask {
+                            feedSheetTask = task
+                            showFeedSheet = true
+                        } else {
+                            Task {
+                                await taskHistory.refresh(machineIDs: [machineID])
+                                if let task = feedTask {
+                                    feedSheetTask = task
+                                    showFeedSheet = true
+                                }
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "list.bullet")
+                            .font(.caption)
+                            .foregroundStyle(feedTask != nil ? .secondary : .tertiary)
+                            .padding(.leading, 2)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("agent-session-feed-\(tid)")
+                }
             }
             .padding(.bottom, isCollapsed ? 0 : -4)
 
             if !isCollapsed {
+                // Last assistant message — rendered as markdown above the status indicator
+                if !lastSeenMessage.isEmpty {
+                    ClaudeMarkdownView(text: lastSeenMessage)
+                }
+
                 // Status area
                 Group {
                     if isClosing {
@@ -1191,38 +1251,29 @@ struct AgentSessionBlockView: View {
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
-                    } else {
-                        VStack(alignment: .leading, spacing: 8) {
-                            if payload.isWorking == true {
-                                HStack(spacing: 8) {
-                                    ProgressView()
-                                        .scaleEffect(0.7)
-                                        .tint(payload.brandColorValue)
-                                    if let tool = payload.currentTool {
-                                        Image(systemName: toolIcon(tool))
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                        Text(toolActivityText(tool, payload.currentPreview))
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(2)
-                                    } else {
-                                        Text("\(payload.agentName ?? "Claude") is working…")
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-
-                            if !lastSeenMessage.isEmpty {
-                                ClaudeMarkdownView(text: lastSeenMessage)
-                            } else if payload.isWorking != true {
-                                // No context yet — session waiting for first input
-                                Text("Session started")
+                    } else if payload.isWorking == true {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                                .tint(payload.brandColorValue)
+                            if let tool = payload.currentTool {
+                                Image(systemName: toolIcon(tool))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(toolActivityText(tool, payload.currentPreview))
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            } else {
+                                Text("\(payload.agentName ?? "Claude") is working…")
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                             }
                         }
+                    } else {
+                        Text("Waiting for input…")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .padding(8)
@@ -1292,9 +1343,27 @@ struct AgentSessionBlockView: View {
             }
         }
         .padding(.vertical, BlockStyle.blockVerticalPadding)
+        .sheet(isPresented: $showFeedSheet) {
+            if let task = feedSheetTask {
+                NavigationStack {
+                    TaskThreadView(task: task)
+                        .navigationTitle(payload.project)
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { showFeedSheet = false }
+                            }
+                        }
+                }
+            }
+        }
         .onAppear {
             if let msg = payload.lastMessage, !msg.isEmpty {
                 lastSeenMessage = msg
+            }
+            // Populate the task record so the feed button becomes active.
+            if payload.taskId != nil && feedTask == nil {
+                Task { await taskHistory.refresh(machineIDs: [machineID]) }
             }
         }
         .onChange(of: payload.lastMessage) { _, newMsg in
@@ -1353,7 +1422,7 @@ struct StartSessionBlockView: View {
                 showPicker = false
                 launching = true
                 Task {
-                    await onRespond(repo.path)
+                    await onRespond(repo.value ?? repo.path)
                     try? await Task.sleep(for: .seconds(2))
                     launching = false
                 }

@@ -53,9 +53,11 @@ struct RKConfirmationPayload: Codable {
     let options: [String]
     let sessionId: String?
     let urgency: RKUrgency?
+    /// When "list", always render as a vertical radio-button list regardless of option count.
+    let style: String?
 
     private enum CodingKeys: String, CodingKey {
-        case title, body, options, urgency
+        case title, body, options, urgency, style
         case sessionId = "session_id"
     }
 }
@@ -138,6 +140,7 @@ struct RKAgentSessionPayload: Codable {
     let isHeadless: Bool?
     let tty: String?
     let pendingConfirmation: RKPendingConfirmation?
+    let taskId: String?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
@@ -155,6 +158,7 @@ struct RKAgentSessionPayload: Codable {
         case isHeadless = "is_headless"
         case tty
         case pendingConfirmation = "pending_confirmation"
+        case taskId = "task_id"
     }
 
     /// Parses `brandColor` hex string (e.g. `#74AA9C`) into a SwiftUI Color.
@@ -271,7 +275,8 @@ struct RKInfoCardPayload: Codable {
 struct RKRepo: Codable, Identifiable {
     let name: String
     let path: String
-    var id: String { path }
+    let value: String?
+    var id: String { value ?? path }
 }
 
 struct RKStartSessionPayload: Codable {
@@ -543,6 +548,36 @@ struct RKBlock: Identifiable {
         self.expiresAt = record[CKSchema.RKBlock.expiresAt] as? Date
         self.scriptType = record[CKSchema.RKBlock.scriptType] as? String ?? "tile"
         self.showsInInbox = (record[CKSchema.RKBlock.showsInInbox] as? Int64 ?? 0) != 0
+    }
+}
+
+// MARK: - RKBlock feed history helpers
+
+extension RKBlock {
+    /// A human-readable headline derived from the block's payload, used when saving to FeedHistoryEntry.
+    var feedHeadline: String {
+        switch blockType {
+        case .feedItem:     return feedItemPayload?.headline ?? scriptName ?? scriptID
+        case .status:       return statusPayload?.label ?? scriptName ?? scriptID
+        case .detail:       return detailPayload?.title ?? scriptName ?? scriptID
+        case .infoCard:     return infoCardPayload?.title ?? scriptName ?? scriptID
+        case .iconCard:     return iconCardPayload?.title ?? scriptName ?? scriptID
+        case .confirmation: return confirmationPayload?.title ?? scriptName ?? scriptID
+        case .prompt:       return promptPayload?.title ?? scriptName ?? scriptID
+        case .chatPrompt:   return chatPromptPayload?.title ?? scriptName ?? scriptID
+        case .quickReply:   return quickReplyPayload?.title ?? scriptName ?? scriptID
+        case .alert:        return alertPayload?.title ?? scriptName ?? scriptID
+        default:            return scriptName ?? scriptID
+        }
+    }
+
+    /// Optional status color string from the block's payload.
+    var feedStatusColor: String? {
+        switch blockType {
+        case .feedItem: return feedItemPayload?.statusColor
+        case .status:   return statusPayload?.color
+        default:        return nil
+        }
     }
 }
 

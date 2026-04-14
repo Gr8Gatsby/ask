@@ -3,8 +3,8 @@
 brew-monitor — surfaces outdated Homebrew packages on iPhone.
 
 Checks every CHECK_INTERVAL seconds. When packages are outdated, emits a
-confirmation block. If the user taps "Upgrade All", runs `brew upgrade`
-and reports the result. Tapping "Later" dismisses until the next check.
+confirmation block. If the user taps "Upgrade All", runs `brew upgrade`,
+streams progress via A2A messages, and attaches a markdown report artifact.
 """
 import asyncio
 import json
@@ -12,7 +12,9 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import traceback
+import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -31,17 +33,17 @@ def find_brew() -> Optional[str]:
             return path
     return shutil.which('brew')
 
+
 CHECK_INTERVAL = 4 * 60 * 60   # seconds between checks
 
-BLOCK_UPDATES    = 'brew-monitor-updates'
-BLOCK_STATUS     = 'brew-monitor-status'
-BLOCK_UP_TO_DATE = 'brew-monitor-uptodate'
-BLOCK_NEXT_SYNC  = 'brew-monitor-next-sync'
-BLOCK_SYNC_NOW   = 'brew-monitor-sync-now'
+BLOCK_UPDATES  = 'brew-monitor-updates'
+BLOCK_STATUS   = 'brew-monitor-status'
+BLOCK_NEXT_SYNC = 'brew-monitor-next-sync'
+BLOCK_SYNC_NOW  = 'brew-monitor-sync-now'
 
 
 # ---------------------------------------------------------------------------
-# Minimal MCP client (same JSON-RPC 2.0 protocol as all Ask scripts)
+# Minimal MCP client
 # ---------------------------------------------------------------------------
 
 class MCPClient:
@@ -49,7 +51,7 @@ class MCPClient:
         self._next_id = 0
         self._pending_rpc = {}       # rpc_id  -> Future
         self._response_cbs = {}      # block_id -> async callable(value)
-        self._pipe_broken  = False   # set True on BrokenPipeError; stop writing
+        self._pipe_broken  = False
 
     # --- outbound ---
 
@@ -80,14 +82,19 @@ class MCPClient:
         self._send(msg)
         return await asyncio.wait_for(fut, timeout=timeout)
 
+    async def call_tool(self, name: str, arguments: dict):
+        return await self._rpc('tools/call', {'name': name, 'arguments': arguments})
+
     async def initialize(self):
         await self._rpc('initialize', {
             'protocolVersion': '2024-11-05',
             'capabilities': {},
-            'clientInfo': {'name': 'brew-monitor', 'version': '1.0'},
+            'clientInfo': {'name': 'brew-monitor', 'version': '2.5'},
         })
         self._send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         print('[brew-monitor] MCP initialized', file=sys.stderr)
+
+    # --- blocks ---
 
     async def emit_block(self, block_id, block_type, payload, ttl=None, inbox=False):
         args = {'blockId': block_id, 'blockType': block_type, 'payload': payload}
@@ -95,13 +102,41 @@ class MCPClient:
             args['ttl'] = ttl
         if inbox:
             args['inbox'] = True
-        await self._rpc('tools/call', {'name': 'emit_block', 'arguments': args})
+        await self.call_tool('emit_block', args)
 
     async def clear_block(self, block_id):
         try:
-            await self._rpc('tools/call', {'name': 'clear_block', 'arguments': {'blockId': block_id}})
+            await self.call_tool('clear_block', {'blockId': block_id})
         except Exception:
             pass
+
+    # --- A2A ---
+
+    async def open_task(self, task_id: str, title: str, status: str = 'working'):
+        await self.call_tool('open_task', {
+            'taskId': task_id,
+            'title': title,
+            'status': status,
+        })
+
+    async def append_message(self, task_id: str, role: str, text: str):
+        await self.call_tool('append_message', {
+            'taskId': task_id,
+            'role': role,
+            'parts': [{'type': 'text', 'text': text}],
+        })
+
+    async def put_artifact(self, task_id: str, artifact_id: str,
+                           filename: str, mime_type: str,
+                           description: str, file_path: str):
+        await self.call_tool('put_artifact', {
+            'taskId': task_id,
+            'artifactId': artifact_id,
+            'filename': filename,
+            'mimeType': mime_type,
+            'description': description,
+            'filePath': file_path,
+        })
 
     # --- inbound ---
 
@@ -195,7 +230,7 @@ class BrewMonitor:
     def __init__(self, mcp: MCPClient):
         self.mcp = mcp
         self._sync_event = asyncio.Event()
-        self._pending_outdated: list = []   # saved before upgrade so feed_item can list them
+        self._pending_outdated: list = []
 
     async def run(self):
         while True:
@@ -206,7 +241,6 @@ class BrewMonitor:
             except Exception as e:
                 print(f'[brew-monitor] _check error: {type(e).__name__}: {e}', file=sys.stderr)
                 traceback.print_exc(file=sys.stderr)
-            # Wait for the interval OR a manual sync request, whichever comes first
             self._sync_event.clear()
             try:
                 await asyncio.wait_for(self._sync_event.wait(), timeout=CHECK_INTERVAL)
@@ -217,9 +251,7 @@ class BrewMonitor:
     async def _check(self):
         print('[brew-monitor] checking for outdated packages…', file=sys.stderr)
 
-        # Clear the countdown while checking so the status block takes its place
         await self.mcp.clear_block(BLOCK_NEXT_SYNC)
-
         await self.mcp.emit_block(BLOCK_STATUS, 'status', {
             'label': 'Checking for Homebrew updates…',
             'icon': 'arrow.clockwise',
@@ -229,24 +261,48 @@ class BrewMonitor:
         outdated = get_outdated()
         await self.mcp.clear_block(BLOCK_STATUS)
 
+        now_dt  = datetime.now()
+        now_str = now_dt.strftime('%H:%M')
+
         if not outdated:
             print('[brew-monitor] all packages up to date', file=sys.stderr)
             await self.mcp.clear_block(BLOCK_UPDATES)
-            await self.mcp.emit_block(BLOCK_UP_TO_DATE, 'status', {
-                'label': 'Homebrew up to date',
-                'icon': 'checkmark.circle',
-                'color': 'green',
-            }, ttl=CHECK_INTERVAL)
-            feed_id = f'brew-monitor-feed-{int(datetime.now(timezone.utc).timestamp())}'
-            await self.mcp.emit_block(feed_id, 'feed_item', {
-                'headline': 'Homebrew — all packages up to date',
-                'statusColor': 'green',
-            }, ttl=CHECK_INTERVAL + 300, inbox=True)
-            print('[brew-monitor] emitted up-to-date block', file=sys.stderr)
-        else:
-            await self.mcp.clear_block(BLOCK_UP_TO_DATE)
-            self._pending_outdated = outdated
 
+            task_id = f'brew-check-{uuid.uuid4().hex[:8]}'
+            await self.mcp.open_task(task_id, f'Homebrew check · {now_dt.strftime("%Y-%m-%d %H:%M")}')
+            await self.mcp.append_message(task_id, 'user', 'Check for outdated Homebrew packages.')
+            await self.mcp.append_message(task_id, 'assistant',
+                'All packages are up to date. No upgrades needed.')
+
+            report = '\n'.join([
+                f'# Homebrew Check — {now_dt.strftime("%Y-%m-%d %H:%M")}',
+                '',
+                '**Result:** All packages are up to date.',
+                '',
+                '---',
+                f'Generated by brew-monitor at {now_dt.strftime("%Y-%m-%d %H:%M")}',
+            ])
+            tmp = tempfile.NamedTemporaryFile(
+                mode='w', suffix='.md', delete=False, encoding='utf-8'
+            )
+            tmp.write(report)
+            tmp.close()
+            try:
+                filename = f'brew-check-{now_dt.strftime("%Y%m%d-%H%M")}.md'
+                await self.mcp.put_artifact(
+                    task_id=task_id,
+                    artifact_id=f'brew-check-report-{uuid.uuid4().hex[:8]}',
+                    filename=filename,
+                    mime_type='text/plain',
+                    description='Homebrew check — all packages up to date',
+                    file_path=tmp.name,
+                )
+            finally:
+                os.unlink(tmp.name)
+
+            await self.mcp.open_task(task_id, f'Homebrew check · {now_dt.strftime("%Y-%m-%d %H:%M")}', status='completed')
+        else:
+            self._pending_outdated = outdated
             count = len(outdated)
             noun  = 'update' if count == 1 else 'updates'
             title = f'{count} Homebrew {noun} available'
@@ -254,25 +310,21 @@ class BrewMonitor:
 
             print(f'[brew-monitor] {title}', file=sys.stderr)
 
-            # Register callback BEFORE emitting so a slow CloudKit write can't orphan it
             self.mcp._response_cbs[BLOCK_UPDATES] = self._on_response
-
             await self.mcp.emit_block(BLOCK_UPDATES, 'confirmation', {
                 'title': title,
                 'body':  body,
                 'options': ['Upgrade All', 'Later'],
             }, ttl=86400, inbox=True)
 
-        # Emit countdown to next check
+        # Countdown to next check
         next_sync = datetime.now(timezone.utc) + timedelta(seconds=CHECK_INTERVAL)
         next_sync_str = next_sync.strftime('%Y-%m-%dT%H:%M:%SZ')
         await self.mcp.emit_block(BLOCK_NEXT_SYNC, 'countdown', {
             'label': 'Next sync',
             'time':  next_sync_str,
         }, ttl=CHECK_INTERVAL + 300)
-        print(f'[brew-monitor] next sync at {next_sync_str}', file=sys.stderr)
 
-        # Emit sync-now button
         await self._emit_sync_now()
 
     async def _emit_sync_now(self):
@@ -289,10 +341,8 @@ class BrewMonitor:
     async def _on_response(self, value):
         try:
             await self.mcp.clear_block(BLOCK_UPDATES)
-
             if value != 'Upgrade All':
                 return
-
             await self._upgrade()
             await self._check()
         except asyncio.CancelledError:
@@ -302,9 +352,28 @@ class BrewMonitor:
             traceback.print_exc(file=sys.stderr)
 
     async def _upgrade(self):
-        print('[brew-monitor] running brew upgrade…', file=sys.stderr)
+        pkgs = self._pending_outdated
+        task_id = f'brew-upgrade-{uuid.uuid4().hex[:8]}'
+        now_dt  = datetime.now()
+        now_str = now_dt.strftime('%Y-%m-%d %H:%M')
+
+        print(f'[brew-monitor] running brew upgrade… task_id={task_id}', file=sys.stderr)
+
         try:
-            # TTL covers the longest realistic upgrade (3 hours for large packages)
+            # Open task
+            await self.mcp.open_task(task_id, f'Homebrew upgrade · {now_str}')
+
+            # User prompt message
+            await self.mcp.append_message(task_id, 'user',
+                'Upgrade all outdated Homebrew packages.')
+
+            # Agent: list what will be upgraded
+            count = len(pkgs)
+            noun  = 'package' if count == 1 else 'packages'
+            pkg_table = '\n'.join(f'- **{name}** {inst} → {avail}' for name, inst, avail in pkgs)
+            await self.mcp.append_message(task_id, 'assistant',
+                f'Upgrading {count} {noun}:\n\n{pkg_table}')
+
             await self.mcp.emit_block(BLOCK_STATUS, 'status', {
                 'label':  'Upgrading Homebrew packages…',
                 'detail': 'Starting…',
@@ -312,6 +381,7 @@ class BrewMonitor:
                 'color':  'blue',
             }, ttl=3 * 60 * 60)
 
+            # Run brew upgrade, stream output
             brew = find_brew() or 'brew'
             proc = await asyncio.create_subprocess_exec(
                 brew, 'upgrade',
@@ -319,6 +389,7 @@ class BrewMonitor:
                 stderr=asyncio.subprocess.STDOUT,
             )
 
+            output_lines = []
             loop = asyncio.get_event_loop()
             last_update = loop.time()
             current_pkg = ''
@@ -328,6 +399,7 @@ class BrewMonitor:
                 if not line:
                     break
                 decoded = line.decode('utf-8', errors='replace').rstrip()
+                output_lines.append(decoded)
                 print(f'[brew-upgrade] {decoded}', file=sys.stderr)
 
                 if decoded.startswith('==> Upgrading '):
@@ -346,41 +418,82 @@ class BrewMonitor:
                             'color':  'blue',
                         }, ttl=3 * 60 * 60)
                     except Exception as e:
-                        print(f'[brew-monitor] status update failed: {type(e).__name__}: {e}', file=sys.stderr)
+                        print(f'[brew-monitor] status update failed: {e}', file=sys.stderr)
 
             await proc.wait()
-            print(f'[brew-monitor] brew upgrade exited {proc.returncode}', file=sys.stderr)
+            rc = proc.returncode
+            print(f'[brew-monitor] brew upgrade exited {rc}', file=sys.stderr)
 
-            if proc.returncode == 0:
+            # Write markdown report
+            full_output = '\n'.join(output_lines)
+            table_rows = '\n'.join(
+                f'| {name} | {inst} | {avail} |' for name, inst, avail in pkgs
+            )
+            report = '\n'.join([
+                f'# Homebrew Upgrade Report — {now_str}',
+                '',
+                f'## {count} {noun} upgraded' if rc == 0 else f'## Upgrade failed ({count} {noun} attempted)',
+                '',
+                '| Package | From | To |',
+                '|---------|------|----|',
+                table_rows,
+                '',
+                '## Output',
+                '```',
+                full_output,
+                '```',
+                '',
+                '---',
+                f'Generated by brew-monitor at {now_str}',
+            ])
+
+            tmp = tempfile.NamedTemporaryFile(
+                mode='w', suffix='.md', delete=False, encoding='utf-8'
+            )
+            tmp.write(report)
+            tmp.close()
+
+            filename = f'brew-upgrade-{now_dt.strftime("%Y%m%d-%H%M")}.md'
+            artifact_id = f'brew-report-{uuid.uuid4().hex[:8]}'
+
+            if rc == 0:
+                await self.mcp.append_message(task_id, 'assistant',
+                    f'Upgrade complete. {count} {noun} updated successfully.')
+                await self.mcp.put_artifact(
+                    task_id=task_id,
+                    artifact_id=artifact_id,
+                    filename=filename,
+                    mime_type='text/plain',
+                    description=f'Full upgrade log — {count} {noun}',
+                    file_path=tmp.name,
+                )
+                await self.mcp.open_task(task_id, f'Homebrew upgrade · {now_str}', status='completed')
                 await self.mcp.emit_block(BLOCK_STATUS, 'status', {
                     'label': 'Upgrades complete',
                     'icon':  'checkmark.circle',
                     'color': 'green',
                 }, ttl=30)
-                pkgs = self._pending_outdated
-                count = len(pkgs)
-                noun = 'package' if count == 1 else 'packages'
-                headline = f'Homebrew — {count} {noun} upgraded' if count else 'Homebrew — packages upgraded'
-                body = '\n'.join(f'{name}  {inst} → {avail}' for name, inst, avail in pkgs) if pkgs else None
-                feed_id = f'brew-monitor-feed-{int(datetime.now(timezone.utc).timestamp())}'
-                await self.mcp.emit_block(feed_id, 'feed_item', {
-                    'headline': headline,
-                    'body':     body,
-                    'statusColor': 'green',
-                }, ttl=86400 * 30, inbox=True)
                 await asyncio.sleep(5)
             else:
+                await self.mcp.append_message(task_id, 'assistant',
+                    f'Upgrade finished with errors (exit code {rc}). See the attached report for details.')
+                await self.mcp.put_artifact(
+                    task_id=task_id,
+                    artifact_id=artifact_id,
+                    filename=filename,
+                    mime_type='text/plain',
+                    description='Upgrade log (errors)',
+                    file_path=tmp.name,
+                )
+                await self.mcp.open_task(task_id, f'Homebrew upgrade · {now_str}', status='failed')
                 await self.mcp.emit_block(BLOCK_STATUS, 'status', {
                     'label': 'Upgrade finished with errors',
                     'icon':  'exclamationmark.triangle',
                     'color': 'orange',
                 }, ttl=60)
-                feed_id = f'brew-monitor-feed-{int(datetime.now(timezone.utc).timestamp())}'
-                await self.mcp.emit_block(feed_id, 'feed_item', {
-                    'headline': 'Homebrew — upgrade failed',
-                    'statusColor': 'red',
-                }, ttl=86400 * 30, inbox=True)
                 await asyncio.sleep(10)
+
+            os.unlink(tmp.name)
 
         except asyncio.CancelledError:
             print('[brew-monitor] upgrade cancelled', file=sys.stderr)
@@ -408,15 +521,12 @@ async def main():
         print(f'[brew-monitor] init error: {type(e).__name__}: {e}', file=sys.stderr)
         return
 
-    # Run both tasks; if stdin closes (normal when daemon restarts), keep monitor
-    # running. Use return_exceptions so a stdin error doesn't cancel monitor.run().
     monitor_task = asyncio.create_task(monitor.run())
     done, pending = await asyncio.wait(
         {stdin_task, monitor_task},
         return_when=asyncio.FIRST_EXCEPTION,
     )
 
-    # If either task raised, log it
     for task in done:
         if task.exception():
             print(f'[brew-monitor] task error: {task.exception()}', file=sys.stderr)

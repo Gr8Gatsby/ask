@@ -7,6 +7,7 @@ struct MachineDetailView: View {
     @State private var currentMachine: AskMachine
     @State private var agents: [AskAgent] = []
     @State private var jobs: [AskJob] = []
+    @State private var scripts: [AskScript] = []
 
     init(machine: AskMachine) {
         self.machine = machine
@@ -42,6 +43,14 @@ struct MachineDetailView: View {
                 }
             }
 
+            if !scripts.isEmpty {
+                Section("Scripts") {
+                    ForEach(scripts) { script in
+                        ScriptStatusRow(script: script)
+                    }
+                }
+            }
+
             if !jobs.isEmpty {
                 Section("Recent Jobs") {
                     ForEach(jobs) { job in
@@ -62,10 +71,12 @@ struct MachineDetailView: View {
             async let freshMachine = cloudKit.fetchMachine(machineID: machine.id)
             async let fetchedAgents = cloudKit.fetchAgents(machineID: machine.id)
             async let fetchedJobs = cloudKit.fetchRecentJobs(machineID: machine.id)
+            async let fetchedScripts = cloudKit.fetchScripts(machines: [machine])
 
             currentMachine = (try? await freshMachine) ?? currentMachine
             agents = (try? await fetchedAgents) ?? []
             jobs = (try? await fetchedJobs) ?? []
+            scripts = await fetchedScripts
         }
     }
 
@@ -76,6 +87,58 @@ struct MachineDetailView: View {
         case .sleeping: .yellow
         case .offline:  .secondary
         }
+    }
+}
+
+// MARK: - Script status row
+
+private struct ScriptStatusRow: View {
+    let script: AskScript
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if let icon = script.scriptIcon {
+                Image(systemName: icon)
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28)
+            } else {
+                Image(systemName: "scroll")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(script.scriptName).font(.body)
+                HStack(spacing: 4) {
+                    Image(systemName: script.statusIcon)
+                        .font(.system(size: 9))
+                        .foregroundStyle(script.statusColor)
+                    Text(script.status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let next = script.nextRunAt {
+                        Text("·").font(.caption2).foregroundStyle(.tertiary)
+                        Text("next \(next.briefRelative)")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    } else if let last = script.lastRunAt {
+                        Text("·").font(.caption2).foregroundStyle(.tertiary)
+                        Text(last.briefRelative)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            Spacer()
+            Text(script.scriptType)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(.quaternary, in: Capsule())
+        }
+        .padding(.vertical, 2)
     }
 }
 

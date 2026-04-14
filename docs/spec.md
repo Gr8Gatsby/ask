@@ -2,11 +2,17 @@
 
 ## Overview
 
+Ask provides a way to remote control your computer, there is a daemon that runs locally on your computer and is provides a way to interact with local scripts. The local scripts have access to the dameon which negotiates the action through a central service.
+
 Ask is a mobile application that lets a user send prompts and commands to AI agents and CLI tools running on one or more personal Macs, monitor their execution in real time, and review results — all from an iPhone. A companion Mac app runs quietly in the background, receives tasks, executes them using whatever tools are configured on that machine, and streams output back to the phone.
 
 The system is provider-agnostic. It does not assume Claude, OpenAI, or any specific tool. Each Mac can have any number of named agents configured, each pointing to any command the user wants to run.
 
 ---
+
+## Story
+
+The idea for Ask came as I got more into agentic coding, it is very tempting to keep chatting with a coding agent to get one more feature. However finding a balance in the overall workflow is more important than micro-manageing an agent. Automation and deterinistic workflows go a long way! We need to find better ways to build software.
 
 ## Users and Devices
 

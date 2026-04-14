@@ -169,6 +169,14 @@ Reserve `.ultraThinMaterial` for secondary chrome that should recede. Use the sy
 
 ---
 
+## Git Workflow
+
+- **Never push directly to `main`.** Branch protection is enforced for all users including admins (`enforce_admins: true`).
+- Always work on a feature branch and open a PR. Merging requires passing CI (Swift build & test, Python tests).
+- Create branches from `main`: `git checkout -b feat/my-feature`
+
+---
+
 ## Script Source Control
 
 All Ask scripts live in **`ask/scripts/<script-id>/`** and must be kept in source control. The full set of scripts is:

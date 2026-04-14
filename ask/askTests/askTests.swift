@@ -9,37 +9,6 @@ import Testing
 import Foundation
 @testable import ask
 
-// MARK: - Test helpers
-
-/// Lightweight RKBlock factory for unit tests — bypasses the CKRecord initialiser.
-extension RKBlock {
-    static func make(
-        id: String = UUID().uuidString,
-        machineID: String = "machine-1",
-        scriptID: String = "test-script",
-        blockType: RKBlockType,
-        payloadJSON: String = "{}",
-        showsInInbox: Bool = false,
-        createdAt: Date = Date()
-    ) -> RKBlock {
-        RKBlock(
-            id: id,
-            machineID: machineID,
-            scriptID: scriptID,
-            scriptName: nil,
-            scriptIcon: nil,
-            scriptIconData: nil,
-            scriptIconSVG: nil,
-            blockType: blockType,
-            payloadJSON: payloadJSON,
-            createdAt: createdAt,
-            expiresAt: nil,
-            scriptType: "tile",
-            showsInInbox: showsInInbox
-        )
-    }
-}
-
 // MARK: - RKUrgency
 
 @Suite("RKUrgency")

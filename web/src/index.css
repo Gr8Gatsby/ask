@@ -1,0 +1,220 @@
+/* Roboto + Roboto Mono for Android */
+@import url('https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,400;0,500;0,700;1,400&family=Roboto+Mono:wght@400;500&display=swap');
+/* Material Symbols Rounded — used for Android icons (FILL axis: 0=outline, 1=filled) */
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---- Platform color tokens (RGB channel triplets for Tailwind opacity support) ---- */
+
+/* iOS dark — Apple HIG dark palette */
+:root {
+  --pt-bg:        28 28 30;     /* #1c1c1e */
+  --pt-card:      44 44 46;     /* #2c2c2e */
+  --pt-card2:     58 58 60;     /* #3a3a3c */
+  --pt-sep:       56 56 58;     /* #38383a */
+  --pt-text:      255 255 255;
+  --pt-secondary: 142 142 147;  /* #8e8e93 */
+  --pt-blue:      10 132 255;   /* #0a84ff */
+  --pt-green:     50 215 75;    /* #32d74b */
+  --pt-orange:    255 159 10;   /* #ff9f0a */
+  --pt-red:       255 69 58;    /* #ff453a */
+  --pt-yellow:    255 214 10;   /* #ffd60a */
+  --pt-purple:    191 90 242;   /* #bf5af2 */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --font-mono: "SF Mono", ui-monospace, Menlo, monospace;
+}
+
+/* iOS light — Apple HIG light palette */
+.theme-light {
+  --pt-bg:        242 242 247;  /* systemGroupedBackground */
+  --pt-card:      255 255 255;  /* white */
+  --pt-card2:     229 229 234;  /* secondarySystemGroupedBackground */
+  --pt-sep:       60 60 67;     /* separator */
+  --pt-text:      0 0 0;
+  --pt-secondary: 108 108 112;  /* secondaryLabel */
+  --pt-blue:      0 122 255;    /* systemBlue light */
+  --pt-green:     52 199 89;    /* systemGreen light */
+  --pt-orange:    255 149 0;    /* systemOrange light */
+  --pt-red:       255 59 48;    /* systemRed light */
+  --pt-yellow:    255 204 0;    /* systemYellow light */
+  --pt-purple:    175 82 222;   /* systemPurple light */
+}
+
+/* Android dark — Material Design 3 dark palette */
+.platform-android {
+  --pt-bg:        20 18 24;     /* #141218  M3 background */
+  --pt-card:      33 31 38;     /* #211f26  M3 surface-container */
+  --pt-card2:     45 43 51;     /* #2d2b33  M3 surface-container-high */
+  --pt-sep:       73 69 79;     /* #49454f  M3 outline-variant */
+  --pt-text:      230 225 229;  /* #e6e1e5  M3 on-surface */
+  --pt-secondary: 202 196 208;  /* #cac4d0  M3 on-surface-variant */
+  --pt-blue:      208 188 255;  /* #d0bcff  M3 primary */
+  --pt-green:     168 199 160;  /* #a8c7a0  M3 tertiary */
+  --pt-orange:    255 183 77;   /* #ffb74d  Material amber */
+  --pt-red:       242 184 181;  /* #f2b8b5  M3 error */
+  --pt-yellow:    246 216 96;   /* #f6d860  Material yellow */
+  --pt-purple:    206 147 216;  /* #ce93d8  Material purple 200 */
+  --font-sans: "Roboto", system-ui, sans-serif;
+  --font-mono: "Roboto Mono", monospace;
+
+  /* Apply Roboto to all text inside the Android phone shell */
+  font-family: var(--font-sans);
+}
+
+/* Android light — Material Design 3 light palette */
+.platform-android.theme-light {
+  --pt-bg:        255 251 254;  /* M3 background light */
+  --pt-card:      237 232 239;  /* M3 surface-container light */
+  --pt-card2:     230 224 233;  /* M3 surface-container-high light */
+  --pt-sep:       121 116 126;  /* M3 outline-variant light */
+  --pt-text:      28 27 31;     /* M3 on-surface light */
+  --pt-secondary: 73 69 79;     /* M3 on-surface-variant light */
+  --pt-blue:      103 80 164;   /* M3 primary light */
+  --pt-green:     55 107 71;    /* M3 tertiary light */
+  --pt-orange:    154 90 0;     /* M3 amber light */
+  --pt-red:       179 38 30;    /* M3 error light */
+  --pt-yellow:    117 92 0;
+  --pt-purple:    103 80 164;
+}
+
+/* Material Symbols utility class */
+.mat-icon {
+  font-family: 'Material Symbols Rounded';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  direction: ltr;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'liga';
+  user-select: none;
+}
+
+@layer base {
+  html, body, #root {
+    @apply min-h-screen font-sans;
+    color: rgb(var(--pt-text));
+  }
+
+  * {
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Hide scrollbar but keep scroll */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+/* ===== Theme-reactive color overrides =====
+   Vite's dev server compiles Tailwind utility classes with the :root CSS
+   variable values hardcoded (e.g. rgb(44 44 46 / ...)) rather than keeping
+   them as runtime var() references. These unlayered rules override the
+   @layer utilities output — CSS outside @layer always wins in cascade — so
+   colors respond to .theme-light and .platform-android at runtime.
+   =========================================== */
+
+/* Solid backgrounds */
+.bg-ask-bg    { background-color: rgb(var(--pt-bg)); }
+.bg-ask-card  { background-color: rgb(var(--pt-card)); }
+.bg-ask-card2 { background-color: rgb(var(--pt-card2)); }
+.bg-ask-blue   { background-color: rgb(var(--pt-blue)); }
+.bg-ask-green  { background-color: rgb(var(--pt-green)); }
+.bg-ask-orange { background-color: rgb(var(--pt-orange)); }
+.bg-ask-red    { background-color: rgb(var(--pt-red)); }
+.bg-ask-yellow { background-color: rgb(var(--pt-yellow)); }
+.bg-ask-purple { background-color: rgb(var(--pt-purple)); }
+
+/* Background with opacity */
+.bg-ask-bg\/90      { background-color: rgb(var(--pt-bg) / 0.9); }
+.bg-ask-card\/60    { background-color: rgb(var(--pt-card) / 0.6); }
+.bg-ask-blue\/10    { background-color: rgb(var(--pt-blue) / 0.1); }
+.bg-ask-blue\/20    { background-color: rgb(var(--pt-blue) / 0.2); }
+.bg-ask-blue\/25    { background-color: rgb(var(--pt-blue) / 0.25); }
+.bg-ask-blue\/30    { background-color: rgb(var(--pt-blue) / 0.3); }
+.bg-ask-blue\/60    { background-color: rgb(var(--pt-blue) / 0.6); }
+.bg-ask-blue\/80    { background-color: rgb(var(--pt-blue) / 0.8); }
+.bg-ask-blue\/\[0\.12\] { background-color: rgb(var(--pt-blue) / 0.12); }
+.bg-ask-green\/20   { background-color: rgb(var(--pt-green) / 0.2); }
+.bg-ask-green\/25   { background-color: rgb(var(--pt-green) / 0.25); }
+.bg-ask-green\/30   { background-color: rgb(var(--pt-green) / 0.3); }
+.bg-ask-green\/\[0\.12\] { background-color: rgb(var(--pt-green) / 0.12); }
+.bg-ask-orange\/5   { background-color: rgb(var(--pt-orange) / 0.05); }
+.bg-ask-orange\/15  { background-color: rgb(var(--pt-orange) / 0.15); }
+.bg-ask-orange\/20  { background-color: rgb(var(--pt-orange) / 0.2); }
+.bg-ask-orange\/25  { background-color: rgb(var(--pt-orange) / 0.25); }
+.bg-ask-orange\/40  { background-color: rgb(var(--pt-orange) / 0.4); }
+.bg-ask-orange\/50  { background-color: rgb(var(--pt-orange) / 0.5); }
+.bg-ask-orange\/\[0\.12\] { background-color: rgb(var(--pt-orange) / 0.12); }
+.bg-ask-red\/10     { background-color: rgb(var(--pt-red) / 0.1); }
+.bg-ask-red\/15     { background-color: rgb(var(--pt-red) / 0.15); }
+.bg-ask-red\/20     { background-color: rgb(var(--pt-red) / 0.2); }
+.bg-ask-red\/30     { background-color: rgb(var(--pt-red) / 0.3); }
+.bg-ask-red\/40     { background-color: rgb(var(--pt-red) / 0.4); }
+.bg-ask-red\/50     { background-color: rgb(var(--pt-red) / 0.5); }
+.bg-ask-secondary\/15 { background-color: rgb(var(--pt-secondary) / 0.15); }
+.bg-ask-secondary\/20 { background-color: rgb(var(--pt-secondary) / 0.2); }
+.bg-ask-secondary\/40 { background-color: rgb(var(--pt-secondary) / 0.4); }
+.bg-ask-secondary\/50 { background-color: rgb(var(--pt-secondary) / 0.5); }
+.bg-ask-secondary\/60 { background-color: rgb(var(--pt-secondary) / 0.6); }
+.bg-ask-secondary\/70 { background-color: rgb(var(--pt-secondary) / 0.7); }
+.bg-ask-sep\/30     { background-color: rgb(var(--pt-sep) / 0.3); }
+.bg-ask-sep\/40     { background-color: rgb(var(--pt-sep) / 0.4); }
+.bg-ask-sep\/50     { background-color: rgb(var(--pt-sep) / 0.5); }
+.bg-ask-sep\/60     { background-color: rgb(var(--pt-sep) / 0.6); }
+.bg-ask-text\/30    { background-color: rgb(var(--pt-text) / 0.3); }
+.bg-ask-text\/70    { background-color: rgb(var(--pt-text) / 0.7); }
+.bg-ask-text\/\[0\.05\] { background-color: rgb(var(--pt-text) / 0.05); }
+
+/* Text colors */
+.text-ask-text      { color: rgb(var(--pt-text)); }
+.text-ask-secondary { color: rgb(var(--pt-secondary)); }
+.text-ask-blue      { color: rgb(var(--pt-blue)); }
+.text-ask-green     { color: rgb(var(--pt-green)); }
+.text-ask-orange    { color: rgb(var(--pt-orange)); }
+.text-ask-red       { color: rgb(var(--pt-red)); }
+.text-ask-yellow    { color: rgb(var(--pt-yellow)); }
+.text-ask-purple    { color: rgb(var(--pt-purple)); }
+
+/* Border colors */
+.border-ask-sep    { border-color: rgb(var(--pt-sep)); }
+.border-ask-blue   { border-color: rgb(var(--pt-blue)); }
+.border-ask-orange { border-color: rgb(var(--pt-orange)); }
+.border-ask-red    { border-color: rgb(var(--pt-red)); }
+.border-ask-sep\/30 { border-color: rgb(var(--pt-sep) / 0.3); }
+.border-ask-sep\/40 { border-color: rgb(var(--pt-sep) / 0.4); }
+.border-ask-sep\/50 { border-color: rgb(var(--pt-sep) / 0.5); }
+.border-ask-sep\/60 { border-color: rgb(var(--pt-sep) / 0.6); }
+.border-ask-blue\/20  { border-color: rgb(var(--pt-blue) / 0.2); }
+.border-ask-blue\/30  { border-color: rgb(var(--pt-blue) / 0.3); }
+.border-ask-orange\/40 { border-color: rgb(var(--pt-orange) / 0.4); }
+.border-ask-red\/20   { border-color: rgb(var(--pt-red) / 0.2); }
+.border-ask-red\/30   { border-color: rgb(var(--pt-red) / 0.3); }
+.border-ask-red\/40   { border-color: rgb(var(--pt-red) / 0.4); }
+
+/* Hover and interactive states */
+.hover\:bg-ask-card:hover  { background-color: rgb(var(--pt-card)); }
+.hover\:bg-ask-card2:hover { background-color: rgb(var(--pt-card2)); }
+.hover\:bg-ask-text\/\[0\.05\]:hover { background-color: rgb(var(--pt-text) / 0.05); }
+.hover\:bg-ask-blue:hover  { background-color: rgb(var(--pt-blue)); }
+.hover\:bg-ask-red\/10:hover { background-color: rgb(var(--pt-red) / 0.1); }
+.hover\:text-ask-text:hover { color: rgb(var(--pt-text)); }
+.active\:bg-ask-card2:active { background-color: rgb(var(--pt-card2)); }
+.focus\:ring-ask-blue { --tw-ring-color: rgb(var(--pt-blue)); }
+
+/* Placeholder and divide */
+.placeholder-ask-secondary::placeholder { color: rgb(var(--pt-secondary)); }
+.divide-ask-sep > :not([hidden]) ~ :not([hidden]) { border-color: rgb(var(--pt-sep)); }

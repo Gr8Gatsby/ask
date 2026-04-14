@@ -1,6 +1,7 @@
 #if canImport(AskMacCore)
 import AskMacCore
 #endif
+import CloudKit
 import Security
 import SwiftUI
 import UniformTypeIdentifiers
@@ -71,14 +72,26 @@ private extension Color {
     }
 }
 
+private func blockStatusColor(_ colorString: String?) -> Color {
+    switch colorString {
+    case "green":  .green
+    case "blue":   .blue
+    case "orange": .orange
+    case "red":    .red
+    case "yellow": .yellow
+    default:       .secondary
+    }
+}
+
 // MARK: - Top-level tab
 
 private enum MacTab: String, CaseIterable {
-    case scripts, feed, blocks, machine
+    case scripts, app, feed, blocks, machine
 
     var icon: String {
         switch self {
         case .scripts:  "terminal"
+        case .app:      "square.grid.2x2"
         case .feed:     "scroll"
         case .blocks:   "rectangle.stack"
         case .machine:  "desktopcomputer"
@@ -88,6 +101,7 @@ private enum MacTab: String, CaseIterable {
     var label: String {
         switch self {
         case .scripts:  "Scripts"
+        case .app:      "App"
         case .feed:     "Feed"
         case .blocks:   "Blocks"
         case .machine:  "Machine"
@@ -113,6 +127,10 @@ struct MacScriptsView: View {
             case .scripts:
                 ScriptsTabView()
                     .environment(scriptManager)
+            case .app:
+                MacAppMockView()
+                    .environment(scriptManager)
+                    .environment(actionHistory)
             case .feed:
                 MacFeedView()
                     .environment(actionHistory)
@@ -150,6 +168,1233 @@ struct MacScriptsView: View {
             // the window becomes key immediately on first open.
             NSApplication.shared.activate(ignoringOtherApps: true)
         }
+    }
+}
+
+private struct LocalTilePayload {
+    let label: String?
+    let body: String?
+    let statusColor: String?
+    let actionRequired: Bool
+}
+
+private struct LocalAgentSessionSummary {
+    let blockID: String
+    let lastMessage: String?
+    let currentPreview: String?
+    let isWorking: Bool
+    let pendingConfirmationTitle: String?
+    let hasPendingConfirmation: Bool
+}
+
+private struct LocalAppScriptGroup: Identifiable {
+    let script: ManagedScript
+    let blocks: [LiveBlock]
+
+    var id: String { script.id }
+
+    private var tileBlock: LiveBlock? {
+        blocks.first(where: { $0.blockType == "tile" })
+    }
+
+    private var tilePayload: LocalTilePayload? {
+        tileBlock.flatMap { block in
+            guard let dict = block.payloadDict else { return nil }
+            return LocalTilePayload(
+                label: dict["label"] as? String,
+                body: dict["body"] as? String,
+                statusColor: dict["status_color"] as? String,
+                actionRequired: dict["action_required"] as? Bool ?? false
+            )
+        }
+    }
+
+    private var agentSessions: [LocalAgentSessionSummary] {
+        blocks.compactMap { block in
+            guard block.blockType == "agent_session", let dict = block.payloadDict else { return nil }
+            let pending = dict["pending_confirmation"] as? [String: Any]
+            return LocalAgentSessionSummary(
+                blockID: block.id,
+                lastMessage: dict["last_message"] as? String,
+                currentPreview: dict["current_preview"] as? String,
+                isWorking: dict["is_working"] as? Bool ?? false,
+                pendingConfirmationTitle: pending?["title"] as? String,
+                hasPendingConfirmation: pending != nil
+            )
+        }
+    }
+
+    var isActionRequired: Bool { tilePayload?.actionRequired == true }
+
+    private var pendingSessionBlockIDs: Set<String> {
+        Set(agentSessions.filter(\.hasPendingConfirmation).map(\.blockID))
+    }
+
+    var needsResponse: Bool {
+        blocks.contains(where: \.showsInInbox) || isActionRequired || !pendingSessionBlockIDs.isEmpty
+    }
+
+    var inboxBlocks: [LiveBlock] {
+        blocks.filter { $0.showsInInbox || pendingSessionBlockIDs.contains($0.id) }
+    }
+
+    var recentBlocks: [LiveBlock] {
+        blocks.filter { !$0.showsInInbox && !pendingSessionBlockIDs.contains($0.id) && $0.blockType != "tile" }
+    }
+
+    var tileLabel: String? {
+        if let label = tilePayload?.label { return label }
+        let working = agentSessions.filter(\.isWorking).count
+        guard !agentSessions.isEmpty else { return nil }
+        let noun = agentSessions.count == 1 ? "session" : "sessions"
+        if working > 0 {
+            return working == agentSessions.count ? "\(agentSessions.count) \(noun) working" : "\(agentSessions.count) \(noun), \(working) working"
+        }
+        return "\(agentSessions.count) \(noun)"
+    }
+
+    var tileStatusColor: String? {
+        if let color = tilePayload?.statusColor { return color }
+        if agentSessions.contains(where: \.hasPendingConfirmation) { return "orange" }
+        return agentSessions.contains(where: \.isWorking) ? "blue" : "gray"
+    }
+
+    var tileBody: String? {
+        if let body = tilePayload?.body, !body.isEmpty { return body }
+        if let pending = agentSessions.first(where: \.hasPendingConfirmation)?.pendingConfirmationTitle {
+            return pending
+        }
+        let active = agentSessions.first(where: \.isWorking) ?? agentSessions.first
+        let text = active?.lastMessage ?? active?.currentPreview
+        guard let text, !text.isEmpty else { return nil }
+        return text.components(separatedBy: "\n").first(where: { !$0.isEmpty })
+    }
+}
+
+private extension LiveBlock {
+    var payloadDict: [String: Any]? {
+        guard let data = payloadJSON.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return obj
+    }
+}
+
+private enum AppMockScreen: Hashable {
+    case home
+    case feed
+}
+
+private struct MacAppMockView: View {
+    @Environment(ScriptManager.self) private var scriptManager
+    @State private var screen: AppMockScreen = .home
+    @State private var selectedScriptID: String?
+
+    private var alertGroups: [LocalAppScriptGroup] {
+        scriptManager.scripts
+            .filter { !$0.isSystem }
+            .compactMap { script -> LocalAppScriptGroup? in
+                let blocks = Array((scriptManager.activeBlocks[script.id] ?? [:]).values)
+                    .sorted { $0.createdAt > $1.createdAt }
+                let group = LocalAppScriptGroup(script: script, blocks: blocks)
+                return group.needsResponse ? group : nil
+            }
+            .sorted { $0.script.name < $1.script.name }
+    }
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            // Content — always padded to leave room for tab bar
+            Group {
+                if let selectedScriptID,
+                   let script = scriptManager.scripts.first(where: { $0.id == selectedScriptID }) {
+                    let blocks = Array((scriptManager.activeBlocks[script.id] ?? [:]).values)
+                        .sorted { $0.createdAt > $1.createdAt }
+                    MacAppScriptScreen(
+                        script: script,
+                        liveBlocks: blocks,
+                        onBack: { self.selectedScriptID = nil },
+                        onRespond: { blockID, value in
+                            scriptManager.respondToBlock(scriptID: script.id, blockID: blockID, value: value)
+                        }
+                    )
+                } else {
+                    switch screen {
+                    case .home:
+                        MacAppHomeScreen(
+                            scriptManager: scriptManager,
+                            onOpenScript: { selectedScriptID = $0 }
+                        )
+                    case .feed:
+                        MacAppFeedScreen()
+                    }
+                }
+            }
+            .padding(20)
+            .padding(.bottom, alertGroups.isEmpty ? 60 : 88)
+
+            // Floating tab bar — always visible
+            VStack(spacing: 8) {
+                // Alert chips: scripts that need a response
+                if !alertGroups.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(alertGroups) { group in
+                            Button {
+                                selectedScriptID = group.script.id
+                                screen = .home
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Circle()
+                                        .fill(blockStatusColor(group.tileStatusColor))
+                                        .frame(width: 6, height: 6)
+                                    Text(group.script.name)
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .lineLimit(1)
+                                }
+                                .foregroundStyle(.primary)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(.regularMaterial, in: Capsule())
+                                .overlay(
+                                    Capsule().stroke(blockStatusColor(group.tileStatusColor).opacity(0.35), lineWidth: 1)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .help("\(group.script.name) needs attention")
+                        }
+                    }
+                    .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
+                }
+
+                // Tab pills
+                HStack(spacing: 2) {
+                    ForEach([AppMockScreen.home, AppMockScreen.feed], id: \.self) { tab in
+                        Button {
+                            selectedScriptID = nil
+                            screen = tab
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: tab == .home ? "house.fill" : "list.bullet")
+                                    .font(.system(size: 13, weight: .medium))
+                                Text(tab == .home ? "Home" : "Feed")
+                                    .font(.system(size: 13, weight: .medium))
+                            }
+                            .foregroundStyle(activeTab == tab ? .white : .secondary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(
+                                activeTab == tab ? Color.accentColor : Color.clear,
+                                in: Capsule()
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(4)
+                .background(.regularMaterial, in: Capsule())
+                .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+            }
+            .padding(.bottom, 16)
+        }
+        .navigationTitle("App")
+    }
+
+    /// The tab that should appear selected. Home is highlighted when drilling into a script.
+    private var activeTab: AppMockScreen {
+        selectedScriptID != nil ? .home : screen
+    }
+}
+
+private struct MacAppHomeScreen: View {
+    let scriptManager: ScriptManager
+    let onOpenScript: (String) -> Void
+
+    private var groups: [LocalAppScriptGroup] {
+        scriptManager.scripts
+            .filter { !$0.isSystem && ($0.isEnabled || !(scriptManager.activeBlocks[$0.id] ?? [:]).isEmpty) }
+            .map { script in
+                LocalAppScriptGroup(
+                    script: script,
+                    blocks: Array((scriptManager.activeBlocks[script.id] ?? [:]).values).sorted { $0.createdAt > $1.createdAt }
+                )
+            }
+            .sorted { a, b in
+                if a.needsResponse != b.needsResponse { return a.needsResponse && !b.needsResponse }
+                return a.script.name < b.script.name
+            }
+    }
+
+    private var needsResponseGroups: [LocalAppScriptGroup] {
+        groups.filter(\.needsResponse)
+    }
+
+    private var recentGroups: [LocalAppScriptGroup] {
+        groups.filter { !$0.needsResponse }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Home")
+                        .font(.largeTitle)
+                        .fontWeight(.semibold)
+                    Text("Local app harness built from the same live blocks and responses the app uses.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                if groups.isEmpty {
+                    ContentUnavailableView(
+                        "No Active App Content",
+                        systemImage: "square.grid.2x2",
+                        description: Text("No enabled scripts are emitting blocks right now.")
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 20)
+                } else {
+                    if !needsResponseGroups.isEmpty {
+                        appSectionHeader("Needs Response", count: needsResponseGroups.count)
+                        ForEach(needsResponseGroups) { group in
+                            MacAppActionCard(group: group) { blockID, value in
+                                scriptManager.respondToBlock(scriptID: group.script.id, blockID: blockID, value: value)
+                            } onOpen: {
+                                onOpenScript(group.script.id)
+                            }
+                        }
+                    }
+
+                    if !recentGroups.isEmpty {
+                        appSectionHeader("Recent", count: nil)
+                        ForEach(recentGroups) { group in
+                            MacAppTileCard(group: group) {
+                                onOpenScript(group.script.id)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func appSectionHeader(_ title: String, count: Int?) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+            if let count, count > 0 {
+                Text("\(count)")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.orange)
+                    .clipShape(Capsule())
+            }
+            Spacer()
+        }
+        .padding(.top, 6)
+    }
+}
+
+// MARK: - Task thread display models
+
+struct TaskMessageDisplay: Identifiable {
+    let id: String
+    let role: String
+    let text: String
+    let timestamp: Date
+    let sequenceNumber: Int
+
+    init?(from record: CKRecord) {
+        guard
+            let messageID = record[CKSchema.AskTaskMessage.messageID] as? String,
+            let role      = record[CKSchema.AskTaskMessage.role]      as? String,
+            let partsJSON = record[CKSchema.AskTaskMessage.partsJSON] as? String,
+            let timestamp = record[CKSchema.AskTaskMessage.timestamp] as? Date
+        else { return nil }
+        self.id              = messageID
+        self.role            = role
+        self.timestamp       = timestamp
+        self.sequenceNumber  = record[CKSchema.AskTaskMessage.sequenceNumber] as? Int ?? 0
+        // Extract text from parts JSON: [{type:"text",text:"..."},...]
+        if let data = partsJSON.data(using: .utf8),
+           let parts = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            self.text = parts.compactMap { $0["text"] as? String }.joined(separator: "\n")
+        } else {
+            self.text = partsJSON
+        }
+    }
+}
+
+struct TaskArtifactDisplay: Identifiable {
+    let id: String
+    let filename: String
+    let mimeType: String
+    let description: String?
+    let sizeBytes: Int
+    let localURL: URL?   // CKAsset temp file URL — available immediately after fetch
+    let updatedAt: Date
+
+    init?(from record: CKRecord) {
+        guard
+            let artifactID = record[CKSchema.AskArtifact.artifactID] as? String,
+            let filename   = record[CKSchema.AskArtifact.filename]   as? String,
+            let mimeType   = record[CKSchema.AskArtifact.mimeType]   as? String,
+            let updatedAt  = record[CKSchema.AskArtifact.updatedAt]  as? Date
+        else { return nil }
+        self.id          = artifactID
+        self.filename    = filename
+        self.mimeType    = mimeType
+        self.description = record[CKSchema.AskArtifact.description] as? String
+        self.sizeBytes   = record[CKSchema.AskArtifact.sizeBytes]   as? Int ?? 0
+        self.updatedAt   = updatedAt
+        self.localURL    = (record[CKSchema.AskArtifact.content] as? CKAsset)?.fileURL
+    }
+
+    var formattedSize: String {
+        ByteCountFormatter.string(fromByteCount: Int64(sizeBytes), countStyle: .file)
+    }
+}
+
+// MARK: - Task feed store
+
+@Observable
+private final class TaskFeedStore {
+    var tasks: [AskTaskRecord] = []
+    var isLoading = false
+    var errorMessage: String?
+
+    var activeTasks: [AskTaskRecord] {
+        tasks
+            .filter { $0.status == "working" || $0.status == "input-required" }
+            .sorted {
+                if $0.status != $1.status { return $0.status == "input-required" }
+                return $0.lastActivityAt > $1.lastActivityAt
+            }
+    }
+
+    var recentTasks: [AskTaskRecord] {
+        tasks
+            .filter { $0.status == "completed" || $0.status == "failed" || $0.status == "cancelled" }
+            .sorted { $0.lastActivityAt > $1.lastActivityAt }
+    }
+
+    @MainActor
+    func refresh(cloudKit: CloudKitService, machineID: String) async {
+        isLoading = true
+        errorMessage = nil
+        do {
+            tasks = try await cloudKit.fetchTasks(machineID: machineID)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
+    }
+}
+
+// MARK: - Feed screen
+
+private struct MacAppFeedScreen: View {
+    @Environment(CloudKitService.self) private var cloudKit
+    @Environment(AppSettings.self) private var settings
+    @State private var store = TaskFeedStore()
+    @State private var selectedTask: AskTaskRecord?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                if store.isLoading && store.tasks.isEmpty {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 40)
+                } else if let err = store.errorMessage {
+                    ContentUnavailableView(
+                        "Could not load feed",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text(err)
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 20)
+                } else if store.activeTasks.isEmpty && store.recentTasks.isEmpty {
+                    ContentUnavailableView(
+                        "No Tasks Yet",
+                        systemImage: "checklist",
+                        description: Text("Tasks from running scripts will appear here.")
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 20)
+                } else {
+                    if !store.activeTasks.isEmpty {
+                        feedSection("Active", tasks: store.activeTasks)
+                    }
+                    if !store.recentTasks.isEmpty {
+                        feedSection("Recent", tasks: store.recentTasks)
+                    }
+                }
+            }
+            .padding(.vertical, 8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .refreshable { await store.refresh(cloudKit: cloudKit, machineID: settings.machineID) }
+        .task { await store.refresh(cloudKit: cloudKit, machineID: settings.machineID) }
+        .sheet(item: $selectedTask) { task in
+            TaskThreadSheet(task: task)
+                .environment(cloudKit)
+                .environment(settings)
+        }
+    }
+
+    @ViewBuilder
+    private func feedSection(_ title: String, tasks: [AskTaskRecord]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+            VStack(spacing: 0) {
+                ForEach(tasks, id: \.recordName) { task in
+                    Button { selectedTask = task } label: {
+                        TaskFeedRow(task: task)
+                    }
+                    .buttonStyle(.plain)
+                    if task.recordName != tasks.last?.recordName {
+                        Divider().padding(.leading, 50)
+                    }
+                }
+            }
+            .background(.background.secondary)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 12)
+        }
+    }
+}
+
+private struct TaskFeedRow: View {
+    let task: AskTaskRecord
+
+    var body: some View {
+        HStack(spacing: 12) {
+            statusIcon
+                .frame(width: 28, height: 28)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(task.title)
+                    .font(.callout)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                    .foregroundStyle(.primary)
+                HStack(spacing: 4) {
+                    Image(systemName: "terminal")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(task.scriptName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(task.lastActivityAt, style: .relative)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                if task.artifactCount > 0 {
+                    Label("\(task.artifactCount)", systemImage: "paperclip")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        switch task.status {
+        case "working":
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 20, height: 20)
+        case "input-required":
+            Image(systemName: "ellipsis.bubble")
+                .foregroundStyle(.orange)
+                .font(.title3)
+        case "completed":
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .font(.title3)
+        case "failed":
+            Image(systemName: "xmark.circle.fill")
+                .foregroundStyle(.red)
+                .font(.title3)
+        case "cancelled":
+            Image(systemName: "minus.circle.fill")
+                .foregroundStyle(.secondary)
+                .font(.title3)
+        default:
+            Image(systemName: "circle")
+                .foregroundStyle(.secondary)
+                .font(.title3)
+        }
+    }
+}
+
+// MARK: - Task thread sheet
+
+@Observable
+private final class TaskThreadStore {
+    var messages: [TaskMessageDisplay] = []
+    var artifacts: [TaskArtifactDisplay] = []
+    var isLoading = false
+    var errorMessage: String?
+
+    @MainActor
+    func load(task: AskTaskRecord, cloudKit: CloudKitService) async {
+        isLoading = true
+        errorMessage = nil
+        do {
+            async let msgs = cloudKit.fetchTaskMessages(taskID: task.taskID, machineID: task.machineID)
+            async let arts = cloudKit.fetchTaskArtifacts(taskID: task.taskID, machineID: task.machineID)
+            let (rawMsgs, rawArts) = try await (msgs, arts)
+            // Sort oldest-first by timestamp only.
+            // sequenceNumber restarts at 1 on each daemon run, so using it as a
+            // primary key interleaves messages from different sessions. Timestamp
+            // is a real wall-clock value and never collides across runs.
+            messages  = rawMsgs.sorted { $0.timestamp < $1.timestamp }
+            artifacts = rawArts.sorted  { $0.updatedAt < $1.updatedAt }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
+    }
+}
+
+private struct TaskThreadSheet: View {
+    let task: AskTaskRecord
+    @Environment(CloudKitService.self) private var cloudKit
+    @Environment(\.dismiss) private var dismiss
+    @State private var store = TaskThreadStore()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(task.title)
+                        .font(.headline)
+                    Text(task.scriptName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.escape)
+            }
+            .padding()
+            Divider()
+
+            if store.isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let err = store.errorMessage {
+                ContentUnavailableView("Could not load", systemImage: "exclamationmark.triangle",
+                                       description: Text(err))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        // Messages — grouped so permission pairs appear as one unit
+                        ForEach(groupMessages(store.messages)) { group in
+                            switch group {
+                            case .single(let msg):
+                                MessageRow(message: msg)
+                            case .permissionPair(let needed, let resolved):
+                                PermissionGroupRow(needed: needed, resolved: resolved)
+                            }
+                        }
+                        // Artifacts
+                        if !store.artifacts.isEmpty {
+                            if !store.messages.isEmpty {
+                                Divider().padding(.vertical, 8)
+                            }
+                            Text("Attachments")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 16)
+                                .padding(.bottom, 6)
+                            ForEach(store.artifacts) { artifact in
+                                ArtifactRow(artifact: artifact)
+                            }
+                        }
+                        if store.messages.isEmpty && store.artifacts.isEmpty {
+                            ContentUnavailableView("No content", systemImage: "bubble.left",
+                                                   description: Text("This task has no messages yet."))
+                                .padding(.top, 20)
+                        }
+                    }
+                    .padding(.vertical, 8)
+                }
+            }
+        }
+        .frame(minWidth: 520, minHeight: 420)
+        .task { await store.load(task: task, cloudKit: cloudKit) }
+    }
+}
+
+// MARK: - Relative time (single most-significant unit)
+
+private func simpleRelativeTime(_ date: Date) -> String {
+    let seconds = max(0, Int(-date.timeIntervalSinceNow))
+    if seconds < 60  { return "< 1 min" }
+    let minutes = seconds / 60
+    if minutes < 60  { return "\(minutes) min" }
+    let hours = minutes / 60
+    if hours   < 24  { return "\(hours) hr" }
+    let days   = hours / 24
+    if days    < 30  { return "\(days) day\(days == 1 ? "" : "s")" }
+    let months = days / 30
+    if months  < 12  { return "\(months) mo" }
+    return "\(months / 12) yr"
+}
+
+// MARK: - Simple Markdown renderer
+
+private enum MDBlock {
+    case heading(level: Int, text: String)
+    case code(String)
+    case paragraph(String)
+}
+
+private func parseMarkdownBlocks(_ raw: String) -> [MDBlock] {
+    var blocks: [MDBlock] = []
+    let lines  = raw.components(separatedBy: "\n")
+    var i      = 0
+    while i < lines.count {
+        let line = lines[i]
+        // Heading: 1–6 # characters followed by a space
+        let hashes = line.prefix(while: { $0 == "#" })
+        let level  = hashes.count
+        if level >= 1 && level <= 6 && line.count > level,
+           line[line.index(line.startIndex, offsetBy: level)] == " " {
+            blocks.append(.heading(level: level, text: String(line.dropFirst(level + 1))))
+            i += 1
+            continue
+        }
+        // Fenced code block
+        if line.hasPrefix("```") {
+            var code = ""
+            i += 1
+            while i < lines.count && !lines[i].hasPrefix("```") {
+                if !code.isEmpty { code += "\n" }
+                code += lines[i]
+                i += 1
+            }
+            i += 1 // skip closing ```
+            if !code.isEmpty { blocks.append(.code(code)) }
+            continue
+        }
+        // Blank line
+        if line.trimmingCharacters(in: .whitespaces).isEmpty {
+            i += 1
+            continue
+        }
+        // Paragraph — collect until blank / heading / code fence
+        var para: [String] = []
+        while i < lines.count {
+            let l = lines[i]
+            if l.trimmingCharacters(in: .whitespaces).isEmpty { break }
+            if l.hasPrefix("#") { break }
+            if l.hasPrefix("```") { break }
+            para.append(l)
+            i += 1
+        }
+        if !para.isEmpty { blocks.append(.paragraph(para.joined(separator: "\n"))) }
+    }
+    return blocks
+}
+
+private struct MarkdownBlock: View {
+    let block: MDBlock
+
+    var body: some View {
+        switch block {
+        case .heading(let level, let text):
+            Text(text)
+                .font(level <= 2 ? .callout.weight(.bold) : .callout.weight(.semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .code(let code):
+            Text(code)
+                .font(.system(.caption, design: .monospaced))
+                .padding(6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.primary.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+        case .paragraph(let text):
+            // AttributedString renders inline Markdown: **bold**, *italic*, `code`, [links](url)
+            let attr = (try? AttributedString(
+                markdown: text,
+                options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+            )) ?? AttributedString(text)
+            Text(attr)
+                .font(.callout)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct SimpleMarkdownView: View {
+    let text: String
+
+    var body: some View {
+        let blocks = parseMarkdownBlocks(text)
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                MarkdownBlock(block: block)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - Permission pair grouping
+
+private enum MessageGroup: Identifiable {
+    case single(TaskMessageDisplay)
+    case permissionPair(needed: TaskMessageDisplay, resolved: TaskMessageDisplay)
+
+    var id: String {
+        switch self {
+        case .single(let m):            return m.id
+        case .permissionPair(let n, _): return n.id
+        }
+    }
+}
+
+/// Collapse consecutive "Permission needed" + "Permission resolved" pairs into one group.
+private func groupMessages(_ messages: [TaskMessageDisplay]) -> [MessageGroup] {
+    var groups: [MessageGroup] = []
+    var i = 0
+    while i < messages.count {
+        let msg = messages[i]
+        if msg.text.hasPrefix("### Permission needed"),
+           i + 1 < messages.count,
+           messages[i + 1].text.hasPrefix("### Permission resolved") {
+            groups.append(.permissionPair(needed: msg, resolved: messages[i + 1]))
+            i += 2
+        } else {
+            groups.append(.single(msg))
+            i += 1
+        }
+    }
+    return groups
+}
+
+/// Extract the first non-heading, non-empty line from a structured message.
+private func messageBody(_ text: String) -> String {
+    text.components(separatedBy: "\n")
+        .first { !$0.isEmpty && !$0.hasPrefix("#") }
+        ?? text
+}
+
+private struct PermissionGroupRow: View {
+    let needed:   TaskMessageDisplay
+    let resolved: TaskMessageDisplay
+
+    private var decision: String { messageBody(resolved.text) }
+    private var isPositive: Bool {
+        let d = decision.lowercased()
+        return d.contains("allow") || d == "yes"
+    }
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                // Permission request bubble
+                SimpleMarkdownView(text: needed.text)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.secondary.opacity(0.15))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+
+                // Resolution pill — attached directly below, no timestamp gap
+                HStack(spacing: 5) {
+                    Image(systemName: isPositive ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    Text(decision)
+                        .fontWeight(.medium)
+                }
+                .font(.caption)
+                .foregroundStyle(isPositive ? Color.green : Color.red)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background((isPositive ? Color.green : Color.red).opacity(0.1))
+                .clipShape(Capsule())
+
+                // Single timestamp after resolution
+                Text(simpleRelativeTime(resolved.timestamp))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 60)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+    }
+}
+
+// MARK: - Message bubble
+
+private struct MessageRow: View {
+    let message: TaskMessageDisplay
+    private var isUser: Bool { message.role == "user" }
+
+    @ViewBuilder
+    private var bubbleContent: some View {
+        if isUser {
+            Text(message.text.isEmpty ? "(empty)" : message.text)
+                .font(.callout)
+        } else {
+            SimpleMarkdownView(text: message.text.isEmpty ? "(empty)" : message.text)
+        }
+    }
+
+    var body: some View {
+        HStack {
+            if isUser { Spacer(minLength: 60) }
+            VStack(alignment: isUser ? .trailing : .leading, spacing: 3) {
+                bubbleContent
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(isUser ? Color.accentColor : Color.secondary.opacity(0.15))
+                    .foregroundStyle(isUser ? .white : .primary)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                Text(simpleRelativeTime(message.timestamp))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if !isUser { Spacer(minLength: 60) }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+    }
+}
+
+private struct ArtifactRow: View {
+    let artifact: TaskArtifactDisplay
+    @State private var showPreview = false
+
+    private var isMarkdown: Bool {
+        artifact.mimeType == "text/markdown" || artifact.filename.hasSuffix(".md")
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: iconName)
+                .font(.title2)
+                .foregroundStyle(.secondary)
+                .frame(width: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(artifact.filename)
+                    .font(.callout)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(artifact.formattedSize)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let desc = artifact.description, !desc.isEmpty {
+                        Text("·")
+                            .foregroundStyle(.secondary)
+                        Text(desc)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            Spacer()
+            if let url = artifact.localURL {
+                HStack(spacing: 6) {
+                    if isMarkdown {
+                        Button {
+                            showPreview = true
+                        } label: {
+                            Image(systemName: "eye")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("Preview")
+                    }
+                    Button {
+                        let dest = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+                            .appendingPathComponent(artifact.filename)
+                        try? FileManager.default.copyItem(at: url, to: dest)
+                        NSWorkspace.shared.activateFileViewerSelecting([dest])
+                    } label: {
+                        Label("Save", systemImage: "arrow.down.circle")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .sheet(isPresented: $showPreview) {
+                    ArtifactPreviewSheet(artifact: artifact, url: url)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    private var iconName: String {
+        if artifact.mimeType.hasPrefix("image/") { return "photo" }
+        if artifact.mimeType.hasPrefix("text/") { return "doc.text" }
+        if artifact.mimeType.contains("pdf") { return "doc.richtext" }
+        if artifact.mimeType.contains("zip") || artifact.mimeType.contains("gzip") { return "archivebox" }
+        return "doc"
+    }
+}
+
+private struct ArtifactPreviewSheet: View {
+    let artifact: TaskArtifactDisplay
+    let url: URL
+    @Environment(\.dismiss) private var dismiss
+
+    private var content: String {
+        (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(artifact.filename)
+                        .font(.headline)
+                    Text(artifact.formattedSize)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.escape)
+            }
+            .padding()
+            Divider()
+            ScrollView {
+                SimpleMarkdownView(text: content)
+                    .padding(16)
+            }
+        }
+        .frame(minWidth: 480, minHeight: 360)
+        .onAppear { NSApplication.shared.activate(ignoringOtherApps: true) }
+    }
+}
+
+private struct MacAppActionCard: View {
+    let group: LocalAppScriptGroup
+    let onRespond: (String, String) -> Void
+    let onOpen: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Button(action: onOpen) {
+                HStack(spacing: 10) {
+                    scriptIcon
+                        .frame(width: 26, height: 26)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(group.script.name)
+                            .font(.headline)
+                        if let label = group.tileLabel {
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(blockStatusColor(group.tileStatusColor))
+                                    .frame(width: 7, height: 7)
+                                Text(label)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                    Spacer()
+                    Text("\(group.inboxBlocks.count) pending")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(Color.orange.opacity(0.12)))
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if let body = group.tileBody {
+                Text(body)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(group.inboxBlocks) { block in
+                    BlockPreviewView(block: block) { value in
+                        onRespond(block.id, value)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 18).fill(Color.orange.opacity(0.06)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(Color.orange.opacity(0.25), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private var scriptIcon: some View {
+        if let img = effectiveIconImage {
+            Image(nsImage: img)
+                .resizable()
+                .scaledToFit()
+        } else if let sf = group.script.icon {
+            Image(systemName: sf)
+                .font(.title3)
+                .foregroundStyle(.primary)
+        } else {
+            Image(systemName: "app")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var effectiveIconImage: NSImage? {
+        guard let img = group.script.iconImage else { return nil }
+        guard let svg = group.script.svgString else { return img }
+        return colorScheme == .dark ? (svgToWhite(svg) ?? img) : img
+    }
+}
+
+private struct MacAppTileCard: View {
+    let group: LocalAppScriptGroup
+    let onOpen: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 10) {
+                scriptIcon
+                    .frame(width: 26, height: 26)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(group.script.name)
+                        .font(.headline)
+                    if let label = group.tileLabel {
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(blockStatusColor(group.tileStatusColor))
+                                .frame(width: 7, height: 7)
+                            Text(label)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    if let body = group.tileBody {
+                        Text(body)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(RoundedRectangle(cornerRadius: 18).fill(Color.secondary.opacity(0.07)))
+            .contentShape(RoundedRectangle(cornerRadius: 18))
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var scriptIcon: some View {
+        if let img = effectiveIconImage {
+            Image(nsImage: img)
+                .resizable()
+                .scaledToFit()
+        } else if let sf = group.script.icon {
+            Image(systemName: sf)
+                .font(.title3)
+                .foregroundStyle(.primary)
+        } else {
+            Image(systemName: "app")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var effectiveIconImage: NSImage? {
+        guard let img = group.script.iconImage else { return nil }
+        guard let svg = group.script.svgString else { return img }
+        return colorScheme == .dark ? (svgToWhite(svg) ?? img) : img
+    }
+}
+
+private struct MacAppScriptScreen: View {
+    let script: ManagedScript
+    let liveBlocks: [LiveBlock]
+    let onBack: () -> Void
+    let onRespond: (String, String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 10) {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.headline)
+                }
+                .buttonStyle(.plain)
+                Text(script.name)
+                    .font(.title2.weight(.semibold))
+                Spacer()
+            }
+
+            if liveBlocks.isEmpty {
+                ContentUnavailableView(
+                    "No Active Blocks",
+                    systemImage: "rectangle.stack",
+                    description: Text("This script has no active local blocks right now.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(liveBlocks) { block in
+                            BlockPreviewView(block: block) { value in
+                                onRespond(block.id, value)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

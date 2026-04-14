@@ -1,0 +1,232 @@
+import SwiftUI
+import SwiftData
+
+// MARK: - TaskFeedView
+
+/// The unified task list — replaces the old FeedView.
+/// Shows all tasks across all machines and scripts in two sections: Active and Recent.
+struct TaskFeedView: View {
+    let machines: [AskMachine]
+
+    @Environment(TaskHistoryStore.self) private var taskHistory
+    @Environment(iOSCloudKitService.self) private var cloudKit
+
+    @Query(sort: \TaskRecord.lastActivityAt, order: .reverse)
+    private var allTasks: [TaskRecord]
+
+    @State private var showOlder = false
+    @State private var showInvokeSheet = false
+
+    private let olderCutoff = Date().addingTimeInterval(-30 * 24 * 3600)
+
+    // MARK: - Filtered sections
+
+    private var activeTasks: [TaskRecord] {
+        allTasks.filter { $0.status == "working" || $0.status == "input-required" }
+            .sorted {
+                // input-required floats above working
+                if $0.status != $1.status {
+                    return $0.status == "input-required"
+                }
+                return $0.lastActivityAt > $1.lastActivityAt
+            }
+    }
+
+    private var recentTasks: [TaskRecord] {
+        allTasks.filter { $0.status == "completed" || $0.status == "failed" || $0.status == "cancelled" }
+    }
+
+    private var visibleRecentTasks: [TaskRecord] {
+        let recent = recentTasks.filter { $0.lastActivityAt >= olderCutoff }
+        let older  = recentTasks.filter { $0.lastActivityAt < olderCutoff }
+        if showOlder { return recent + older }
+        return recent
+    }
+
+    private var hiddenOlderCount: Int {
+        recentTasks.filter { $0.lastActivityAt < olderCutoff }.count
+    }
+
+    // MARK: - Body
+
+    var body: some View {
+        Group {
+            if allTasks.isEmpty {
+                emptyState
+            } else {
+                taskList
+            }
+        }
+        .refreshable {
+            await taskHistory.refresh(machineIDs: machines.map(\.id))
+        }
+        .task {
+            guard !machines.isEmpty else { return }
+            await taskHistory.refresh(machineIDs: machines.map(\.id))
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(15))
+                guard !Task.isCancelled else { break }
+                await taskHistory.refresh(machineIDs: machines.map(\.id))
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showInvokeSheet = true
+                } label: {
+                    Image(systemName: "bolt")
+                }
+            }
+        }
+        .sheet(isPresented: $showInvokeSheet) {
+            InvokeScriptSheet(machines: machines)
+                .environment(cloudKit)
+        }
+    }
+
+    // MARK: - Task list
+
+    private var taskList: some View {
+        List {
+            if !activeTasks.isEmpty {
+                Section("Active") {
+                    ForEach(activeTasks, id: \.recordName) { task in
+                        NavigationLink {
+                            TaskThreadView(task: task)
+                                .environment(taskHistory)
+                        } label: {
+                            TaskListRow(task: task)
+                        }
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                try? taskHistory.deleteTask(task)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !recentTasks.isEmpty {
+                Section("Recent") {
+                    ForEach(visibleRecentTasks, id: \.recordName) { task in
+                        NavigationLink {
+                            TaskThreadView(task: task)
+                                .environment(taskHistory)
+                        } label: {
+                            TaskListRow(task: task)
+                        }
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                try? taskHistory.deleteTask(task)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                    }
+                    if hiddenOlderCount > 0 && !showOlder {
+                        Button {
+                            withAnimation { showOlder = true }
+                        } label: {
+                            Label("Show \(hiddenOlderCount) older task\(hiddenOlderCount == 1 ? "" : "s")",
+                                  systemImage: "clock")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+    }
+
+    // MARK: - Empty state
+
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Label("No Tasks Yet", systemImage: "tray")
+        } description: {
+            Text("Tasks created by scripts will appear here.")
+        }
+    }
+}
+
+// MARK: - Invoke Script Sheet
+
+private struct InvokeScriptSheet: View {
+    let machines: [AskMachine]
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(iOSCloudKitService.self) private var cloudKit
+
+    @State private var feedScripts: [AskScript] = []
+    @State private var isLoading = true
+    @State private var invokedIDs = Set<String>()
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView("Loading scripts…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if feedScripts.isEmpty {
+                    ContentUnavailableView {
+                        Label("No Feed Scripts", systemImage: "bolt.slash")
+                    } description: {
+                        Text("Feed scripts appear here once AskMac has registered them.")
+                    }
+                } else {
+                    List(feedScripts) { script in
+                        HStack {
+                            if let icon = script.scriptIcon {
+                                Image(systemName: icon)
+                                    .font(.title3)
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 28)
+                            }
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(script.scriptName)
+                                    .font(.subheadline)
+                                Text(script.machineName)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if invokedIDs.contains(script.id) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                            } else {
+                                Button("Run") {
+                                    invokedIDs.insert(script.id)
+                                    Task {
+                                        try? await cloudKit.writeInvokeRequest(
+                                            machineID: script.machineID,
+                                            scriptID: script.scriptID
+                                        )
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                        }
+                    }
+                    .listStyle(.insetGrouped)
+                }
+            }
+            .navigationTitle("Run a Script")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .task {
+                feedScripts = await cloudKit.fetchScripts(machines: machines).filter(\.isFeed)
+                isLoading = false
+            }
+        }
+    }
+}
+

@@ -52,3 +52,11 @@ __pycache__/
 AuthKey_*.p8
 AskMac/AskMac.xcodeproj
 codesign*
+
+# Web dev UI (ask/web/)
+web/node_modules/
+web/dist/
+web/.vite/
+
+# Design reference screenshots
+screenshots/

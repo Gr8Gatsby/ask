@@ -111,6 +111,41 @@ actor MCPClient {
         _ = try await rpc("tools/call", params: ["name": "emit_block", "arguments": args])
     }
 
+    // MARK: - A2A task protocol
+
+    func openTask(_ taskID: String, title: String, status: String = "working") async throws {
+        let args: [String: Any] = ["taskId": taskID, "title": title, "status": status]
+        _ = try await rpc("tools/call", params: ["name": "open_task", "arguments": args])
+    }
+
+    func appendMessage(_ taskID: String, role: String, text: String) async throws {
+        let args: [String: Any] = [
+            "taskId": taskID,
+            "role":   role,
+            "parts":  [["type": "text", "text": text]] as [[String: Any]]
+        ]
+        _ = try await rpc("tools/call", params: ["name": "append_message", "arguments": args])
+    }
+
+    func putArtifact(
+        _ taskID: String,
+        artifactID: String,
+        filename: String,
+        mimeType: String,
+        description: String,
+        filePath: String
+    ) async throws {
+        let args: [String: Any] = [
+            "taskId":      taskID,
+            "artifactId":  artifactID,
+            "filename":    filename,
+            "mimeType":    mimeType,
+            "description": description,
+            "filePath":    filePath
+        ]
+        _ = try await rpc("tools/call", params: ["name": "put_artifact", "arguments": args])
+    }
+
     func clearBlock(_ blockID: String) async {
         _ = try? await rpc(
             "tools/call",

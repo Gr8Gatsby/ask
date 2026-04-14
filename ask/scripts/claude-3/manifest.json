@@ -1,0 +1,34 @@
+{
+  "id": "claude-3",
+  "name": "Claude 3",
+  "version": "0.2.5",
+  "setup": "setup.py",
+  "description": "Feed-first Claude Code session supervisor — routes permissions and session history to iPhone",
+  "entry": "main.py",
+  "icon": "sparkles",
+  "icon_file": "icon.svg",
+  "tools": [
+    {
+      "name": "start_session",
+      "description": "Launch a new Claude Code session in a repository, or show the repo picker when no path is given.",
+      "params": [
+        { "name": "repo_path", "type": "string", "required": false }
+      ]
+    },
+    {
+      "name": "reply",
+      "description": "Send a message to a live Claude Code session.",
+      "params": [
+        { "name": "message", "type": "string", "required": true },
+        { "name": "session_id", "type": "string", "required": true }
+      ]
+    },
+    {
+      "name": "stop_session",
+      "description": "Interrupt a live Claude Code session.",
+      "params": [
+        { "name": "session_id", "type": "string", "required": true }
+      ]
+    }
+  ]
+}

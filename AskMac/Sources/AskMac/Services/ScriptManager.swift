@@ -167,6 +167,17 @@ final class ScriptManager: @unchecked Sendable {
     /// Live blocks currently emitted by each script, keyed by scriptID → blockID.
     private(set) var activeBlocks: [String: [String: LiveBlock]] = [:]
 
+    /// Exposed for LocalHTTPServer to embed in block JSON.
+    var machineIDPublic: String { machineID }
+
+    /// Reverse-lookup: given a blockID, return the scriptID that owns it.
+    func scriptID(forBlockID blockID: String) -> String? {
+        activeBlocks.first(where: { $0.value[blockID] != nil })?.key
+    }
+
+    /// Set by AskMacApp after startup; broadcasts block changes to the local dev UI.
+    var localHTTPServer: LocalHTTPServer?
+
     // Internal — not exposed to UI
     private var connections: [String: MCPConnection] = [:]
     private var systemConnections: [String: SystemScriptConnection] = [:]
@@ -320,6 +331,7 @@ final class ScriptManager: @unchecked Sendable {
             guard isEnabled else {
                 upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon,
                              iconImage: iconImage, status: .stopped, isEnabled: false)
+                publishScript(manifest, status: "disabled")
                 continue
             }
 
@@ -336,6 +348,8 @@ final class ScriptManager: @unchecked Sendable {
                         self?.launchFeedRunWithDepCheck(manifest: m, scriptDir: d)
                     }
                 }
+                // Publish idle state with next scheduled run time before launching
+                publishScript(manifest, status: "idle", nextRunAt: computeNextRun(for: manifest))
                 // Trigger an immediate run
                 launchFeedRunWithDepCheck(manifest: manifest, scriptDir: dir)
             } else {
@@ -345,6 +359,7 @@ final class ScriptManager: @unchecked Sendable {
                     connections.removeValue(forKey: manifest.id)
                     activeBlocks.removeValue(forKey: manifest.id)
                 }
+                publishScript(manifest, status: "running")
                 launchWithDepCheck(manifest: manifest, scriptDir: dir)
             }
             print("[ScriptManager] \(isNew ? "Loaded" : "Refreshed") script: \(manifest.id)")
@@ -370,6 +385,7 @@ final class ScriptManager: @unchecked Sendable {
         restartDelays.removeValue(forKey: id)
         activeBlocks.removeValue(forKey: id)
         feedScheduler.cancel(scriptID: id)
+        if let m = manifests[id]?.manifest { publishScript(m, status: "disabled") }
         Task {
             let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: id)
             try? await blockService.clearAllBlocks()
@@ -403,10 +419,11 @@ final class ScriptManager: @unchecked Sendable {
         // Remove from disabled-scripts list (cleanup, the script is gone)
         settings.setScriptEnabled(id, enabled: true)
 
-        // Clear CloudKit blocks
+        // Clear CloudKit blocks and remove script registry record
         Task {
             let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: id)
             try? await blockService.clearAllBlocks()
+            await cloudKit.deleteScript(machineID: machineID, scriptID: id)
         }
 
         // Capture directory before removing from cache
@@ -458,7 +475,21 @@ final class ScriptManager: @unchecked Sendable {
     /// Deliver a user response to a block directly from the Mac UI.
     func respondToBlock(scriptID: String, blockID: String, value: String) {
         connections[scriptID]?.deliverResponse(blockID: blockID, value: value)
-        activeBlocks[scriptID]?.removeValue(forKey: blockID)
+        if activeBlocks[scriptID]?[blockID]?.blockType != "agent_session" {
+            activeBlocks[scriptID]?.removeValue(forKey: blockID)
+        }
+        if MacUITestingSupport.isUITesting {
+            MacUITestingSupport.markResponded(blockID)
+        }
+    }
+
+    // MARK: - UI Testing
+
+    /// Injects mock scripts and blocks for XCUITest runs.
+    /// Call before any service is started (i.e. from AskMacApp.init when --uitesting).
+    func loadMockScenario(_ scenario: String) {
+        scripts = MacUITestingSupport.scripts(for: scenario)
+        activeBlocks = MacUITestingSupport.activeBlocks(for: scenario)
     }
 
     func enableScript(id: String) {
@@ -492,6 +523,49 @@ final class ScriptManager: @unchecked Sendable {
         } else {
             launchWithDepCheck(manifest: cached.manifest, scriptDir: cached.dir)
         }
+    }
+
+    // MARK: - AskScript registry (CloudKit)
+
+    /// Publishes the current state of a script to CloudKit so iOS can enumerate and monitor it.
+    private func publishScript(_ manifest: ScriptManifest, status: String,
+                               lastRunAt: Date? = nil, nextRunAt: Date? = nil) {
+        let scriptType = manifest.isSystem ? "system" : (manifest.isFeed ? "feed" : "tile")
+        let record = AskScriptRecord(
+            machineID:  machineID,
+            scriptID:   manifest.id,
+            scriptName: manifest.name,
+            scriptType: scriptType,
+            scriptIcon: manifest.icon,
+            version:    manifest.version,
+            status:     status,
+            lastRunAt:  lastRunAt,
+            nextRunAt:  nextRunAt,
+            updatedAt:  Date()
+        )
+        Task { try? await cloudKit.upsertScript(record) }
+    }
+
+    /// Computes the next scheduled run time for a feed script from its cron expression.
+    private func computeNextRun(for manifest: ScriptManifest) -> Date? {
+        let cronExpr = settings.feedScheduleOverride(for: manifest.id)
+            ?? manifest.schedule
+            ?? "0 * * * *"
+        return CronExpression.nextFireDate(from: cronExpr)
+    }
+
+    /// Manually triggers a feed script run. Called when iOS sends an AskInvokeRequest.
+    func invokeScript(id: String) {
+        guard let cached = manifests[id] else {
+            print("[ScriptManager] invokeScript: \(id) not found in manifests")
+            return
+        }
+        guard cached.manifest.isFeed else {
+            print("[ScriptManager] invokeScript: \(id) is not a feed script, ignoring")
+            return
+        }
+        print("[ScriptManager] invokeScript: launching feed run for \(id)")
+        launchFeedRunWithDepCheck(manifest: cached.manifest, scriptDir: cached.dir)
     }
 
     // MARK: - Install lock
@@ -632,7 +706,14 @@ final class ScriptManager: @unchecked Sendable {
         let iconData = iconImage.flatMap { ScriptManager.iconPNGBase64($0) }
         let svgString = manifests[manifest.id]?.svgString
         let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData, scriptIconSVG: svgString, scriptType: "tile")
-        let conn = MCPConnection(scriptID: manifest.id, entryURL: entryURL, blockService: blockService, terminalMonitor: terminalMonitor)
+        let taskService = TaskService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData)
+        taskService.onTaskUpserted = { [weak self] task in
+            Task { @MainActor [weak self] in self?.localHTTPServer?.notifyTaskUpserted(task) }
+        }
+        taskService.onMessageAppended = { [weak self] msg in
+            Task { @MainActor [weak self] in self?.localHTTPServer?.notifyMessageAppended(msg) }
+        }
+        let conn = MCPConnection(scriptID: manifest.id, entryURL: entryURL, blockService: blockService, terminalMonitor: terminalMonitor, taskService: taskService)
 
         // Expose system script tools in tools/list so scripts can discover them.
         conn.systemTools = manifests.values
@@ -691,6 +772,7 @@ final class ScriptManager: @unchecked Sendable {
         conn.onBlockEmitted = { [weak self] block in
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                let isNew = self.activeBlocks[manifest.id]?[block.id] == nil
                 self.activeBlocks[manifest.id, default: [:]][block.id] = block
                 if let idx = self.scripts.firstIndex(where: { $0.id == manifest.id }) {
                     self.scripts[idx].lastEmitTime = Date()
@@ -705,11 +787,19 @@ final class ScriptManager: @unchecked Sendable {
                     options: options,
                     payloadJSON: block.payloadJSON
                 )
+                let svg = self.scripts.first(where: { $0.id == manifest.id })?.svgString
+                let sType = self.scripts.first(where: { $0.id == manifest.id })?.scriptType ?? "tile"
+                if isNew {
+                    self.localHTTPServer?.notifyBlockAdded(block: block, scriptID: manifest.id, scriptName: manifest.name, scriptIconSVG: svg, scriptType: sType, machineID: self.machineID)
+                } else {
+                    self.localHTTPServer?.notifyBlockUpdated(block: block, scriptID: manifest.id, scriptName: manifest.name, scriptIconSVG: svg, scriptType: sType, machineID: self.machineID)
+                }
             }
         }
         conn.onBlockCleared = { [weak self] blockID in
             Task { @MainActor [weak self] in
                 self?.activeBlocks[manifest.id]?.removeValue(forKey: blockID)
+                self?.localHTTPServer?.notifyBlockCleared(blockID: blockID)
             }
         }
 
@@ -758,7 +848,14 @@ final class ScriptManager: @unchecked Sendable {
         let iconData  = iconImage.flatMap { ScriptManager.iconPNGBase64($0) }
         let svgString = manifests[manifest.id]?.svgString
         let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData, scriptIconSVG: svgString, scriptType: "feed")
-        let conn = MCPConnection(scriptID: manifest.id, entryURL: entryURL, blockService: blockService, terminalMonitor: terminalMonitor)
+        let taskService = TaskService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData)
+        taskService.onTaskUpserted = { [weak self] task in
+            Task { @MainActor [weak self] in self?.localHTTPServer?.notifyTaskUpserted(task) }
+        }
+        taskService.onMessageAppended = { [weak self] msg in
+            Task { @MainActor [weak self] in self?.localHTTPServer?.notifyMessageAppended(msg) }
+        }
+        let conn = MCPConnection(scriptID: manifest.id, entryURL: entryURL, blockService: blockService, terminalMonitor: terminalMonitor, taskService: taskService)
 
         conn.onTerminate = { [weak self, weak conn] in
             DispatchQueue.main.async {
@@ -779,6 +876,7 @@ final class ScriptManager: @unchecked Sendable {
         conn.onBlockEmitted = { [weak self] block in
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                let isNew = self.activeBlocks[manifest.id]?[block.id] == nil
                 self.activeBlocks[manifest.id, default: [:]][block.id] = block
                 if let idx = self.scripts.firstIndex(where: { $0.id == manifest.id }) {
                     self.scripts[idx].lastEmitTime = Date()
@@ -792,16 +890,25 @@ final class ScriptManager: @unchecked Sendable {
                     options: options,
                     payloadJSON: block.payloadJSON
                 )
+                let svg = self.scripts.first(where: { $0.id == manifest.id })?.svgString
+                let sType = self.scripts.first(where: { $0.id == manifest.id })?.scriptType ?? "tile"
+                if isNew {
+                    self.localHTTPServer?.notifyBlockAdded(block: block, scriptID: manifest.id, scriptName: manifest.name, scriptIconSVG: svg, scriptType: sType, machineID: self.machineID)
+                } else {
+                    self.localHTTPServer?.notifyBlockUpdated(block: block, scriptID: manifest.id, scriptName: manifest.name, scriptIconSVG: svg, scriptType: sType, machineID: self.machineID)
+                }
             }
         }
         conn.onBlockCleared = { [weak self] blockID in
             Task { @MainActor [weak self] in
                 self?.activeBlocks[manifest.id]?.removeValue(forKey: blockID)
+                self?.localHTTPServer?.notifyBlockCleared(blockID: blockID)
             }
         }
 
         connections[manifest.id] = conn
         upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .running, isEnabled: true)
+        publishScript(manifest, status: "running")
         conn.start()
 
         // Feed execution timeout: kill the run if it exceeds the configured limit.
@@ -838,10 +945,16 @@ final class ScriptManager: @unchecked Sendable {
         if exitCode == 0 {
             print("[ScriptManager] \(manifest.id): feed run completed cleanly")
             upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: manifests[manifest.id]?.icon, status: .stopped, isEnabled: true)
+            if let m = manifests[manifest.id]?.manifest {
+                publishScript(m, status: "idle", lastRunAt: Date(), nextRunAt: computeNextRun(for: m))
+            }
         } else {
             let reason = bySignal ? "signal \(exitCode)" : "exit \(exitCode)"
             print("[ScriptManager] \(manifest.id): feed run failed (\(reason)) — last stderr: \(stderr)")
             upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: manifests[manifest.id]?.icon, status: .crashed, isEnabled: true)
+            if let m = manifests[manifest.id]?.manifest {
+                publishScript(m, status: "crashed", lastRunAt: Date())
+            }
             let feedIconData  = manifests[manifest.id]?.icon.flatMap { ScriptManager.iconPNGBase64($0) }
             let feedSvgString = manifests[manifest.id]?.svgString
             Task {
@@ -868,6 +981,7 @@ final class ScriptManager: @unchecked Sendable {
 
         let iconImage = manifests[manifest.id]?.icon
         upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .crashed, isEnabled: true)
+        publishScript(manifest, status: "crashed")
         connections.removeValue(forKey: manifest.id)
         activeBlocks.removeValue(forKey: manifest.id)
 

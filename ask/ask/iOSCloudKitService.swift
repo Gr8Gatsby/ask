@@ -18,6 +18,7 @@ final class iOSCloudKitService {
     // MARK: - Account
 
     func checkAccountStatus() async {
+        if UITestingSupport.isUITesting { accountStatus = .available; return }
         do {
             accountStatus = try await container.accountStatus()
         } catch {
@@ -28,6 +29,7 @@ final class iOSCloudKitService {
     // MARK: - Machines
 
     func fetchMachines() async throws -> [AskMachine] {
+        if UITestingSupport.isUITesting { return UITestingSupport.machines }
         let query = CKQuery(
             recordType: CKSchema.RecordType.machine,
             predicate: NSPredicate(value: true)
@@ -139,58 +141,6 @@ final class iOSCloudKitService {
         }.sorted { $0.sequence < $1.sequence }
     }
 
-    // MARK: - Events
-
-    /// Fetches pending AskEvent records for a machine, newest first.
-    /// Stale notification-only events (no options, older than 1 hour) are deleted silently.
-    func fetchPendingEvents(machineID: String) async throws -> [AskEvent] {
-        let predicate = NSPredicate(format: "%K == %@", CKSchema.Event.machineID, machineID)
-        let query = CKQuery(recordType: CKSchema.RecordType.event, predicate: predicate)
-        let (results, _) = try await database.records(matching: query, resultsLimit: 50)
-
-        var events: [AskEvent] = []
-        var toDelete: [CKRecord.ID] = []
-        let notificationCutoff = Date().addingTimeInterval(-3600)  // 1 hr for notification-only
-        let hookCutoff = Date().addingTimeInterval(-360)            // 6 min for permission requests (hook timeout is 5 min)
-
-        for (recordID, result) in results {
-            guard let record = try? result.get() else { continue }
-            guard let event = AskEvent(record: record) else {
-                toDelete.append(recordID)
-                continue
-            }
-            if !event.requiresResponse && event.timestamp < notificationCutoff {
-                toDelete.append(recordID)
-            } else if event.requiresResponse && event.timestamp < hookCutoff {
-                // Hook already timed out — response is impossible; clean up
-                toDelete.append(recordID)
-            } else {
-                events.append(event)
-            }
-        }
-
-        if !toDelete.isEmpty {
-            _ = try? await database.modifyRecords(saving: [], deleting: toDelete, savePolicy: .allKeys, atomically: false)
-        }
-
-        return events.sorted { $0.timestamp > $1.timestamp }
-    }
-
-    /// Writes an AskResponse to CloudKit so the Mac can pick it up.
-    func saveResponse(eventID: String, machineID: String, choice: String) async throws {
-        let record = CKRecord(recordType: CKSchema.RecordType.response)
-        record[CKSchema.Response.eventID] = eventID
-        record[CKSchema.Response.machineID] = machineID
-        record[CKSchema.Response.choice] = choice
-        record[CKSchema.Response.timestamp] = Date()
-        _ = try await database.save(record)
-    }
-
-    /// Deletes an AskEvent record from CloudKit.
-    func deleteEvent(_ event: AskEvent) async throws {
-        try await database.deleteRecord(withID: event.ckRecordID)
-    }
-
     // MARK: - Messages
 
     /// Sends a message from the iPhone to the Mac.
@@ -226,105 +176,14 @@ final class iOSCloudKitService {
         _ = try? await database.deleteRecord(withID: CKRecord.ID(recordName: messageID))
     }
 
-    // MARK: - Sessions
-
-    /// Fetches all sessions for a machine, most recently active first.
-    /// Waiting sessions whose hook already timed out are auto-resolved to "active".
-    func fetchSessions(machineID: String) async throws -> [AskSession] {
-        let predicate = NSPredicate(format: "%K == %@", CKSchema.Session.machineID, machineID)
-        let query = CKQuery(recordType: CKSchema.RecordType.session, predicate: predicate)
-        query.sortDescriptors = [NSSortDescriptor(key: CKSchema.Session.lastActivityAt, ascending: false)]
-        let (results, _) = try await database.records(matching: query, resultsLimit: 10)
-
-        let hookCutoff = Date().addingTimeInterval(-360)
-        // Only surface sessions active in the last 24 hours
-        let displayCutoff = Date().addingTimeInterval(-86400)
-        var sessions: [AskSession] = []
-
-        var toDelete: [CKRecord.ID] = []
-
-        for (recordID, result) in results {
-            guard let record = try? result.get(),
-                  let session = AskSession(record: record) else { continue }
-            if session.lastActivityAt < displayCutoff || session.status == .completed {
-                // Older than 24 h or completed — delete from CloudKit to prevent accumulation
-                toDelete.append(recordID)
-                continue
-            }
-            if session.status.isWaiting && session.lastActivityAt < hookCutoff {
-                // Stale waiting session — correct status without touching lastActivityAt
-                await fixSessionStatus(sessionID: session.id, status: "active")
-                sessions.append(AskSession(correcting: session, status: .active))
-            } else {
-                sessions.append(session)
-            }
-        }
-
-        if !toDelete.isEmpty {
-            _ = try? await database.modifyRecords(saving: [], deleting: toDelete)
-        }
-
-        return sessions
-    }
-
-    /// Updates session status AND bumps lastActivityAt (use after user interaction).
-    func updateSessionStatus(sessionID: String, status: String) async {
-        let recordID = CKRecord.ID(recordName: sessionID)
-        guard let record = try? await database.record(for: recordID) else { return }
-        record[CKSchema.Session.status] = status
-        record[CKSchema.Session.lastActivityAt] = Date()
-        _ = try? await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys)
-    }
-
-    /// Deletes a session record from CloudKit.
-    func deleteSession(_ session: AskSession) async throws {
-        let recordID = CKRecord.ID(recordName: session.id)
-        _ = try await database.modifyRecords(saving: [], deleting: [recordID])
-    }
-
-    /// Corrects a session's status without changing lastActivityAt (used for stale-session cleanup).
-    private func fixSessionStatus(sessionID: String, status: String) async {
-        let recordID = CKRecord.ID(recordName: sessionID)
-        guard let record = try? await database.record(for: recordID) else { return }
-        record[CKSchema.Session.status] = status
-        _ = try? await database.modifyRecords(saving: [record], deleting: [], savePolicy: .allKeys)
-    }
-
-    /// Fetches pending events for a specific session, cleaning up stale ones.
-    func fetchEvents(sessionID: String, machineID: String) async throws -> [AskEvent] {
-        let predicate = NSPredicate(format: "%K == %@ AND %K == %@",
-                                    CKSchema.Event.sessionID, sessionID,
-                                    CKSchema.Event.machineID, machineID)
-        let query = CKQuery(recordType: CKSchema.RecordType.event, predicate: predicate)
-        let (results, _) = try await database.records(matching: query, resultsLimit: 20)
-
-        let hookCutoff = Date().addingTimeInterval(-360)
-        var events: [AskEvent] = []
-        var toDelete: [CKRecord.ID] = []
-
-        for (recordID, result) in results {
-            guard let record = try? result.get(),
-                  let event = AskEvent(record: record) else {
-                toDelete.append(recordID); continue
-            }
-            if event.requiresResponse && event.timestamp < hookCutoff {
-                toDelete.append(recordID)
-            } else {
-                events.append(event)
-            }
-        }
-
-        if !toDelete.isEmpty {
-            _ = try? await database.modifyRecords(saving: [], deleting: toDelete, savePolicy: .allKeys, atomically: false)
-        }
-
-        return events
-    }
-
     // MARK: - RKBlocks
 
     /// Fetches all active RKBlock records for a machine, sorted by type priority then createdAt.
     func fetchBlocks(machineID: String) async throws -> [RKBlock] {
+        if UITestingSupport.isUITesting {
+            return UITestingSupport.blocks(for: UITestingSupport.scenario ?? "empty")
+                .filter { $0.machineID == machineID || machineID.isEmpty }
+        }
         let predicate = NSPredicate(format: "%K == %@", CKSchema.RKBlock.machineID, machineID)
         let query = CKQuery(recordType: CKSchema.RecordType.rkBlock, predicate: predicate)
         query.sortDescriptors = [NSSortDescriptor(key: CKSchema.RKBlock.createdAt, ascending: false)]
@@ -341,11 +200,6 @@ final class iOSCloudKitService {
             blocks.append(block)
         }
 
-        let feedItems = blocks.filter { $0.blockType == .feedItem }
-        if !feedItems.isEmpty {
-            FeedStore.shared.upsert(feedItems)
-        }
-
         return blocks.sorted {
             // Confirmation and prompt blocks (require response) sort before informational ones
             if $0.requiresResponse != $1.requiresResponse { return $0.requiresResponse }
@@ -355,6 +209,7 @@ final class iOSCloudKitService {
 
     /// Posts an RKResponse so the Mac daemon can route it back to the script.
     func postResponse(blockID: String, machineID: String, scriptID: String, value: String) async throws {
+        if UITestingSupport.isUITesting { UITestingSupport.markResponded(blockID); return }
         let record = CKRecord(recordType: CKSchema.RecordType.rkResponse)
         record[CKSchema.RKResponse.blockID] = blockID
         record[CKSchema.RKResponse.machineID] = machineID
@@ -362,6 +217,102 @@ final class iOSCloudKitService {
         record[CKSchema.RKResponse.value] = value
         record[CKSchema.RKResponse.timestamp] = Date()
         _ = try await database.save(record)
+    }
+
+    // MARK: - Task history (A2A protocol)
+
+    /// Fetches all AskTask records for a machine, most recently active first.
+    func fetchTasks(machineID: String) async throws -> [TaskRecord] {
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.AskTask.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.askTask, predicate: predicate)
+        query.sortDescriptors = [NSSortDescriptor(key: CKSchema.AskTask.lastActivityAt, ascending: false)]
+        let (results, _) = try await database.records(matching: query, resultsLimit: 100)
+        return results.compactMap { _, result in
+            guard let record = try? result.get() else { return nil }
+            return TaskRecord(ckRecord: record)
+        }
+    }
+
+    /// Deletes an AskTask record plus all of its messages and artifacts from CloudKit.
+    func deleteTask(taskID: String, machineID: String) async {
+        // Delete the task record itself (best-effort)
+        _ = try? await database.deleteRecord(withID: CKRecord.ID(recordName: taskID))
+
+        // Batch-delete all messages for this task (filter in-memory since taskID may not be indexed)
+        let msgPredicate = NSPredicate(format: "%K == %@", CKSchema.AskTaskMessage.machineID, machineID)
+        let msgQuery = CKQuery(recordType: CKSchema.RecordType.askTaskMessage, predicate: msgPredicate)
+        if let (results, _) = try? await database.records(matching: msgQuery, resultsLimit: 500) {
+            let ids = results.compactMap { _, r -> CKRecord.ID? in
+                guard let record = try? r.get(),
+                      record[CKSchema.AskTaskMessage.taskID] as? String == taskID
+                else { return nil }
+                return record.recordID
+            }
+            if !ids.isEmpty {
+                _ = try? await database.modifyRecords(saving: [], deleting: ids, savePolicy: .allKeys, atomically: false)
+            }
+        }
+
+        // Batch-delete all artifacts for this task
+        let artPredicate = NSPredicate(format: "%K == %@", CKSchema.AskArtifact.machineID, machineID)
+        let artQuery = CKQuery(recordType: CKSchema.RecordType.askArtifact, predicate: artPredicate)
+        if let (results, _) = try? await database.records(matching: artQuery, resultsLimit: 200) {
+            let ids = results.compactMap { _, r -> CKRecord.ID? in
+                guard let record = try? r.get(),
+                      record[CKSchema.AskArtifact.taskID] as? String == taskID
+                else { return nil }
+                return record.recordID
+            }
+            if !ids.isEmpty {
+                _ = try? await database.modifyRecords(saving: [], deleting: ids, savePolicy: .allKeys, atomically: false)
+            }
+        }
+    }
+
+    /// Fetches all AskTaskMessage records for a task, sorted by sequence number.
+    func fetchMessages(taskID: String, machineID: String) async throws -> [TaskMessage] {
+        // Query by machineID (guaranteed queryable) and filter taskID in memory
+        // to avoid compound-predicate failures if taskID isn't indexed.
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.AskTaskMessage.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.askTaskMessage, predicate: predicate)
+        let (results, _) = try await database.records(matching: query, resultsLimit: 500)
+        return results.compactMap { _, result in
+            guard let record = try? result.get(),
+                  record[CKSchema.AskTaskMessage.taskID] as? String == taskID
+            else { return nil }
+            return TaskMessage(ckRecord: record)
+        }.sorted { $0.sequenceNumber < $1.sequenceNumber }
+    }
+
+    /// Fetches all AskArtifact metadata records for a task (no content download).
+    func fetchArtifacts(taskID: String, machineID: String) async throws -> [ArtifactRecord] {
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.AskArtifact.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.askArtifact, predicate: predicate)
+        let (results, _) = try await database.records(matching: query, resultsLimit: 200)
+        return results.compactMap { _, result in
+            guard let record = try? result.get(),
+                  record[CKSchema.AskArtifact.taskID] as? String == taskID
+            else { return nil }
+            return ArtifactRecord(ckRecord: record)
+        }.sorted { $0.updatedAt < $1.updatedAt }
+    }
+
+    /// Downloads a single artifact's CKAsset content and writes it to the local cache directory.
+    /// Returns the local URL on success.
+    func downloadArtifactContent(recordName: String, destinationURL: URL) async throws -> URL {
+        let recordID = CKRecord.ID(recordName: recordName)
+        let record = try await database.record(for: recordID)
+        guard let asset = record[CKSchema.AskArtifact.content] as? CKAsset,
+              let assetURL = asset.fileURL
+        else { throw iOSCloudKitError.invalidRecord }
+
+        let dir = destinationURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+        try FileManager.default.copyItem(at: assetURL, to: destinationURL)
+        return destinationURL
     }
 
     // MARK: - Device heartbeat
@@ -391,6 +342,7 @@ final class iOSCloudKitService {
 
     /// Returns false if the Mac has disabled this device. Defaults to true (enabled) if record is absent.
     func checkDeviceEnabled(machineID: String) async -> Bool {
+        if UITestingSupport.isUITesting { return true }
         let recordName = "device-\(Self.stableDeviceID)-\(machineID)"
         let recordID = CKRecord.ID(recordName: recordName)
         guard let record = try? await database.record(for: recordID) else { return true }
@@ -398,38 +350,35 @@ final class iOSCloudKitService {
         return enabledInt != 0
     }
 
-    // MARK: - Feed schedules
+    // MARK: - Feed script invoke
 
-    /// Upserts a schedule override for a feed script. The Mac polls these records
-    /// and reschedules the script's cron task accordingly.
-    func saveFeedSchedule(machineID: String, scriptID: String, schedule: String) async throws {
-        let recordName = "feedschedule-\(machineID)-\(scriptID)"
-        let recordID = CKRecord.ID(recordName: recordName)
-        let record: CKRecord
-        if let existing = try? await database.record(for: recordID) {
-            record = existing
-        } else {
-            record = CKRecord(recordType: CKSchema.RecordType.feedSchedule, recordID: recordID)
-            record[CKSchema.FeedSchedule.machineID] = machineID
-            record[CKSchema.FeedSchedule.scriptID]  = scriptID
-        }
-        record[CKSchema.FeedSchedule.schedule]  = schedule
-        record[CKSchema.FeedSchedule.updatedAt] = Date()
+    /// Writes an AskInvokeRequest record so AskMac triggers the given feed script immediately.
+    func writeInvokeRequest(machineID: String, scriptID: String) async throws {
+        let recordName = "invoke-\(machineID)-\(scriptID)-\(UUID().uuidString)"
+        let record = CKRecord(recordType: CKSchema.RecordType.askInvokeRequest,
+                              recordID: CKRecord.ID(recordName: recordName))
+        record[CKSchema.AskInvokeRequest.machineID]   = machineID
+        record[CKSchema.AskInvokeRequest.scriptID]    = scriptID
+        record[CKSchema.AskInvokeRequest.requestedAt] = Date()
         _ = try await database.save(record)
     }
 
-    /// Returns the current schedule override per script for a given machine.
-    func fetchFeedSchedules(machineID: String) async throws -> [(scriptID: String, schedule: String)] {
-        let predicate = NSPredicate(format: "%K == %@", CKSchema.FeedSchedule.machineID, machineID)
-        let query = CKQuery(recordType: CKSchema.RecordType.feedSchedule, predicate: predicate)
-        let (results, _) = try await database.records(matching: query, resultsLimit: 100)
-        return results.compactMap { _, result in
-            guard let record = try? result.get(),
-                  let scriptID = record[CKSchema.FeedSchedule.scriptID] as? String,
-                  let schedule = record[CKSchema.FeedSchedule.schedule] as? String
-            else { return nil }
-            return (scriptID: scriptID, schedule: schedule)
+    /// Fetches all AskScript records for the given machines from CloudKit.
+    func fetchScripts(machines: [AskMachine]) async -> [AskScript] {
+        var result: [AskScript] = []
+        for machine in machines {
+            let predicate = NSPredicate(format: "%K == %@", CKSchema.AskScript.machineID, machine.id)
+            let query = CKQuery(recordType: CKSchema.RecordType.askScript, predicate: predicate)
+            guard let (records, _) = try? await database.records(matching: query, resultsLimit: 100)
+            else { continue }
+            for (_, r) in records {
+                guard let record = try? r.get(),
+                      let script = AskScript(record: record, machineName: machine.name)
+                else { continue }
+                result.append(script)
+            }
         }
+        return result.sorted { $0.scriptName < $1.scriptName }
     }
 
     private static var stableDeviceID: String {
