@@ -57,3 +57,6 @@ codesign*
 web/node_modules/
 web/dist/
 web/.vite/
+
+# Design reference screenshots
+screenshots/
