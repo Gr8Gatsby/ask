@@ -1848,13 +1848,20 @@ class CodexController:
                 self._schedule_session_tile(sid, delay=0.0)
             return
 
-        # Find which session this block belongs to (match sanitized prefix)
+        # Find which session this block belongs to.
+        # First try an exact match on the session block_id, then fall back to a
+        # sanitized-prefix substring match for menu/slash/toggle blocks.
         session_id = None
         for sid in self._sessions:
-            sid_short = self._sanitize_id(sid[:8])
-            if sid_short in block_id:
+            if block_id == self._session_block_id(sid):
                 session_id = sid
                 break
+        if not session_id:
+            for sid in self._sessions:
+                sid_short = self._sanitize_id(sid[:8])
+                if sid_short in block_id:
+                    session_id = sid
+                    break
         if not session_id:
             return
 
@@ -1895,16 +1902,6 @@ class CodexController:
                 info['is_headless'] = False
                 self._schedule_session_tile(session_id)
             return
-        elif block_id == self._session_block_id(session_id):
-            if value:
-                ok = await self._send_session_text(session_id, value)
-                if ok and session_id in self._sessions:
-                    self._sessions[session_id]['is_working'] = True
-                    self._sessions[session_id]['current_prompt'] = value[:200]
-                    self._sessions[session_id]['last_seen'] = datetime.datetime.now().timestamp()
-                    _save_sessions(self._sessions)
-                    self._schedule_session_tile(session_id)
-            return
         elif value == '__view_log__':
             info = self._sessions.get(session_id, {})
             tmux_target = info.get('tmux_target', '')
@@ -1922,6 +1919,16 @@ class CodexController:
                     'title': info.get('project', session_id[:12]),
                     'pairs': [{'key': 'output', 'value': log_text[-2000:]}],
                 }, ttl=60)
+            return
+        elif block_id == self._session_block_id(session_id):
+            if value:
+                ok = await self._send_session_text(session_id, value)
+                if ok and session_id in self._sessions:
+                    self._sessions[session_id]['is_working'] = True
+                    self._sessions[session_id]['current_prompt'] = value[:200]
+                    self._sessions[session_id]['last_seen'] = datetime.datetime.now().timestamp()
+                    _save_sessions(self._sessions)
+                    self._schedule_session_tile(session_id)
             return
         elif '-menu-' in block_id:
             # Value is "N  option text" — extract the leading number to send to tmux

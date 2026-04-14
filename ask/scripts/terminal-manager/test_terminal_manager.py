@@ -12,13 +12,19 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
-# Add the script directory to path so we can import main
-sys.path.insert(0, os.path.dirname(__file__))
+# Load main.py under a unique module name to avoid sys.modules collision with
+# other scripts that also have a 'main' module when the full test suite runs.
+# Register it in sys.modules as 'terminal_manager_main' so patch() targets work.
+import importlib.util as _ilu
 
-# main.py redirects sys.stdout at module level (UTF-8 wrapper for the daemon protocol).
-# Save and restore so pytest's capture machinery keeps working.
 _saved_stdout = sys.stdout
-import main as tm
+_spec = _ilu.spec_from_file_location(
+    'terminal_manager_main',
+    os.path.join(os.path.dirname(__file__), 'main.py'),
+)
+tm = _ilu.module_from_spec(_spec)
+sys.modules['terminal_manager_main'] = tm
+_spec.loader.exec_module(tm)
 sys.stdout = _saved_stdout
 
 
@@ -260,7 +266,7 @@ class TestToolInjectTty:
         await manager._tool_register_session({
             'session_id': 's1', 'app_id': 'test', 'tty': 'ttys009',
         })
-        with patch('main._terminal_inject_tty', new_callable=AsyncMock, return_value=True) as mock_inject:
+        with patch('terminal_manager_main._terminal_inject_tty', new_callable=AsyncMock, return_value=True) as mock_inject:
             result = await manager._tool_inject_tty({'session_id': 's1', 'text': 'hello'})
         assert result['ok'] is True
         mock_inject.assert_called_once_with('ttys009', 'hello')
@@ -271,7 +277,7 @@ class TestToolInjectTty:
         await manager._tool_register_session({
             'session_id': 's2', 'app_id': 'test', 'tmux_target': 'main:0.0',
         })
-        with patch('main._tmux_send_text', new_callable=AsyncMock, return_value=True) as mock_tmux:
+        with patch('terminal_manager_main._tmux_send_text', new_callable=AsyncMock, return_value=True) as mock_tmux:
             result = await manager._tool_inject_tty({'session_id': 's2', 'text': 'hello'})
         assert result['ok'] is True
         mock_tmux.assert_called_once_with('main:0.0', 'hello')
@@ -288,7 +294,7 @@ class TestToolInjectTty:
         await manager._tool_register_session({
             'session_id': 's3', 'app_id': 'test', 'tty': 'ttys009',
         })
-        with patch('main._terminal_inject_tty', new_callable=AsyncMock, return_value=False):
+        with patch('terminal_manager_main._terminal_inject_tty', new_callable=AsyncMock, return_value=False):
             result = await manager._tool_inject_tty({'session_id': 's3', 'text': 'hi'})
         assert result['ok'] is False
 
@@ -304,7 +310,7 @@ class TestToolFocusWindow:
         await manager._tool_register_session({
             'session_id': 's1', 'app_id': 'test', 'tty': 'ttys009',
         })
-        with patch('main._terminal_focus', new_callable=AsyncMock, return_value=True) as mock_focus:
+        with patch('terminal_manager_main._terminal_focus', new_callable=AsyncMock, return_value=True) as mock_focus:
             result = await manager._tool_focus_window({'session_id': 's1'})
         assert result['ok'] is True
         mock_focus.assert_called_once_with('ttys009')

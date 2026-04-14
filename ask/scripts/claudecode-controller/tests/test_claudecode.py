@@ -27,21 +27,21 @@ import pytest
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(SCRIPT_DIR, 'main.py')
 
-# Make the script importable so we can test static/instance methods directly.
-# main.py reassigns sys.stdout at import time (line 21); we redirect it to /dev/null
-# temporarily using a real file descriptor so fileno() works.
-sys.path.insert(0, SCRIPT_DIR)
-
-import importlib
+# Load main.py under a unique module name to avoid sys.modules collision with
+# other scripts that also have a 'main' module when the full test suite runs.
+import importlib.util as _ilu
 import types as _types
 
 _saved_stdout_fd = os.dup(1)  # save real stdout fd
 _devnull = open(os.devnull, 'w')
 os.dup2(_devnull.fileno(), 1)  # silence fd 1 during import
 try:
-    _mod = importlib.import_module('main')
+    _spec = _ilu.spec_from_file_location('claudecode_controller_main', SCRIPT)
+    _mod = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
     MCPClient = _mod.MCPClient
     SESSION_TTL = _mod.SESSION_TTL
+    SESSION_DISK_TTL = _mod.SESSION_DISK_TTL
 finally:
     os.dup2(_saved_stdout_fd, 1)  # restore real stdout fd
     os.close(_saved_stdout_fd)
@@ -565,14 +565,12 @@ class TestSessionPersistence:
         MCPClient.__init__(client)
         client._initialized = True
         # Monkeypatch SESSIONS_PATH used by _save_sessions / _load_sessions
-        import main as _main_mod
-        self._orig_path = _main_mod.SESSIONS_PATH
-        _main_mod.SESSIONS_PATH = sessions_path
+        self._orig_path = _mod.SESSIONS_PATH
+        _mod.SESSIONS_PATH = sessions_path
         return client
 
     def _restore(self):
-        import main as _main_mod
-        _main_mod.SESSIONS_PATH = self._orig_path
+        _mod.SESSIONS_PATH = self._orig_path
 
     def test_save_load_round_trip(self, tmp_path):
         sessions_path = str(tmp_path / 'sessions.json')
@@ -624,7 +622,7 @@ class TestSessionPersistence:
         sessions_path = str(tmp_path / 'sessions.json')
         client = self._make_client(sessions_path)
         try:
-            old_time = time.time() - SESSION_TTL - 60  # expired
+            old_time = time.time() - SESSION_DISK_TTL - 60  # expired
             fresh_time = time.time()
             data = {
                 'old-session': {
