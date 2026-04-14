@@ -189,12 +189,6 @@ final class CloudKitService {
         }
     }
 
-    /// Deletes a Device record by its record name.
-    func deleteDevice(recordName: String) async throws {
-        let recordID = CKRecord.ID(recordName: recordName)
-        try await database.deleteRecord(withID: recordID)
-    }
-
     /// Sets the enabled flag on a Device record. Does nothing if the record doesn't exist yet.
     func setDeviceEnabled(recordName: String, enabled: Bool) async throws {
         let recordID = CKRecord.ID(recordName: recordName)

@@ -64,9 +64,6 @@ final class FeedScheduler: @unchecked Sendable {
         lock.unlock()
     }
 
-    func reschedule(manifest: ScriptManifest, scriptDir: URL, settings: AppSettings, onFire: @escaping FireCallback) {
-        schedule(manifest: manifest, scriptDir: scriptDir, settings: settings, onFire: onFire)
-    }
 }
 
 // MARK: - Cron parser

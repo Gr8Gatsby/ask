@@ -354,22 +354,6 @@ struct AskTaskRecord: Sendable, Identifiable {
         self.artifactCount  = record[CKSchema.AskTask.artifactCount] as? Int ?? 0
     }
 
-    func toCKRecord() -> CKRecord {
-        let record = CKRecord(recordType: CKSchema.RecordType.askTask,
-                              recordID: CKRecord.ID(recordName: recordName))
-        record[CKSchema.AskTask.taskID]         = taskID
-        record[CKSchema.AskTask.machineID]       = machineID
-        record[CKSchema.AskTask.scriptID]        = scriptID
-        record[CKSchema.AskTask.scriptName]      = scriptName
-        record[CKSchema.AskTask.scriptIcon]      = scriptIcon as CKRecordValueProtocol?
-        record[CKSchema.AskTask.scriptIconData]  = scriptIconData as CKRecordValueProtocol?
-        record[CKSchema.AskTask.title]           = title
-        record[CKSchema.AskTask.status]          = status
-        record[CKSchema.AskTask.lastActivityAt]  = lastActivityAt
-        record[CKSchema.AskTask.messageCount]    = messageCount as CKRecordValue
-        record[CKSchema.AskTask.artifactCount]   = artifactCount as CKRecordValue
-        return record
-    }
 }
 
 // MARK: - AskTaskMessage record
@@ -460,19 +444,4 @@ struct AskScriptRecord: Sendable {
 
     var recordName: String { "script-\(machineID)-\(scriptID)" }
 
-    func toCKRecord() -> CKRecord {
-        let record = CKRecord(recordType: CKSchema.RecordType.askScript,
-                              recordID: CKRecord.ID(recordName: recordName))
-        record[CKSchema.AskScript.machineID]  = machineID
-        record[CKSchema.AskScript.scriptID]   = scriptID
-        record[CKSchema.AskScript.scriptName] = scriptName
-        record[CKSchema.AskScript.scriptType] = scriptType
-        record[CKSchema.AskScript.scriptIcon] = scriptIcon as CKRecordValueProtocol?
-        record[CKSchema.AskScript.version]    = version as CKRecordValueProtocol?
-        record[CKSchema.AskScript.status]     = status
-        record[CKSchema.AskScript.lastRunAt]  = lastRunAt as CKRecordValueProtocol?
-        record[CKSchema.AskScript.nextRunAt]  = nextRunAt as CKRecordValueProtocol?
-        record[CKSchema.AskScript.updatedAt]  = updatedAt
-        return record
-    }
 }
