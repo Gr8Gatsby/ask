@@ -1620,6 +1620,15 @@ class CodexController:
                 value = await self._handle_permission_from_hook(msg)
                 writer.write(json.dumps({'value': value}).encode())
                 await writer.drain()
+            elif t == 'ui_respond':
+                # Response from MockAskMac web UI — treat like iPhone response
+                sid = msg.get('session_id', '')
+                value = msg.get('value', '')
+                if sid in self._sessions:
+                    block_id = self._session_block_id(sid)
+                    await self._handle_block_response(block_id, value)
+                writer.write(json.dumps({'ok': True}).encode())
+                await writer.drain()
         except Exception as e:
             _log(f'Socket client error: {e}', 'WARN')
         finally:

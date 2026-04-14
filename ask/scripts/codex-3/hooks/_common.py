@@ -3,6 +3,7 @@ import json
 import os
 import socket
 import subprocess
+from typing import Optional
 
 
 SOCKET_PATH = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/sockets/codex-3.sock'))
@@ -22,7 +23,7 @@ def get_tmux_target() -> str:
         return ''
 
 
-def get_tty() -> str | None:
+def get_tty() -> Optional[str]:
     try:
         pid = os.getpid()
         for _ in range(8):

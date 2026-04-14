@@ -276,6 +276,8 @@ class Claude3:
 
     async def _emit_tile(self):
         states = [s.state for s in self._registry.sessions.values() if s.state != 'stopped']
+        session_ids = [s.session_id for s in self._registry.sessions.values()]
+        _log(f'_emit_tile: sessions={session_ids} states={states}')
         if not states:
             label, color = 'No sessions', 'blue'
         elif any(s == 'waiting_permission' for s in states):
@@ -285,6 +287,7 @@ class Claude3:
         else:
             n = len(states)
             label, color = f'{n} session{"s" if n != 1 else ""}', 'gray'
+        _log(f'_emit_tile: emitting label={label!r}')
         await self.emit_block(TILE_BLOCK_ID, 'tile', {
             'label': label,
             'status_color': color,
@@ -331,6 +334,7 @@ class Claude3:
                 'body': session.pending_permission.preview,
                 'options': session.pending_permission.options,
             }
+        _log(f'_emit_session_block: {session.session_id} state={session.state} tty={session.tty!r}')
         await self.emit_block(
             self._session_block_id(session.session_id),
             'agent_session',
@@ -534,6 +538,7 @@ class Claude3:
         await self._tm_register(session)
         await self._emit_session_block(session)
         await self._emit_tile()
+        await self._emit_start_session_block()
         _save_registry(self._registry)
         _log(f'session_start raw_id={raw_id[:8]} tty={tty} project={project}')
 
@@ -605,6 +610,7 @@ class Claude3:
         _save_registry(self._registry)
 
     async def _handle_session_stop(self, msg: dict):
+        """Called at end of each assistant turn (not process exit). Transition to idle."""
         raw_id = msg.get('session_id', '')
         if not raw_id:
             return
@@ -617,15 +623,15 @@ class Claude3:
             session.last_message = last_msg
             await self.append_message(session.task_id, 'assistant', last_msg)
             await self._append_artifact_if_large(session, 'Final response', last_msg)
-        await self._append_structured_message(session, 'Session stopped', f'Claude Code exited in `{session.project}`.')
-        session.state = 'stopped'
-        session.stopped_at = datetime.datetime.now().timestamp()
-        await self._set_task_status(session, 'completed')
-        await self.clear_block(self._session_block_id(session.session_id))
-        self._registry.remove(session.session_id)
+        # session_stop fires at end of every turn — keep the session alive so it
+        # remains visible in the UI while Claude is waiting for the next user message.
+        session.state = 'idle'
+        session.current_tool = ''
+        session.preview = ''
         _save_registry(self._registry)
+        await self._emit_session_block(session)
         await self._emit_tile()
-        _log(f'session_stop raw_id={raw_id[:8]}')
+        _log(f'session_stop (turn end, staying idle) raw_id={raw_id[:8]}')
 
     async def _handle_post_compact(self, msg: dict):
         raw_id = msg.get('session_id', '')
@@ -1167,9 +1173,9 @@ class Claude3:
             self._write({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
             self._initialized = True
             _log('MCP initialized')
-            await self._emit_start_session_block()
             await self._refresh_sessions()
             await self._discover_active_processes()
+            await self._emit_start_session_block()
             await stdin_task
         finally:
             if not stdin_task.done():
