@@ -24,6 +24,11 @@ final class TaskService: @unchecked Sendable {
     private let scriptIcon: String?
     private let scriptIconData: String?
 
+    // MARK: - Local callbacks (wired up by ScriptManager → LocalHTTPServer)
+
+    var onTaskUpserted: ((AskTaskRecord) -> Void)?
+    var onMessageAppended: ((AskTaskMessageRecord) -> Void)?
+
     init(
         cloudKit: CloudKitService,
         machineID: String,
@@ -66,6 +71,7 @@ final class TaskService: @unchecked Sendable {
             artifactCount: entry.artifactCount
         )
         try await cloudKit.saveTask(taskRecord)
+        onTaskUpserted?(taskRecord)
         logger.info("open_task — taskID: \(taskID) status: \(status)")
     }
 
@@ -91,6 +97,7 @@ final class TaskService: @unchecked Sendable {
             sequenceNumber: seq
         )
         try await cloudKit.saveTaskMessage(messageRecord)
+        onMessageAppended?(messageRecord)
 
         // Update task lastActivityAt + messageCount
         if let e = entry {
@@ -108,6 +115,7 @@ final class TaskService: @unchecked Sendable {
                 artifactCount: e.artifactCount
             )
             try await cloudKit.saveTask(taskRecord)
+            onTaskUpserted?(taskRecord)
         }
         logger.info("append_message — taskID: \(taskID) role: \(role) seq: \(seq)")
     }

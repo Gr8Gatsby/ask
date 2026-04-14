@@ -206,6 +206,19 @@ final class CloudKitService {
         cachedRecords[block.blockID] = saved
     }
 
+    /// Fetches all non-expired RKBlock records for a machine. Used to seed activeBlocks on startup.
+    func fetchActiveBlocks(machineID: String) async -> [CKRecord] {
+        let predicate = NSPredicate(format: "%K == %@", CKSchema.RKBlock.machineID, machineID)
+        let query = CKQuery(recordType: CKSchema.RecordType.rkBlock, predicate: predicate)
+        guard let (results, _) = try? await database.records(matching: query, resultsLimit: 500) else { return [] }
+        let now = Date()
+        return results.compactMap { _, result -> CKRecord? in
+            guard let record = try? result.get() else { return nil }
+            if let expiresAt = record[CKSchema.RKBlock.expiresAt] as? Date, expiresAt < now { return nil }
+            return record
+        }
+    }
+
     /// Deletes all expired RKBlock records for a machine. Called by HeartbeatService on each cycle.
     func deleteExpiredBlocks(machineID: String) async {
         let predicate = NSPredicate(format: "%K == %@", CKSchema.RKBlock.machineID, machineID)

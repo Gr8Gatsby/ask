@@ -56,6 +56,7 @@
 		F47B199A3425DC6C05AC0480 /* ScriptInstallerRollbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAB5EAD55DFF07DA5ECE953A /* ScriptInstallerRollbackTests.swift */; };
 		F4A65B11697EF409F84B5886 /* ScriptUpdateService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 125B8BABE336DAA2EEDBC261 /* ScriptUpdateService.swift */; };
 		F6670C71B1ACAA3861CBE8B5 /* BlocksBuilderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78ADB28BB3AA3C89FB164C5F /* BlocksBuilderView.swift */; };
+		AA000010LOCALHTTPSERVER00 /* LocalHTTPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000011LOCALHTTPSERVER00 /* LocalHTTPServer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -133,6 +134,7 @@
 		F70F6904917CF419EF961332 /* AskMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskMacApp.swift; sourceTree = "<group>"; };
 		FBB97B6BC873D01755AE3B01 /* VersionComparisonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VersionComparisonTests.swift; sourceTree = "<group>"; };
 		FE84811356D534B4D8E86AB8 /* FeedScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedScheduler.swift; sourceTree = "<group>"; };
+		AA000011LOCALHTTPSERVER00 /* LocalHTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHTTPServer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -194,6 +196,7 @@
 				06C485A3E2C74E3C9F1A0000 /* TaskService.swift */,
 				DDBAEE7F7B9B1616758FEDE2 /* ScriptInstaller.swift */,
 				CA1CC49C770BDCD1EB75B351 /* ScriptManager.swift */,
+				AA000011LOCALHTTPSERVER00 /* LocalHTTPServer.swift */,
 				125B8BABE336DAA2EEDBC261 /* ScriptUpdateService.swift */,
 				F3012DFF4EC7CA529C10E374 /* SystemScriptConnection.swift */,
 			);
@@ -497,6 +500,7 @@
 				CC000010VERSION0COMPARE00 /* VersionComparison.swift in Sources */,
 				DA6EADD0D5A75CED02E56F5C /* ScriptInstaller.swift in Sources */,
 				8B9F7C8632ECBE36C84A369E /* ScriptManager.swift in Sources */,
+				AA000010LOCALHTTPSERVER00 /* LocalHTTPServer.swift in Sources */,
 				F4A65B11697EF409F84B5886 /* ScriptUpdateService.swift in Sources */,
 				A302F5F593A0983FFEE135A9 /* SettingsView.swift in Sources */,
 				C2FCC42025E190C3F0BA4152 /* SystemScriptConnection.swift in Sources */,

@@ -167,6 +167,17 @@ final class ScriptManager: @unchecked Sendable {
     /// Live blocks currently emitted by each script, keyed by scriptID → blockID.
     private(set) var activeBlocks: [String: [String: LiveBlock]] = [:]
 
+    /// Exposed for LocalHTTPServer to embed in block JSON.
+    var machineIDPublic: String { machineID }
+
+    /// Reverse-lookup: given a blockID, return the scriptID that owns it.
+    func scriptID(forBlockID blockID: String) -> String? {
+        activeBlocks.first(where: { $0.value[blockID] != nil })?.key
+    }
+
+    /// Set by AskMacApp after startup; broadcasts block changes to the local dev UI.
+    var localHTTPServer: LocalHTTPServer?
+
     // Internal — not exposed to UI
     private var connections: [String: MCPConnection] = [:]
     private var systemConnections: [String: SystemScriptConnection] = [:]
@@ -696,6 +707,12 @@ final class ScriptManager: @unchecked Sendable {
         let svgString = manifests[manifest.id]?.svgString
         let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData, scriptIconSVG: svgString, scriptType: "tile")
         let taskService = TaskService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData)
+        taskService.onTaskUpserted = { [weak self] task in
+            Task { @MainActor [weak self] in self?.localHTTPServer?.notifyTaskUpserted(task) }
+        }
+        taskService.onMessageAppended = { [weak self] msg in
+            Task { @MainActor [weak self] in self?.localHTTPServer?.notifyMessageAppended(msg) }
+        }
         let conn = MCPConnection(scriptID: manifest.id, entryURL: entryURL, blockService: blockService, terminalMonitor: terminalMonitor, taskService: taskService)
 
         // Expose system script tools in tools/list so scripts can discover them.
@@ -755,6 +772,7 @@ final class ScriptManager: @unchecked Sendable {
         conn.onBlockEmitted = { [weak self] block in
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                let isNew = self.activeBlocks[manifest.id]?[block.id] == nil
                 self.activeBlocks[manifest.id, default: [:]][block.id] = block
                 if let idx = self.scripts.firstIndex(where: { $0.id == manifest.id }) {
                     self.scripts[idx].lastEmitTime = Date()
@@ -769,11 +787,19 @@ final class ScriptManager: @unchecked Sendable {
                     options: options,
                     payloadJSON: block.payloadJSON
                 )
+                let svg = self.scripts.first(where: { $0.id == manifest.id })?.svgString
+                let sType = self.scripts.first(where: { $0.id == manifest.id })?.scriptType ?? "tile"
+                if isNew {
+                    self.localHTTPServer?.notifyBlockAdded(block: block, scriptID: manifest.id, scriptName: manifest.name, scriptIconSVG: svg, scriptType: sType, machineID: self.machineID)
+                } else {
+                    self.localHTTPServer?.notifyBlockUpdated(block: block, scriptID: manifest.id, scriptName: manifest.name, scriptIconSVG: svg, scriptType: sType, machineID: self.machineID)
+                }
             }
         }
         conn.onBlockCleared = { [weak self] blockID in
             Task { @MainActor [weak self] in
                 self?.activeBlocks[manifest.id]?.removeValue(forKey: blockID)
+                self?.localHTTPServer?.notifyBlockCleared(blockID: blockID)
             }
         }
 
@@ -823,6 +849,12 @@ final class ScriptManager: @unchecked Sendable {
         let svgString = manifests[manifest.id]?.svgString
         let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData, scriptIconSVG: svgString, scriptType: "feed")
         let taskService = TaskService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData)
+        taskService.onTaskUpserted = { [weak self] task in
+            Task { @MainActor [weak self] in self?.localHTTPServer?.notifyTaskUpserted(task) }
+        }
+        taskService.onMessageAppended = { [weak self] msg in
+            Task { @MainActor [weak self] in self?.localHTTPServer?.notifyMessageAppended(msg) }
+        }
         let conn = MCPConnection(scriptID: manifest.id, entryURL: entryURL, blockService: blockService, terminalMonitor: terminalMonitor, taskService: taskService)
 
         conn.onTerminate = { [weak self, weak conn] in
@@ -844,6 +876,7 @@ final class ScriptManager: @unchecked Sendable {
         conn.onBlockEmitted = { [weak self] block in
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                let isNew = self.activeBlocks[manifest.id]?[block.id] == nil
                 self.activeBlocks[manifest.id, default: [:]][block.id] = block
                 if let idx = self.scripts.firstIndex(where: { $0.id == manifest.id }) {
                     self.scripts[idx].lastEmitTime = Date()
@@ -857,11 +890,19 @@ final class ScriptManager: @unchecked Sendable {
                     options: options,
                     payloadJSON: block.payloadJSON
                 )
+                let svg = self.scripts.first(where: { $0.id == manifest.id })?.svgString
+                let sType = self.scripts.first(where: { $0.id == manifest.id })?.scriptType ?? "tile"
+                if isNew {
+                    self.localHTTPServer?.notifyBlockAdded(block: block, scriptID: manifest.id, scriptName: manifest.name, scriptIconSVG: svg, scriptType: sType, machineID: self.machineID)
+                } else {
+                    self.localHTTPServer?.notifyBlockUpdated(block: block, scriptID: manifest.id, scriptName: manifest.name, scriptIconSVG: svg, scriptType: sType, machineID: self.machineID)
+                }
             }
         }
         conn.onBlockCleared = { [weak self] blockID in
             Task { @MainActor [weak self] in
                 self?.activeBlocks[manifest.id]?.removeValue(forKey: blockID)
+                self?.localHTTPServer?.notifyBlockCleared(blockID: blockID)
             }
         }
 
