@@ -186,13 +186,19 @@ struct SessionChatView: View {
                 reconnectingBanner
             }
             chatThread
-            if isActive, let pc = livePayload?.pendingConfirmation, let block = liveBlock {
-                pendingConfirmationBar(pc: pc, block: block)
+            if isActive {
+                // Prefer linked confirmation blocks (explicit) — fall back to inline pending_confirmation
+                if !pendingLinkedConfirmations.isEmpty {
+                    ForEach(pendingLinkedConfirmations) { confBlock in
+                        if let cp = confBlock.confirmationPayload {
+                            pendingLinkedConfirmationBar(block: confBlock, cp: cp)
+                        }
+                    }
+                } else if let pc = livePayload?.pendingConfirmation, let block = liveBlock {
+                    pendingConfirmationBar(pc: pc, block: block)
+                }
             }
             Divider()
-            if let msg = livePayload?.lastMessage, !msg.isEmpty {
-                lastMessageBar(msg)
-            }
             composeBar
             if isActive, scriptID == "codex-2", let block = liveBlock {
                 modeToggle(block: block)
@@ -305,42 +311,6 @@ struct SessionChatView: View {
     // MARK: - Last message context bar
 
     @ViewBuilder
-    private func lastMessageBar(_ message: String) -> some View {
-        // Strip leading heading markers (### ...) so the preview reads as body text.
-        let stripped = message
-            .components(separatedBy: "\n")
-            .filter { !$0.isEmpty }
-            .map { line -> String in
-                var s = line
-                while s.hasPrefix("#") { s = String(s.dropFirst()) }
-                return s.trimmingCharacters(in: .whitespaces)
-            }
-            .joined(separator: " ")
-        HStack(spacing: 10) {
-            Rectangle()
-                .fill(livePayload?.brandColorValue ?? .accentColor)
-                .frame(width: 3)
-                .clipShape(RoundedRectangle(cornerRadius: 2))
-            Group {
-                if let attr = try? AttributedString(
-                    markdown: stripped,
-                    options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-                ) {
-                    Text(attr)
-                } else {
-                    Text(stripped)
-                }
-            }
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .lineLimit(3)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Color(.systemGray6))
-    }
-
     // MARK: - Reconnecting banner
 
     private var reconnectingBanner: some View {
@@ -471,20 +441,24 @@ struct SessionChatView: View {
             Text(pc.title)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(pc.options, id: \.self) { option in
-                        Button(option) {
-                            Task { await onRespond(block, option) }
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.orange)
-                        .font(.footnote)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(pc.options, id: \.self) { option in
+                    Button {
+                        Task { await onRespond(block, option) }
+                    } label: {
+                        Text(option)
+                            .font(.footnote)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .buttonStyle(.bordered)
+                    .tint(.orange)
                 }
-                .padding(.horizontal)
             }
+            .padding(.horizontal)
         }
         .padding(.vertical, 10)
         .background(.ultraThinMaterial)
@@ -506,23 +480,27 @@ struct SessionChatView: View {
                 Text(cp.title)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(cp.options, id: \.self) { option in
-                            Button(option) {
-                                Task {
-                                    await onRespond(block, option)
-                                    markLinkedConfirmationResolved(block: block, value: option)
-                                }
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(cp.options, id: \.self) { option in
+                        Button {
+                            Task {
+                                await onRespond(block, option)
+                                markLinkedConfirmationResolved(block: block, value: option)
                             }
-                            .buttonStyle(.bordered)
-                            .tint(.orange)
-                            .font(.footnote)
+                        } label: {
+                            Text(option)
+                                .font(.footnote)
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
+                        .buttonStyle(.bordered)
+                        .tint(.orange)
                     }
-                    .padding(.horizontal)
                 }
+                .padding(.horizontal)
             }
             .padding(.vertical, 10)
             .background(.ultraThinMaterial)

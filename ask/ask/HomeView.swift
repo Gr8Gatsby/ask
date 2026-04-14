@@ -1395,6 +1395,31 @@ struct ScriptDetailView: View {
         }
     }
 
+    @ViewBuilder
+    private func sessionPendingConfirmationRow(pc: RKPendingConfirmation, block: RKBlock) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(pc.title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(pc.options, id: \.self) { option in
+                    Button {
+                        Task { await onRespond(block, option) }
+                    } label: {
+                        Text(option)
+                            .font(.caption)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.orange)
+                }
+            }
+        }
+    }
+
     /// Persists an assistant message into ChatEntry so history is available even when
     /// SessionChatView was not open when the message arrived.
     private func seedAssistantMessageToChatEntry(msg: String, sessionId: String) {
@@ -1459,7 +1484,7 @@ struct ScriptDetailView: View {
                                     )
                                 }
                                 .listRowBackground(
-                                    confCount > 0
+                                    (confCount > 0 || payload.pendingConfirmation != nil)
                                         ? Color.orange.opacity(0.07)
                                         : nil
                                 )
@@ -1470,6 +1495,13 @@ struct ScriptDetailView: View {
                                     })
                                     .listRowBackground(Color.orange.opacity(0.05))
                                     .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 5, trailing: 16))
+                                }
+                                // Inline pending_confirmation from agent_session payload
+                                // (shown when there are no linked .confirmation blocks)
+                                if confs.isEmpty, let pc = payload.pendingConfirmation {
+                                    sessionPendingConfirmationRow(pc: pc, block: block)
+                                        .listRowBackground(Color.orange.opacity(0.05))
+                                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                                 }
                             }
                         }
