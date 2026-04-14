@@ -3,163 +3,79 @@ import net from 'net'
 import fs from 'fs'
 import path from 'path'
 import type { IncomingMessage, ServerResponse } from 'http'
-import { FIXTURE_BREW_BLOCKS, CLAUDE3_NAME, CLAUDE3_ICON, BREW_NAME, BREW_ICON } from './data/blocks.js'
+import { BREW_NAME, BREW_ICON } from './data/blocks.js'
 import { FIXTURE_MACHINES } from './data/machines.js'
 import { FIXTURE_TASKS, FIXTURE_TASK_MESSAGES } from './data/tasks.js'
 import type { Block } from '../src/lib/types.js'
 
-const PORT = 4242
+const PORT = parseInt(process.env.PORT ?? '4243', 10)
 const HOME = process.env.HOME!
-const SESSIONS_PATH = path.join(HOME, '.ask/claude3-sessions.json')
-const SOCKET_PATH = path.join(HOME, '.ask/sockets/claude-3.sock')
-const SESSION_TTL = 86400  // 24 hours
 
-// ---- Live session state from ~/.ask/claude3-sessions.json ----
+// AskMac writes this file whenever activeBlocks changes — it's the ground truth
+// for what would be in CloudKit, so MockAskMac reads it directly.
+const BLOCKS_SNAPSHOT_PATH = path.join(HOME, '.ask/blocks.json')
 
-interface RawSession {
-  session_id: string
-  task_id?: string
-  project: string
-  cwd: string
-  state: string          // 'idle' | 'starting' | 'running_tool' | 'working' | 'stopping' | 'stopped'
-  current_tool: string
-  preview: string
-  last_message: string
-  last_seen: number
-  is_transient: boolean
-  permission_mode: string
-  pending_permission: {
-    request_id: string
-    tool: string
-    preview: string
-    options: string[]
-  } | null
+// Socket paths for sending ui_respond to daemons
+const SOCKETS: Record<string, string> = {
+  'claude-3':  path.join(HOME, '.ask/sockets/claude-3.sock'),
+  'codex-2':   path.join(HOME, '.ask/sockets/codex-2.sock'),
+  'codex-3':   path.join(HOME, '.ask/sockets/codex-3.sock'),
 }
 
-function readSessions(): Record<string, RawSession> {
+// ── Block snapshot reader ─────────────────────────────────────────────────────
+
+function readSnapshotBlocks(): Block[] {
   try {
-    return JSON.parse(fs.readFileSync(SESSIONS_PATH, 'utf-8')) as Record<string, RawSession>
+    const raw = JSON.parse(fs.readFileSync(BLOCKS_SNAPSHOT_PATH, 'utf-8')) as { blocks: Block[] }
+    return raw.blocks ?? []
   } catch {
-    return {}
+    return []
   }
 }
 
-function sessionToBlock(sid: string, s: RawSession): Block | null {
-  const now = Date.now() / 1000
-  if (s.state === 'stopped') return null
-  if (now - s.last_seen > SESSION_TTL) return null
-  if (s.is_transient) return null
+// ── Block state ───────────────────────────────────────────────────────────────
 
-  const isWorking = s.state === 'running_tool' || s.state === 'working' || s.state === 'starting'
-  const pending = s.pending_permission
-    ? {
-        title: `Allow ${s.pending_permission.tool}?`,
-        body: s.pending_permission.preview || undefined,
-        options: s.pending_permission.options,
-      }
-    : undefined
-
-  return {
-    blockID: `claude3-live-${sid}`,
-    machineID: 'mac-live',
-    scriptID: 'claude-3',
-    scriptName: CLAUDE3_NAME,
-    scriptIconSVG: CLAUDE3_ICON,
-    blockType: 'agent_session',
-    scriptType: 'tile',
-    createdAt: new Date(s.last_seen * 1000).toISOString(),
-    requiresResponse: pending ? 1 : 0,
-    showsInInbox: 0,
-    payload: JSON.stringify({
-      session_id: sid,
-      task_id: s.task_id ?? sid,
-      project: s.project,
-      cwd: s.cwd,
-      last_message: s.last_message || undefined,
-      is_working: isWorking,
-      current_tool: isWorking && s.current_tool ? s.current_tool : undefined,
-      current_preview: isWorking && s.preview ? s.preview : undefined,
-      agent_name: 'Claude Code',
-      brand_color: '#74AA9C',
-      placeholder: 'Reply to Claude…',
-      permission_mode: s.permission_mode ?? 'supervised',
-      pending_confirmation: pending,
-    }),
-  }
-}
-
-function buildClaude3Blocks(): Block[] {
-  const sessions = readSessions()
-  const sessionBlocks: Block[] = []
-
-  for (const [sid, s] of Object.entries(sessions)) {
-    const b = sessionToBlock(sid, s)
-    if (b) sessionBlocks.push(b)
-  }
-
-  // Derive tile label from live session state
-  const working = sessionBlocks.filter(b => {
-    try { return (JSON.parse(b.payload) as { is_working?: boolean }).is_working } catch { return false }
-  })
-  const tileLabel = sessionBlocks.length === 0
-    ? 'Idle'
-    : working.length > 0
-    ? `${working.length} session${working.length > 1 ? 's' : ''} working`
-    : `${sessionBlocks.length} session${sessionBlocks.length > 1 ? 's' : ''}`
-
-  const tile: Block = {
-    blockID: 'claude3-tile',
-    machineID: 'mac-live',
-    scriptID: 'claude-3',
-    scriptName: CLAUDE3_NAME,
-    scriptIconSVG: CLAUDE3_ICON,
-    blockType: 'tile',
-    scriptType: 'tile',
-    createdAt: new Date().toISOString(),
-    requiresResponse: 0,
-    showsInInbox: 0,
-    payload: JSON.stringify({
-      label: tileLabel,
-      status_color: working.length > 0 ? 'blue' : sessionBlocks.length > 0 ? 'green' : 'green',
-    }),
-  }
-
-  return [tile, ...sessionBlocks]
-}
-
-// ---- Block state (live claude-3 + fixture brew) ----
-
-let blocks: Block[] = [...buildClaude3Blocks(), ...FIXTURE_BREW_BLOCKS]
+let blocks: Block[] = readSnapshotBlocks()
 let sseClients: ServerResponse[] = []
 let feedSeq = 100
 
-function rebuildClaude3Blocks() {
-  const newLive = buildClaude3Blocks()
-  const brew = blocks.filter(b => b.scriptID !== 'claude-3')
+function rebuildBlocks() {
+  const newBlocks = readSnapshotBlocks()
 
-  // Diff: broadcast updates for changed blocks
-  for (const nb of newLive) {
+  // Diff and broadcast changes
+  for (const nb of newBlocks) {
     const old = blocks.find(b => b.blockID === nb.blockID)
     if (!old) {
       broadcast('block_added', nb)
-    } else if (old.payload !== nb.payload) {
+    } else if (old.payload !== nb.payload || old.requiresResponse !== nb.requiresResponse) {
       broadcast('block_updated', nb)
     }
   }
-  // Broadcast removals
-  const newIDs = new Set(newLive.map(b => b.blockID))
-  for (const ob of blocks.filter(b => b.scriptID === 'claude-3')) {
+  const newIDs = new Set(newBlocks.map(b => b.blockID))
+  for (const ob of blocks) {
     if (!newIDs.has(ob.blockID)) broadcast('block_cleared', { blockID: ob.blockID })
   }
 
-  blocks = [...newLive, ...brew]
-  console.log(`[MockAskMac] sessions refreshed — ${newLive.length - 1} session(s)`)
+  blocks = newBlocks
+  console.log(`[MockAskMac] snapshot refreshed — ${blocks.length} block(s)`)
 }
 
-// Watch ~/.ask/claude3-sessions.json for live updates
-fs.watchFile(SESSIONS_PATH, { interval: 500 }, () => rebuildClaude3Blocks())
+// Watch the snapshot file for live AskMac updates
+if (fs.existsSync(BLOCKS_SNAPSHOT_PATH)) {
+  fs.watchFile(BLOCKS_SNAPSHOT_PATH, { interval: 300 }, () => rebuildBlocks())
+} else {
+  // File doesn't exist yet — poll until AskMac creates it
+  const interval = setInterval(() => {
+    if (fs.existsSync(BLOCKS_SNAPSHOT_PATH)) {
+      clearInterval(interval)
+      fs.watchFile(BLOCKS_SNAPSHOT_PATH, { interval: 300 }, () => rebuildBlocks())
+      rebuildBlocks()
+      console.log(`[MockAskMac] blocks.json appeared, watching for updates`)
+    }
+  }, 2000)
+}
 
-// ---- Respond via daemon Unix socket (for claude-3 blocks) ----
+// ── Unix socket sender ────────────────────────────────────────────────────────
 
 function sendToSocket(socketPath: string, message: object): Promise<void> {
   return new Promise((resolve) => {
@@ -173,20 +89,24 @@ function sendToSocket(socketPath: string, message: object): Promise<void> {
     })
     client.on('end', finish)
     client.on('error', (err) => {
-      console.error(`[MockAskMac] socket error: ${err.message}`)
+      console.error(`[MockAskMac] socket error (${socketPath}): ${err.message}`)
       finish()
     })
     setTimeout(finish, 3000)
   })
 }
 
-async function respondClaude3(sessionID: string, value: string): Promise<void> {
-  console.log(`[MockAskMac] ui_respond session=${sessionID} value="${value}"`)
-  await sendToSocket(SOCKET_PATH, { type: 'ui_respond', session_id: sessionID, value })
-  // Daemon updates sessions file; watcher will pick it up within 500ms
+async function respondDaemon(scriptID: string, sessionID: string, value: string): Promise<void> {
+  const socketPath = SOCKETS[scriptID]
+  if (!socketPath) {
+    console.warn(`[MockAskMac] no socket path for script ${scriptID}`)
+    return
+  }
+  console.log(`[MockAskMac] ui_respond scriptID=${scriptID} session=${sessionID} value="${value}"`)
+  await sendToSocket(socketPath, { type: 'ui_respond', session_id: sessionID, value })
 }
 
-// ---- Brew fixture simulation (unchanged) ----
+// ── Brew fixture simulation (kept for brew-quick-reply testing) ───────────────
 
 function makeBlock(partial: Partial<Block> & Pick<Block, 'blockID' | 'scriptID' | 'scriptName' | 'blockType' | 'payload'>): Block {
   return {
@@ -210,7 +130,6 @@ function upsertBlock(b: Block) {
   }
 }
 
-// Returns true if the caller should clear the block, false if handled in-place
 function simulateBrewResponse(blockID: string, value: string): boolean {
   if (blockID === 'brew-quick-reply') {
     const id = ++feedSeq
@@ -280,7 +199,7 @@ function simulateBrewResponse(blockID: string, value: string): boolean {
   return true
 }
 
-// ---- SSE helpers ----
+// ── SSE helpers ───────────────────────────────────────────────────────────────
 
 function broadcast(eventName: string, data: unknown) {
   const payload = `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`
@@ -303,7 +222,7 @@ function readBody(req: IncomingMessage): Promise<string> {
   })
 }
 
-// ---- HTTP server ----
+// ── HTTP server ───────────────────────────────────────────────────────────────
 
 const server = http.createServer(async (req, res) => {
   setCORS(res)
@@ -338,17 +257,31 @@ const server = http.createServer(async (req, res) => {
     const { value } = JSON.parse(body) as { value: string }
     console.log(`[MockAskMac] respond ${blockID} → "${value}"`)
 
-    // Route to live daemon or brew fixture simulation
-    const liveMatch = blockID.match(/^claude3-live-(.+)$/)
-    if (liveMatch) {
-      await respondClaude3(liveMatch[1], value)
-    } else {
+    // Find the block to determine its scriptID, then route to the right daemon
+    const block = blocks.find(b => b.blockID === blockID)
+    const scriptID = block?.scriptID ?? ''
+
+    if (scriptID in SOCKETS) {
+      // Extract session_id from agent_session payload
+      try {
+        const payload = JSON.parse(block?.payload ?? '{}') as { session_id?: string }
+        const sessionID = payload.session_id ?? blockID
+        await respondDaemon(scriptID, sessionID, value)
+      } catch {
+        await respondDaemon(scriptID, blockID, value)
+      }
+    } else if (blockID.startsWith('brew-')) {
       const shouldClear = simulateBrewResponse(blockID, value)
       if (shouldClear) {
         const prev = blocks.length
         blocks = blocks.filter(b => b.blockID !== blockID)
         if (blocks.length < prev) broadcast('block_cleared', { blockID })
       }
+    } else {
+      // Generic: clear the block
+      const prev = blocks.length
+      blocks = blocks.filter(b => b.blockID !== blockID)
+      if (blocks.length < prev) broadcast('block_cleared', { blockID })
     }
 
     res.writeHead(200, { 'Content-Type': 'application/json' })
@@ -383,7 +316,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`MockAskMac  http://localhost:${PORT}`)
-  console.log(`  Sessions: ${SESSIONS_PATH}`)
-  console.log(`  Socket:   ${SOCKET_PATH}`)
-  rebuildClaude3Blocks()
+  console.log(`  Block snapshot: ${BLOCKS_SNAPSHOT_PATH}`)
+  rebuildBlocks()
 })

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useBlocks } from '../lib/useBlocks'
 import { useTheme } from '../lib/PlatformContext'
+import { useSettings } from '../lib/SettingsContext'
 import { getTaskMessages } from '../lib/api'
 import type { AgentSessionPayload, TaskMessage } from '../lib/types'
 import Markdown from '../components/shared/Markdown'
@@ -116,28 +117,47 @@ function LastMessageBar({ message, color }: { message: string; color: string }) 
 
 function PendingConfirmationBar({
   title,
+  body,
   options,
   onRespond,
   accentColor,
 }: {
   title: string
+  body?: string
   options: string[]
   onRespond: (value: string) => void
   accentColor: string
 }) {
   return (
-    <div className="border-t border-ask-sep/50 bg-ask-orange/5 px-4 pt-3 pb-2" style={{ borderTopColor: `${accentColor}40` }}>
-      <p className="text-xs font-semibold text-ask-text mb-2">{title}</p>
+    <div className="border-t border-ask-sep/50 bg-ask-orange/5 px-4 pt-3 pb-3" style={{ borderTopColor: `${accentColor}40` }}>
+      <p className="text-xs font-semibold text-ask-text mb-1.5">{title}</p>
+      {body && (
+        <p className="text-[13px] font-mono text-ask-text mb-2.5 leading-snug bg-ask-card2 px-2.5 py-1.5 rounded-lg break-all border border-ask-sep/30">
+          {body}
+        </p>
+      )}
       <div className="flex flex-wrap gap-2">
-        {options.map(opt => (
-          <button
-            key={opt}
-            onClick={() => onRespond(opt)}
-            className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-ask-sep bg-ask-card hover:bg-ask-card2 transition-colors text-ask-text"
-          >
-            {opt}
-          </button>
-        ))}
+        {options.map(opt => {
+          const lc = opt.toLowerCase()
+          const isAlways = lc.startsWith('always')
+          const isDeny = lc === 'deny' || lc === 'no' || lc.startsWith('deny')
+          const label = isAlways ? 'Always' : isDeny ? 'Deny' : opt
+          return (
+            <button
+              key={opt}
+              onClick={() => onRespond(opt)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                isDeny
+                  ? 'bg-ask-red/10 text-ask-red border border-ask-red/30'
+                  : isAlways
+                  ? 'bg-ask-orange/10 text-ask-orange border border-ask-orange/30'
+                  : 'bg-ask-blue text-white'
+              }`}
+            >
+              {label}
+            </button>
+          )
+        })}
       </div>
     </div>
   )
@@ -149,6 +169,7 @@ export default function SessionChatScreen() {
   const { scriptID, sessionID } = useParams<{ scriptID: string; sessionID: string }>()
   const navigate = useNavigate()
   const theme = useTheme()
+  const { useBrandColors } = useSettings()
   const { blocks: allBlocks, respond } = useBlocks()
   const [reply, setReply] = useState('')
   const [sending, setSending] = useState(false)
@@ -161,7 +182,7 @@ export default function SessionChatScreen() {
   })
 
   const payload = sessionBlock ? parsePayload<AgentSessionPayload>(sessionBlock.payload) : null
-  const accentColor = payload?.brand_color ?? '#74AA9C'
+  const accentColor = useBrandColors ? (payload?.brand_color ?? '#8E8E93') : '#8E8E93'
 
   // Load chat history from task messages
   useEffect(() => {
@@ -315,6 +336,7 @@ export default function SessionChatScreen() {
       {sessionBlock && payload?.pending_confirmation && (
         <PendingConfirmationBar
           title={payload.pending_confirmation.title}
+          body={payload.pending_confirmation.body}
           options={payload.pending_confirmation.options}
           accentColor={accentColor}
           onRespond={val => handleSend(val)}

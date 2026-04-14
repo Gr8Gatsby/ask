@@ -1,15 +1,50 @@
 import { useLocation, useNavigate } from 'react-router-dom'
-import { House, Newspaper, SquaresFour } from '@phosphor-icons/react'
+import { useState, useEffect, useRef } from 'react'
+import { Newspaper, GearSix, DesktopTower } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
 import { usePlatform, type Platform, type ThemeMode } from '../../lib/PlatformContext'
+import { ThemeProvider } from '@mui/material/styles'
+import CssBaseline from '@mui/material/CssBaseline'
+import { useMuiTheme } from '../../lib/muiTheme'
+
+// Natural phone dimensions (screen + frame padding + side buttons)
+const PHONE_W = 420  // 390 screen + 11*2 frame + 4*2 buttons (approx)
+const PHONE_H = 866  // 844 screen + 11*2 frame
+const MIN_SCALE = 0.35
+
+function usePhoneScale(containerRef: React.RefObject<HTMLDivElement | null>) {
+  const [scale, setScale] = useState(1)
+
+  useEffect(() => {
+    function update() {
+      const el = containerRef.current
+      if (!el) return
+      const availW = el.clientWidth
+      const availH = el.clientHeight
+      const s = Math.max(MIN_SCALE, Math.min(1, availW / PHONE_W, availH / PHONE_H))
+      setScale(s)
+    }
+    update()
+    const ro = new ResizeObserver(update)
+    if (containerRef.current) ro.observe(containerRef.current)
+    return () => ro.disconnect()
+  }, [containerRef])
+
+  return scale
+}
 
 interface Props { children: React.ReactNode }
 
-// Tab definitions
-const TABS: Array<{ key: string; label: string; path: string; iosIcon: Icon; android: string }> = [
-  { key: 'home',    label: 'Home',    path: '/home',    iosIcon: House,        android: 'home' },
-  { key: 'tasks',   label: 'Feed',    path: '/tasks',   iosIcon: Newspaper,    android: 'dynamic_feed' },
-  { key: 'catalog', label: 'Catalog', path: '/catalog', iosIcon: SquaresFour,  android: 'apps' },
+// Tab definitions — iOS uses Home/Feed inline switcher + gear for settings
+const IOS_TABS: Array<{ key: string; label: string; path: string }> = [
+  { key: 'home',  label: 'Home', path: '/home'  },
+  { key: 'tasks', label: 'Feed', path: '/tasks' },
+]
+
+const ANDROID_TABS: Array<{ key: string; label: string; path: string; iosIcon: Icon; android: string }> = [
+  { key: 'home',     label: 'Home',     path: '/home',     iosIcon: DesktopTower, android: 'home' },
+  { key: 'tasks',    label: 'Feed',     path: '/tasks',    iosIcon: Newspaper,    android: 'dynamic_feed' },
+  { key: 'settings', label: 'Settings', path: '/settings', iosIcon: GearSix,      android: 'settings' },
 ]
 
 // ---- Control bar (above the phone) ----
@@ -166,37 +201,77 @@ function AndroidStatusBar() {
   )
 }
 
-// ---- iOS tab bar — UITabBar style ----
+// ---- iOS bottom bar — floating pill matching the real iOS app ----
 
-function IOSTabBar({ tab }: { tab: string }) {
+function IOSTabBar({ tab, isLight }: { tab: string; isLight: boolean }) {
   const navigate = useNavigate()
   return (
-    <div className="flex-shrink-0 border-t border-ask-sep/60 bg-ask-bg/90 backdrop-blur-md">
-      <div className="flex items-stretch">
-        {TABS.map(item => {
-          const active = tab === item.key
-          const IosIcon = item.iosIcon
-          return (
-            <button
-              key={item.key}
-              onClick={() => navigate(item.path)}
-              className={`flex-1 flex flex-col items-center justify-center gap-[3px] pt-2 pb-1 min-h-[49px] transition-colors ${
-                active ? 'text-ask-blue' : 'text-ask-secondary'
-              }`}
-            >
-              <IosIcon
-                size={24}
-                weight={active ? 'fill' : 'regular'}
-                className={active ? 'text-ask-blue' : 'text-ask-secondary'}
-              />
-              <span className="text-[10px] font-normal leading-none">{item.label}</span>
-            </button>
-          )
-        })}
+    <div className="flex-shrink-0 px-5 pt-1 pb-4">
+      {/* Floating pill */}
+      <div
+        className="flex items-center px-[18px] py-[10px] gap-3"
+        style={{
+          background: isLight ? 'rgba(255,255,255,0.95)' : 'rgba(28,28,30,0.95)',
+          backdropFilter: 'blur(20px)',
+          WebkitBackdropFilter: 'blur(20px)',
+          borderRadius: 28,
+          border: isLight ? '1px solid rgba(0,0,0,0.10)' : '1px solid rgba(255,255,255,0.10)',
+          boxShadow: isLight
+            ? '0 6px 24px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06)'
+            : '0 6px 24px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.3)',
+        }}
+      >
+        {/* Left: machine icon */}
+        <button
+          className="flex items-center justify-center"
+          style={{ color: isLight ? 'rgba(0,0,0,0.85)' : 'rgba(255,255,255,0.85)' }}
+        >
+          <DesktopTower size={20} weight="regular" />
+        </button>
+
+        {/* Center: Home / Feed tab switcher */}
+        <div className="flex items-center gap-0.5 flex-1 justify-start">
+          {IOS_TABS.map(item => {
+            const active = tab === item.key
+            return (
+              <button
+                key={item.key}
+                onClick={() => navigate(item.path)}
+                className="flex items-center px-3 py-[5px] rounded-full transition-all"
+                style={{
+                  background: active
+                    ? isLight ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.12)'
+                    : 'transparent',
+                  color: active
+                    ? isLight ? 'rgba(0,0,0,0.9)' : 'rgba(255,255,255,0.9)'
+                    : isLight ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.45)',
+                  fontSize: 15,
+                  fontWeight: active ? 600 : 400,
+                  lineHeight: 1,
+                }}
+              >
+                {item.label}
+              </button>
+            )
+          })}
+        </div>
+
+        {/* Right: settings gear */}
+        <button
+          onClick={() => navigate('/settings')}
+          className="flex items-center justify-center"
+          style={{ color: isLight ? 'rgba(0,0,0,0.85)' : 'rgba(255,255,255,0.85)' }}
+        >
+          <GearSix size={20} weight="regular" />
+        </button>
       </div>
+
       {/* iOS home indicator */}
-      <div className="flex justify-center pb-2">
-        <div className="w-[134px] h-[5px] rounded-full bg-ask-text/30" />
+      <div className="flex justify-center mt-2">
+        <div
+          className="w-[134px] h-[5px] rounded-full"
+          style={{ background: isLight ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.30)' }}
+        />
       </div>
     </div>
   )
@@ -209,7 +284,7 @@ function AndroidTabBar({ tab }: { tab: string }) {
   return (
     <div className="flex-shrink-0 bg-ask-card" style={{ boxShadow: '0 -1px 0 rgb(73 69 79 / 0.4)' }}>
       <div className="flex items-stretch">
-        {TABS.map(item => {
+        {ANDROID_TABS.map(item => {
           const active = tab === item.key
           return (
             <button
@@ -255,9 +330,13 @@ export default function AppShell({ children }: Props) {
   const { platform, themeMode } = usePlatform()
   const isAndroid = platform === 'android'
   const isLight = themeMode === 'light'
+  const muiTheme = useMuiTheme()
+
+  const phoneAreaRef = useRef<HTMLDivElement>(null)
+  const scale = usePhoneScale(phoneAreaRef)
 
   const tab = location.pathname.startsWith('/tasks') ? 'tasks'
-    : location.pathname.startsWith('/catalog') ? 'catalog'
+    : location.pathname.startsWith('/settings') ? 'settings'
     : 'home'
 
   // iPhone 16 Pro: 390px wide, titanium frame
@@ -283,9 +362,9 @@ export default function AppShell({ children }: Props) {
       <ControlBar />
 
       {/* Phone area */}
-      <div className="flex-1 flex items-start justify-center py-8 px-8">
-        {/* Relative container for buttons + frame */}
-        <div className="relative flex-shrink-0">
+      <div ref={phoneAreaRef} className="flex-1 flex items-start justify-center py-8 px-8 overflow-hidden">
+        {/* zoom affects layout (unlike transform:scale), so sizing and absolute buttons all work naturally */}
+        <div className="relative flex-shrink-0" style={{ zoom: scale }}>
           {/* Side buttons */}
           {isAndroid
             ? <AndroidPhoneButtons isLight={isLight} />
@@ -315,10 +394,15 @@ export default function AppShell({ children }: Props) {
               {isAndroid ? <AndroidStatusBar /> : <IOSStatusBar />}
 
               <div className="flex-1 overflow-y-auto no-scrollbar min-h-0">
-                {children}
+                {isAndroid ? (
+                  <ThemeProvider theme={muiTheme}>
+                    <CssBaseline enableColorScheme={false} />
+                    {children}
+                  </ThemeProvider>
+                ) : children}
               </div>
 
-              {isAndroid ? <AndroidTabBar tab={tab} /> : <IOSTabBar tab={tab} />}
+              {isAndroid ? <AndroidTabBar tab={tab} /> : <IOSTabBar tab={tab} isLight={isLight} />}
             </div>
           </div>
         </div>

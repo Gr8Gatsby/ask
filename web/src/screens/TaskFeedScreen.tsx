@@ -66,7 +66,7 @@ export default function TaskFeedScreen() {
   const navigate = useNavigate()
 
   const load = useCallback(() => {
-    getTasks().then(t => { setTasks(t); setLoading(false) })
+    getTasks().then(t => { setTasks(t); setLoading(false) }).catch(() => setLoading(false))
   }, [])
 
   useEffect(() => {

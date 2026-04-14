@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import type { Block, TilePayload, AgentSessionPayload, CountdownPayload, Urgency, QuickReplyPayload } from '../lib/types'
 import { useBlocks } from '../lib/useBlocks'
 import { useTheme } from '../lib/PlatformContext'
+import { useSettings } from '../lib/SettingsContext'
 import ScriptIcon from '../components/shared/ScriptIcon'
 import UrgencyBadge from '../components/shared/UrgencyBadge'
 import QuickReplyBlock from '../components/blocks/QuickReplyBlock'
@@ -116,6 +117,7 @@ function AlertChip({ scriptID, blocks, onClick }: { scriptID: string; blocks: Bl
 function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; blocks: Block[]; onRespond: (id: string, v: string) => void }) {
   const navigate = useNavigate()
   const theme = useTheme()
+  const { useBrandColors } = useSettings()
   const first = blocks[0]
   const { color, label, body } = tileStatus(blocks)
   const inboxBlocks = blocks.filter(b => b.showsInInbox === 1)
@@ -161,7 +163,7 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
           scriptIconSVG={first.scriptIconSVG}
           scriptIcon={first.scriptIcon}
           scriptName={first.scriptName}
-          size={30}
+          size={36}
         />
         <div className="flex-1 min-w-0">
           <p className="text-[15px] font-semibold text-ask-text leading-tight truncate">{first.scriptName}</p>
@@ -188,7 +190,7 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
           <div className="flex items-center gap-2 px-3.5 py-2">
             <div
               className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${agentPayload.is_working ? 'animate-pulse' : ''}`}
-              style={{ backgroundColor: agentPayload.is_working ? (agentPayload.brand_color ?? '#74AA9C') : undefined }}
+              style={{ backgroundColor: agentPayload.is_working ? (useBrandColors ? (agentPayload.brand_color ?? '#8E8E93') : '#8E8E93') : undefined }}
             />
             <span className="text-[11px] text-ask-secondary flex-1 truncate">
               {agentPayload.is_working
@@ -242,26 +244,32 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
           <div className="px-3.5 pt-2.5 pb-3">
             <p className="text-xs font-semibold text-ask-text mb-1.5">{pending.title}</p>
             {pending.body && (
-              <p className="text-[10px] font-mono text-ask-secondary mb-2 line-clamp-2 leading-relaxed">
+              <p className="text-[12px] font-mono text-ask-text mb-2.5 leading-snug bg-ask-card2 px-2.5 py-1.5 rounded-lg break-all border border-ask-sep/30">
                 {pending.body}
               </p>
             )}
             <div className="flex flex-wrap gap-2">
-              {pending.options.map((opt, i) => (
-                <button
-                  key={opt}
-                  onClick={() => onRespond(pendingSession.block.blockID, opt)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                    i === 0
-                      ? 'bg-ask-blue text-white'
-                      : opt.toLowerCase().includes('deny') || opt.toLowerCase() === 'no'
-                      ? 'bg-ask-red/10 text-ask-red border border-ask-red/30'
-                      : 'bg-ask-card2 text-ask-text border border-ask-sep/50'
-                  }`}
-                >
-                  {opt}
-                </button>
-              ))}
+              {pending.options.map(opt => {
+                const lc = opt.toLowerCase()
+                const isAlways = lc.startsWith('always')
+                const isDeny = lc === 'deny' || lc === 'no' || lc.startsWith('deny')
+                const label = isAlways ? 'Always' : isDeny ? 'Deny' : opt
+                return (
+                  <button
+                    key={opt}
+                    onClick={() => onRespond(pendingSession.block.blockID, opt)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                      isDeny
+                        ? 'bg-ask-red/10 text-ask-red border border-ask-red/30'
+                        : isAlways
+                        ? 'bg-ask-orange/10 text-ask-orange border border-ask-orange/30'
+                        : 'bg-ask-blue text-white'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
             </div>
           </div>
         </>

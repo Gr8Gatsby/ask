@@ -4,12 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n mock,vite -c cyan,blue \"tsx watch mock/server.ts\" \"vite\"",
-    "mock": "tsx watch mock/server.ts",
+    "dev": "vite",
+    "dev:mock": "concurrently -n mock,vite -c cyan,blue \"PORT=4243 tsx watch mock/server.ts\" \"BACKEND_PORT=4243 vite\"",
+    "mock": "PORT=4243 tsx watch mock/server.ts",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/icons-material": "^9.0.0",
+    "@mui/material": "^9.0.0",
     "@phosphor-icons/react": "^2.1.10",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

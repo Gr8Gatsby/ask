@@ -1,6 +1,14 @@
 import { useState } from 'react'
+import Paper from '@mui/material/Paper'
+import Box from '@mui/material/Box'
+import Typography from '@mui/material/Typography'
+import TextField from '@mui/material/TextField'
+import IconButton from '@mui/material/IconButton'
+import Avatar from '@mui/material/Avatar'
+// Icons via Material Symbols Rounded web font
 import type { Block, ChatPromptPayload } from '../../lib/types'
 import Markdown from '../shared/Markdown'
+import { useTheme } from '../../lib/PlatformContext'
 
 interface Props {
   block: Block
@@ -9,11 +17,41 @@ interface Props {
 }
 
 export default function ChatPromptBlock({ block, payload, onRespond }: Props) {
+  const theme = useTheme()
   const [value, setValue] = useState('')
 
   const submit = () => {
     if (!value.trim()) return
     onRespond(block.blockID, value.trim())
+  }
+
+  if (theme.isAndroid) {
+    return (
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+        {payload.context && (
+          <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+              <Avatar sx={{ width: 16, height: 16, bgcolor: '#74AA9C', fontSize: 8, fontWeight: 'bold' }}>C</Avatar>
+              <Typography variant="caption" color="text.secondary">Claude Code</Typography>
+            </Box>
+            <Markdown>{payload.context}</Markdown>
+          </Paper>
+        )}
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <TextField
+            fullWidth
+            size="small"
+            value={value}
+            onChange={e => setValue(e.target.value)}
+            placeholder={payload.placeholder ?? 'Reply to Claude...'}
+            onKeyDown={e => { if (e.key === 'Enter') submit() }}
+          />
+          <IconButton onClick={submit} disabled={!value.trim()} color="primary" sx={{ borderRadius: 2 }}>
+            <span className="mat-icon" style={{ fontSize: 20, fontVariationSettings: "'FILL' 1, 'wght' 400, 'opsz' 20" }}>send</span>
+          </IconButton>
+        </Box>
+      </Box>
+    )
   }
 
   return (
@@ -28,21 +66,8 @@ export default function ChatPromptBlock({ block, payload, onRespond }: Props) {
         </div>
       )}
       <div className="flex gap-2">
-        <input
-          type="text"
-          value={value}
-          onChange={e => setValue(e.target.value)}
-          placeholder={payload.placeholder ?? 'Reply to Claude...'}
-          onKeyDown={e => { if (e.key === 'Enter') submit() }}
-          className="flex-1 bg-ask-card2 rounded-lg px-3 py-2 text-sm text-ask-text placeholder-ask-secondary outline-none focus:ring-1 focus:ring-ask-blue"
-        />
-        <button
-          onClick={submit}
-          disabled={!value.trim()}
-          className="px-4 py-2 rounded-lg bg-ask-blue text-white text-sm font-semibold disabled:opacity-40 hover:bg-ask-blue/80 transition-colors"
-        >
-          Send
-        </button>
+        <input type="text" value={value} onChange={e => setValue(e.target.value)} placeholder={payload.placeholder ?? 'Reply to Claude...'} onKeyDown={e => { if (e.key === 'Enter') submit() }} className="flex-1 bg-ask-card2 rounded-lg px-3 py-2 text-sm text-ask-text placeholder-ask-secondary outline-none focus:ring-1 focus:ring-ask-blue" />
+        <button onClick={submit} disabled={!value.trim()} className="px-4 py-2 rounded-lg bg-ask-blue text-white text-sm font-semibold disabled:opacity-40 hover:bg-ask-blue/80 transition-colors">Send</button>
       </div>
     </div>
   )

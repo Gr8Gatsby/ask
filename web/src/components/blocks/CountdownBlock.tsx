@@ -1,5 +1,9 @@
 import { useState, useEffect } from 'react'
+import Chip from '@mui/material/Chip'
+import Typography from '@mui/material/Typography'
+import Box from '@mui/material/Box'
 import type { CountdownPayload } from '../../lib/types'
+import { useTheme } from '../../lib/PlatformContext'
 
 interface Props { payload: CountdownPayload }
 
@@ -16,6 +20,7 @@ function formatCountdown(target: Date): string {
 }
 
 export default function CountdownBlock({ payload }: Props) {
+  const theme = useTheme()
   const target = new Date(payload.time)
   const [display, setDisplay] = useState(() => formatCountdown(target))
 
@@ -27,6 +32,15 @@ export default function CountdownBlock({ payload }: Props) {
   }, [payload.time])
 
   const overdue = display === 'overdue'
+
+  if (theme.isAndroid) {
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Typography variant="body2" sx={{ flex: 1 }}>{payload.label}</Typography>
+        <Chip label={display} size="small" color={overdue ? 'error' : 'warning'} variant="outlined" />
+      </Box>
+    )
+  }
 
   return (
     <div className="flex items-center gap-2">
