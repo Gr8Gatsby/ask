@@ -1,11 +1,3 @@
-import MuiList from '@mui/material/List'
-import ListItemButton from '@mui/material/ListItemButton'
-import ListItemText from '@mui/material/ListItemText'
-import ListItemIcon from '@mui/material/ListItemIcon'
-import Button from '@mui/material/Button'
-import Stack from '@mui/material/Stack'
-import Divider from '@mui/material/Divider'
-import Typography from '@mui/material/Typography'
 import type { Block, ListPayload } from '../../lib/types'
 import { useTheme } from '../../lib/PlatformContext'
 
@@ -20,31 +12,43 @@ export default function ListBlock({ block, payload, onRespond }: Props) {
 
   if (theme.isAndroid) {
     return (
-      <Stack spacing={1}>
-        {payload.title && <Typography variant="body1" sx={{ fontWeight: 500 }}>{payload.title}</Typography>}
-        <MuiList disablePadding dense>
+      <div className="flex flex-col gap-1">
+        {payload.title && (
+          <p className="text-[16px] font-medium text-ask-text leading-6 pb-1">{payload.title}</p>
+        )}
+        <div>
           {payload.items.map((item, i) => (
             <div key={item.id}>
-              {i > 0 && <Divider />}
-              <ListItemButton onClick={() => onRespond(block.blockID, item.id)} sx={{ px: 0 }}>
-                <ListItemText primary={item.label} secondary={item.subtitle} />
-                <ListItemIcon sx={{ minWidth: 'auto' }}>
-                  <span className="mat-icon" style={{ fontSize: 20, fontVariationSettings: "'FILL' 0, 'wght' 400, 'opsz' 20" }}>chevron_right</span>
-                </ListItemIcon>
-              </ListItemButton>
+              {i > 0 && <div className="h-px bg-ask-sep/30" />}
+              <button
+                onClick={() => onRespond(block.blockID, item.id)}
+                className="w-full flex items-center gap-3 min-h-[56px] px-0 active:bg-ask-text/[0.05] transition-colors text-left"
+              >
+                <div className="flex-1 min-w-0">
+                  <p className="text-[16px] text-ask-text leading-6">{item.label}</p>
+                  {item.subtitle && (
+                    <p className="text-[14px] text-ask-secondary leading-5">{item.subtitle}</p>
+                  )}
+                </div>
+                <span className="mat-icon text-ask-secondary flex-shrink-0" style={{ fontSize: 20, fontVariationSettings: "'FILL' 0, 'wght' 400, 'opsz' 20" }}>chevron_right</span>
+              </button>
             </div>
           ))}
-        </MuiList>
+        </div>
         {payload.actions && payload.actions.length > 0 && (
-          <Stack spacing={1}>
+          <div className="flex flex-col gap-2 pt-1">
             {payload.actions.map(action => (
-              <Button key={action} fullWidth variant="outlined" onClick={() => onRespond(block.blockID, action)}>
+              <button
+                key={action}
+                onClick={() => onRespond(block.blockID, action)}
+                className="w-full min-h-[40px] rounded-full border border-ask-blue text-ask-blue text-[14px] font-medium tracking-[0.1px] active:bg-ask-blue/10 transition-colors"
+              >
                 {action}
-              </Button>
+              </button>
             ))}
-          </Stack>
+          </div>
         )}
-      </Stack>
+      </div>
     )
   }
 
