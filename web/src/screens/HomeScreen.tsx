@@ -81,37 +81,6 @@ function useCountdownDisplay(isoTime: string | undefined): string | null {
   return display
 }
 
-// ---- Alert chip (one per needs-response script) ----
-
-function AlertChip({ scriptID, blocks, onClick }: { scriptID: string; blocks: Block[]; onClick: () => void }) {
-  const theme = useTheme()
-  const inboxBlocks = blocks.filter(b => b.showsInInbox === 1)
-  const urgency = dominantUrgency(inboxBlocks, blocks)
-  const first = blocks[0]
-
-  const chipColor = urgency === 'urgent'
-    ? 'bg-ask-red text-white'
-    : urgency === 'info'
-    ? 'bg-ask-blue text-white'
-    : 'bg-ask-orange text-white'
-
-  return (
-    <button
-      key={scriptID}
-      onClick={onClick}
-      className={`flex items-center gap-1.5 px-3 py-1.5 flex-shrink-0 ${chipColor} ${theme.isAndroid ? 'rounded-xl' : 'rounded-full'}`}
-    >
-      <span className="w-1.5 h-1.5 rounded-full bg-white/70 flex-shrink-0" />
-      <span className="text-[11px] font-semibold whitespace-nowrap">{first.scriptName}</span>
-      {inboxBlocks.length > 1 && (
-        <span className="text-[10px] font-bold bg-white/25 rounded-full w-4 h-4 flex items-center justify-center">
-          {inboxBlocks.length}
-        </span>
-      )}
-    </button>
-  )
-}
-
 // ---- Action queue card (Needs Response) ----
 
 function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; blocks: Block[]; onRespond: (id: string, v: string) => void }) {
@@ -150,9 +119,14 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
   const cardClass = theme.isAndroid
     ? `bg-ask-card rounded-2xl shadow-md shadow-black/50 overflow-hidden`
     : `bg-ask-card rounded-xl border ${borderColor} overflow-hidden`
+  const brandColor = useBrandColors ? (agentPayload?.brand_color ?? null) : null
 
   return (
     <div className={cardClass}>
+      {/* Brand color accent strip */}
+      {brandColor && (
+        <div style={{ height: 3, backgroundColor: brandColor, opacity: 0.85 }} />
+      )}
       {/* Header row */}
       <button
         onClick={() => navigate(cardTarget)}
@@ -336,7 +310,7 @@ function ScriptTile({ scriptID, blocks }: { scriptID: string; blocks: Block[] })
 
 export default function HomeScreen() {
   const { scriptGroups, loading, error, respond } = useBlocks()
-  const navigate = useNavigate()
+  const theme = useTheme()
 
   if (loading) {
     return <div className="flex items-center justify-center h-full text-ask-secondary text-sm">Connecting to MockAskMac…</div>
@@ -366,10 +340,17 @@ export default function HomeScreen() {
   return (
     <div className="flex flex-col h-full">
       {/* Nav */}
-      <div className="flex items-center justify-between px-4 pt-3 pb-3 flex-shrink-0">
-        <h1 className="text-xl font-bold text-ask-text">Ask</h1>
-        <span className="text-xs text-ask-secondary">MockAskMac</span>
-      </div>
+      {theme.isAndroid ? (
+        <div className="flex items-center justify-between px-4 pt-4 pb-3 flex-shrink-0">
+          <h1 className="text-[28px] font-medium text-ask-text leading-tight">Ask</h1>
+          <span className="text-xs text-ask-secondary">MockAskMac</span>
+        </div>
+      ) : (
+        <div className="flex items-center justify-between px-4 pt-3 pb-2 flex-shrink-0">
+          <h1 className="text-[34px] font-bold text-ask-text leading-tight">Ask</h1>
+          <span className="text-xs text-ask-secondary">MockAskMac</span>
+        </div>
+      )}
 
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto no-scrollbar px-4 pb-4 flex flex-col gap-5">
@@ -403,21 +384,6 @@ export default function HomeScreen() {
         )}
       </div>
 
-      {/* Alert chips — only when there are needs-response scripts */}
-      {needsResponseGroups.length > 0 && (
-        <div className="flex-shrink-0 border-t border-ask-sep/50 px-4 py-2">
-          <div className="flex gap-2 overflow-x-auto no-scrollbar">
-            {needsResponseGroups.map(([scriptID, blocks]) => (
-              <AlertChip
-                key={scriptID}
-                scriptID={scriptID}
-                blocks={blocks}
-                onClick={() => navigate(`/script/${scriptID}`)}
-              />
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   )
 }

@@ -8,6 +8,7 @@ import CssBaseline from '@mui/material/CssBaseline'
 import { useMuiTheme } from '../../lib/muiTheme'
 import { useStartSession } from '../../lib/StartSessionContext'
 import { useBlocks } from '../../lib/useBlocks'
+import ScriptIcon from '../shared/ScriptIcon'
 import Dialog from '@mui/material/Dialog'
 import DialogTitle from '@mui/material/DialogTitle'
 import List from '@mui/material/List'
@@ -233,7 +234,7 @@ function IOSTabBar({ tab, isLight }: { tab: string; isLight: boolean }) {
 
   // Alert groups: scripts with inbox blocks OR a pending agent session confirmation
   const alertGroups = Object.entries(scriptGroups).reduce<
-    Record<string, { scriptName: string; count: number }>
+    Record<string, { scriptName: string; count: number; scriptIconSVG?: string; scriptIconData?: string; scriptIcon?: string }>
   >((acc, [scriptID, sBlocks]) => {
     const inboxCount = sBlocks.filter(b => b.showsInInbox === 1).length
     const hasPending = sBlocks.some(b => {
@@ -244,9 +245,13 @@ function IOSTabBar({ tab, isLight }: { tab: string; isLight: boolean }) {
       } catch { return false }
     })
     if (inboxCount > 0 || hasPending) {
+      const first = sBlocks[0]
       acc[scriptID] = {
-        scriptName: sBlocks[0]?.scriptName ?? scriptID,
+        scriptName: first?.scriptName ?? scriptID,
         count: inboxCount + (hasPending ? 1 : 0),
+        scriptIconSVG: first?.scriptIconSVG,
+        scriptIconData: first?.scriptIconData,
+        scriptIcon: first?.scriptIcon,
       }
     }
     return acc
@@ -278,7 +283,7 @@ function IOSTabBar({ tab, isLight }: { tab: string; isLight: boolean }) {
           <p className="text-[13px] font-semibold px-4 pt-3 pb-1.5" style={{ color: iconColor }}>
             Alerts
           </p>
-          {Object.entries(alertGroups).map(([scriptID, { scriptName, count }], i, arr) => (
+          {Object.entries(alertGroups).map(([scriptID, { scriptName, count, scriptIconSVG, scriptIconData, scriptIcon }], i, arr) => (
             <button
               key={scriptID}
               onClick={() => { navigate('/home'); setBellOpen(false) }}
@@ -287,7 +292,7 @@ function IOSTabBar({ tab, isLight }: { tab: string; isLight: boolean }) {
               }`}
               style={{ borderColor: isLight ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.08)' }}
             >
-              <span className="text-base leading-none">🔔</span>
+              <ScriptIcon scriptIconSVG={scriptIconSVG} scriptIconData={scriptIconData} scriptIcon={scriptIcon} scriptName={scriptName} size={22} />
               <div className="flex-1 min-w-0">
                 <p className="text-[14px] font-medium truncate" style={{ color: iconColor }}>{scriptName}</p>
               </div>
@@ -349,7 +354,7 @@ function IOSTabBar({ tab, isLight }: { tab: string; isLight: boolean }) {
           <button
             onClick={() => { setBellOpen(v => !v); setPopoverOpen(false) }}
             className="flex items-center justify-center transition-opacity hover:opacity-70 relative"
-            style={{ color: '#ff453a', width: 24, height: 24 }}
+            style={{ color: iconColor, width: 24, height: 24 }}
           >
             <Bell
               size={18}
