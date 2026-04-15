@@ -1,10 +1,13 @@
 import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect } from 'react'
 import { useBlocks } from '../lib/useBlocks'
 import { useTheme } from '../lib/PlatformContext'
+import { useSettings } from '../lib/SettingsContext'
 import type { AgentSessionPayload, ConfirmationPayload } from '../lib/types'
 import BlockRenderer from '../components/blocks/BlockRenderer'
 import ScriptIcon from '../components/shared/ScriptIcon'
-import StartSessionBlock from '../components/blocks/StartSessionBlock'
+import { useStartSession } from '../lib/StartSessionContext'
+import { useBrandColor } from '../components/layout/AppShell'
 
 function parsePayload<T>(json: string): T | null {
   try { return JSON.parse(json) as T } catch { return null }
@@ -16,10 +19,12 @@ function SessionRow({
   block,
   confirmationCount,
   onClick,
+  isAndroid,
 }: {
   block: ReturnType<typeof useBlocks>['blocks'][number]
   confirmationCount: number
   onClick: () => void
+  isAndroid: boolean
 }) {
   const payload = parsePayload<AgentSessionPayload>(block.payload)
   if (!payload) return null
@@ -27,7 +32,9 @@ function SessionRow({
   return (
     <button
       onClick={onClick}
-      className="w-full flex items-center gap-3 py-3 px-0 hover:bg-white/5 -mx-4 px-4 transition-colors text-left"
+      className={`w-full flex items-center gap-3 py-3 transition-colors text-left ${
+        isAndroid ? 'hover:bg-white/5' : 'px-4 hover:bg-ask-card2/60'
+      }`}
     >
       <div
         className={`w-2 h-2 rounded-full flex-shrink-0 ${payload.is_working ? 'bg-ask-blue animate-pulse' : 'bg-ask-card2'}`}
@@ -59,6 +66,9 @@ export default function ScriptDetailScreen() {
   const navigate = useNavigate()
   const theme = useTheme()
   const { blocks: allBlocks, respond } = useBlocks()
+  const { setAction } = useStartSession()
+  const { useBrandColors } = useSettings()
+  const { setBrandColor: setAppBrandColor } = useBrandColor()
   const blocks = allBlocks.filter(b => b.scriptID === scriptID)
   const first = blocks[0]
 
@@ -67,8 +77,6 @@ export default function ScriptDetailScreen() {
     sessionBlocks.map(b => parsePayload<AgentSessionPayload>(b.payload)?.session_id ?? '')
   )
 
-  // Header section: non-session, non-tile, non-startSession, non-feedItem
-  // Exclude confirmations that are linked to a live session (shown under their session instead)
   const headerBlocks = blocks.filter(b => {
     if (['agent_session', 'tile', 'start_session', 'feed_item'].includes(b.blockType)) return false
     if (b.blockType === 'confirmation') {
@@ -79,6 +87,24 @@ export default function ScriptDetailScreen() {
   })
 
   const startSessionBlock = blocks.find(b => b.blockType === 'start_session')
+  const brandColor = useBrandColors
+    ? (parsePayload<AgentSessionPayload>(sessionBlocks[0]?.payload)?.brand_color ?? null)
+    : null
+
+  // Push brand color up to AppShell so the iOS status bar tints to match
+  useEffect(() => {
+    if (!theme.isAndroid) setAppBrandColor(brandColor)
+    return () => setAppBrandColor(null)
+  }, [brandColor, theme.isAndroid]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (startSessionBlock) {
+      setAction({ block: startSessionBlock, payload: JSON.parse(startSessionBlock.payload), respond })
+    } else {
+      setAction(null)
+    }
+    return () => setAction(null)
+  }, [startSessionBlock?.blockID]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function sessionConfirmations(sessionId: string) {
     return blocks.filter(b => {
@@ -91,8 +117,12 @@ export default function ScriptDetailScreen() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Nav bar */}
-      <div className="flex items-center gap-3 px-4 pt-3 pb-3 border-b border-ask-sep/50 flex-shrink-0">
+      {/* Nav bar — iOS: no border, blends into frosted status bar; Android: border-b */}
+      <div
+        className={`flex items-center gap-3 px-4 pt-3 pb-3 flex-shrink-0 ${
+          theme.isAndroid ? 'border-b border-ask-sep/50' : ''
+        }`}
+      >
         <button onClick={() => navigate(-1)} className={theme.navBackClass}>
           {theme.navBackIcon}
           {!theme.isAndroid && <span>Home</span>}
@@ -126,47 +156,60 @@ export default function ScriptDetailScreen() {
 
             {/* Sessions section */}
             {sessionBlocks.length > 0 && (
-              <div className="mt-1">
-                <p className={`px-4 pt-3 pb-1 ${theme.sectionHeader}`}>
+              <div className={theme.isAndroid ? 'mt-1' : 'mt-4 px-4'}>
+                <p className={`pb-1 ${theme.isAndroid ? 'px-4 pt-3' : 'pt-0 pb-2'} ${theme.sectionHeader}`}>
                   {theme.isAndroid ? 'Sessions' : 'SESSIONS'}
                 </p>
-                {sessionBlocks.map(block => {
-                  const payload = parsePayload<AgentSessionPayload>(block.payload)
-                  const confs = payload ? sessionConfirmations(payload.session_id) : []
-                  return (
-                    <div key={block.blockID}>
-                      {/* Session row */}
-                      <div className={`px-4 border-b border-ask-sep ${confs.length > 0 ? 'bg-ask-orange/5' : ''}`}>
-                        <SessionRow
-                          block={block}
-                          confirmationCount={confs.length}
-                          onClick={() => {
-                            if (payload) navigate(`/script/${scriptID}/session/${payload.session_id}`)
-                          }}
-                        />
-                      </div>
 
-                      {/* Linked confirmations — indented, orange tint */}
-                      {confs.map(conf => (
-                        <div key={conf.blockID} className="pl-8 pr-4 py-3 border-b border-ask-sep bg-ask-orange/5">
-                          <BlockRenderer block={conf} onRespond={respond} />
+                {/* iOS: inset-grouped card; Android: flat full-width list */}
+                <div className={theme.isAndroid
+                  ? ''
+                  : 'bg-ask-card rounded-xl overflow-hidden border border-ask-sep/40'
+                }>
+                  {sessionBlocks.map((block, idx) => {
+                    const payload = parsePayload<AgentSessionPayload>(block.payload)
+                    const confs = payload ? sessionConfirmations(payload.session_id) : []
+                    const isLast = idx === sessionBlocks.length - 1
+                    return (
+                      <div key={block.blockID}>
+                        <div className={
+                          theme.isAndroid
+                            ? `px-4 border-b border-ask-sep ${confs.length > 0 ? 'bg-ask-orange/5' : ''}`
+                            : `${confs.length > 0 ? 'bg-ask-orange/5' : ''} ${!isLast || confs.length > 0 ? 'border-b border-ask-sep/40' : ''}`
+                        }>
+                          <SessionRow
+                            block={block}
+                            confirmationCount={confs.length}
+                            isAndroid={theme.isAndroid}
+                            onClick={() => {
+                              if (payload) navigate(`/script/${scriptID}/session/${payload.session_id}`)
+                            }}
+                          />
                         </div>
-                      ))}
-                    </div>
-                  )
-                })}
+
+                        {/* Linked confirmations — indented, orange tint */}
+                        {confs.map((conf, ci) => (
+                          <div
+                            key={conf.blockID}
+                            className={`pl-8 pr-4 py-3 bg-ask-orange/5 ${
+                              theme.isAndroid
+                                ? 'border-b border-ask-sep'
+                                : (!isLast || ci < confs.length - 1 ? 'border-b border-ask-sep/40' : '')
+                            }`}
+                          >
+                            <BlockRenderer block={conf} onRespond={respond} />
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             )}
           </div>
         )}
       </div>
 
-      {/* Bottom bar — "+" start session button */}
-      {startSessionBlock && (
-        <div className="flex-shrink-0 px-4 py-3 border-t border-ask-sep flex items-center justify-between">
-          <StartSessionBlock block={startSessionBlock} payload={JSON.parse(startSessionBlock.payload)} onRespond={respond} />
-        </div>
-      )}
     </div>
   )
 }
