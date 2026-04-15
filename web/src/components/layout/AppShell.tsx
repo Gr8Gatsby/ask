@@ -391,10 +391,6 @@ function IOSTabBar({ tab, isLight }: { tab: string; isLight: boolean }) {
         </button>
       </div>
 
-      {/* iOS home indicator */}
-      <div className="flex justify-center mt-2">
-        <div className="w-[134px] h-[5px] rounded-full" style={{ background: isLight ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.30)' }} />
-      </div>
     </div>
   )
 }
