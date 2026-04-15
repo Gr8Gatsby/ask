@@ -49,7 +49,7 @@ struct AskMacApp: App {
                 await ck.purgeOldRecords(machineID: s.machineID)
                 // Start local HTTP server for MockAskMac dev UI
                 await MainActor.run {
-                    lhs.configure(scriptManager: sm, machineName: s.machineName)
+                    lhs.configure(scriptManager: sm, machineName: s.machineName, cloudKit: ck, machineID: s.machineID)
                     lhs.start()
                     sm.localHTTPServer = lhs
                 }
@@ -78,6 +78,10 @@ struct AskMacApp: App {
                     return dict
                 }
                 await MainActor.run { lhs.seedFromCloudKit(ckDicts) }
+                // Seed historical tasks from CloudKit so the web feed shows full history.
+                if let tasks = try? await ck.fetchTasks(machineID: s.machineID) {
+                    await MainActor.run { lhs.seedTasksFromCloudKit(tasks) }
+                }
             }
         }
     }

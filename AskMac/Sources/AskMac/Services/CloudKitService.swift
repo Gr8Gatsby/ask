@@ -397,6 +397,78 @@ final class CloudKitService {
         }
     }
 
+    /// Fetches messages for a task as JSON-serializable dicts.
+    /// `partsJSON` is stored as a raw string, matching the web client's TaskMessage interface.
+    func fetchTaskMessagesAsJSON(taskID: String, machineID: String) async -> [[String: Any]] {
+        let predicate = NSPredicate(
+            format: "%K == %@ AND %K == %@",
+            CKSchema.AskTaskMessage.taskID, taskID,
+            CKSchema.AskTaskMessage.machineID, machineID
+        )
+        let query = CKQuery(recordType: CKSchema.RecordType.askTaskMessage, predicate: predicate)
+        query.sortDescriptors = [NSSortDescriptor(key: CKSchema.AskTaskMessage.sequenceNumber, ascending: true)]
+        guard let (results, _) = try? await database.records(matching: query, resultsLimit: 200) else { return [] }
+        let fmt = ISO8601DateFormatter()
+        return results.compactMap { _, result in
+            guard let record    = try? result.get(),
+                  let messageID = record[CKSchema.AskTaskMessage.messageID] as? String,
+                  let taskID    = record[CKSchema.AskTaskMessage.taskID]    as? String,
+                  let role      = record[CKSchema.AskTaskMessage.role]      as? String,
+                  let partsJSON = record[CKSchema.AskTaskMessage.partsJSON] as? String,
+                  let timestamp = record[CKSchema.AskTaskMessage.timestamp] as? Date
+            else { return nil }
+            return [
+                "messageID":      messageID,
+                "taskID":         taskID,
+                "role":           role,
+                "partsJSON":      partsJSON,
+                "timestamp":      fmt.string(from: timestamp),
+                "sequenceNumber": record[CKSchema.AskTaskMessage.sequenceNumber] as? Int ?? 0,
+            ] as [String: Any]
+        }
+    }
+
+    /// Fetches artifacts for a task as JSON-serializable dicts plus a URL map for content serving.
+    func fetchTaskArtifactsAsJSON(taskID: String, machineID: String) async -> (dicts: [[String: Any]], fileURLs: [String: URL]) {
+        let predicate = NSPredicate(
+            format: "%K == %@ AND %K == %@",
+            CKSchema.AskArtifact.taskID, taskID,
+            CKSchema.AskArtifact.machineID, machineID
+        )
+        let query = CKQuery(recordType: CKSchema.RecordType.askArtifact, predicate: predicate)
+        query.sortDescriptors = [NSSortDescriptor(key: CKSchema.AskArtifact.updatedAt, ascending: true)]
+        guard let (results, _) = try? await database.records(matching: query, resultsLimit: 50) else { return ([], [:]) }
+        let fmt = ISO8601DateFormatter()
+        var dicts: [[String: Any]] = []
+        var fileURLs: [String: URL] = [:]
+        for (_, result) in results {
+            guard let record     = try? result.get(),
+                  let artifactID = record[CKSchema.AskArtifact.artifactID] as? String,
+                  let filename   = record[CKSchema.AskArtifact.filename]   as? String,
+                  let mimeType   = record[CKSchema.AskArtifact.mimeType]   as? String,
+                  let updatedAt  = record[CKSchema.AskArtifact.updatedAt]  as? Date
+            else { continue }
+            var dict: [String: Any] = [
+                "artifactID": artifactID,
+                "taskID":     taskID,
+                "machineID":  machineID,
+                "filename":   filename,
+                "mimeType":   mimeType,
+                "sizeBytes":  record[CKSchema.AskArtifact.sizeBytes] as? Int ?? 0,
+                "updatedAt":  fmt.string(from: updatedAt),
+            ]
+            if let desc = record[CKSchema.AskArtifact.description] as? String {
+                dict["description"] = desc
+            }
+            dicts.append(dict)
+            if let asset = record[CKSchema.AskArtifact.content] as? CKAsset,
+               let url = asset.fileURL {
+                fileURLs[artifactID] = url
+            }
+        }
+        return (dicts, fileURLs)
+    }
+
     /// Fetches all artifacts for a task.
     func fetchTaskArtifacts(taskID: String, machineID: String) async throws -> [TaskArtifactDisplay] {
         let predicate = NSPredicate(

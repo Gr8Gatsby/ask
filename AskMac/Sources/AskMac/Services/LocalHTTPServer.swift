@@ -16,9 +16,12 @@ final class LocalHTTPServer {
 
     // MARK: - Public interface called by ScriptManager
 
-    /// In-memory task store: tasks keyed by taskID, messages keyed by taskID.
+    /// In-memory task store: tasks keyed by taskID, messages keyed by taskID, artifacts keyed by taskID.
     private var localTasks: [String: [String: Any]] = [:]
     private var localMessages: [String: [[String: Any]]] = [:]
+    private var localArtifacts: [String: [[String: Any]]] = [:]
+    /// CKAsset local file URLs keyed by artifactID — used to serve /artifacts/:id/content.
+    private var artifactFileURLs: [String: URL] = [:]
 
     func notifyTaskUpserted(_ task: AskTaskRecord) {
         let fmt = ISO8601DateFormatter()
@@ -41,11 +44,33 @@ final class LocalHTTPServer {
             "messageID":      msg.messageID,
             "taskID":         msg.taskID,
             "role":           msg.role,
-            "parts":          (try? JSONSerialization.jsonObject(with: Data(msg.partsJSON.utf8))) ?? [],
+            "partsJSON":      msg.partsJSON,
             "timestamp":      fmt.string(from: msg.timestamp),
             "sequenceNumber": msg.sequenceNumber,
         ]
         localMessages[msg.taskID, default: []].append(entry)
+    }
+
+    /// Seeds historical tasks from CloudKit without overwriting any tasks already seen live.
+    func seedTasksFromCloudKit(_ tasks: [AskTaskRecord]) {
+        let fmt = ISO8601DateFormatter()
+        var seeded = 0
+        for task in tasks {
+            guard localTasks[task.taskID] == nil else { continue }
+            localTasks[task.taskID] = [
+                "taskID":         task.taskID,
+                "machineID":      task.machineID,
+                "scriptID":       task.scriptID,
+                "scriptName":     task.scriptName,
+                "title":          task.title,
+                "status":         task.status,
+                "lastActivityAt": fmt.string(from: task.lastActivityAt),
+                "messageCount":   task.messageCount,
+                "artifactCount":  task.artifactCount,
+            ]
+            seeded += 1
+        }
+        print("[LocalHTTPServer] seeded \(seeded) task(s) from CloudKit")
     }
 
     /// Call after every activeBlocks mutation so SSE clients stay in sync.
@@ -82,6 +107,8 @@ final class LocalHTTPServer {
     // MARK: - Init & start
 
     private weak var scriptManager: ScriptManager?
+    private var cloudKitService: CloudKitService?
+    private var cloudKitMachineID: String = ""
     private var listener: NWListener?
     private var sseConnections: [NWConnection] = []
     private let port: UInt16
@@ -95,9 +122,11 @@ final class LocalHTTPServer {
         self.port = port
     }
 
-    func configure(scriptManager: ScriptManager, machineName: String) {
+    func configure(scriptManager: ScriptManager, machineName: String, cloudKit: CloudKitService? = nil, machineID: String = "") {
         self.scriptManager = scriptManager
         self.machineName = machineName
+        self.cloudKitService = cloudKit
+        self.cloudKitMachineID = machineID
     }
 
     func start() {
@@ -150,11 +179,11 @@ final class LocalHTTPServer {
         conn.start(queue: .main)
         conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, _ in
             guard let self, let data, !data.isEmpty else { conn.cancel(); return }
-            Task { @MainActor [weak self] in self?.handle(data: data, conn: conn) }
+            Task { @MainActor [weak self] in await self?.handle(data: data, conn: conn) }
         }
     }
 
-    private func handle(data: Data, conn: NWConnection) {
+    private func handle(data: Data, conn: NWConnection) async {
         guard let raw = String(data: data, encoding: .utf8) else { conn.cancel(); return }
 
         // Parse request line
@@ -257,14 +286,60 @@ final class LocalHTTPServer {
 
         if method == "GET" && path.hasPrefix("/tasks/") && path.hasSuffix("/messages") {
             let taskID = String(path.dropFirst("/tasks/".count).dropLast("/messages".count))
-            let messages = (localMessages[taskID] ?? []).sorted {
+            var messages = localMessages[taskID] ?? []
+            // On-demand CloudKit fetch when not cached locally
+            if messages.isEmpty, let ck = cloudKitService, !cloudKitMachineID.isEmpty {
+                let fetched = await ck.fetchTaskMessagesAsJSON(taskID: taskID, machineID: cloudKitMachineID)
+                if !fetched.isEmpty {
+                    localMessages[taskID] = fetched
+                    messages = fetched
+                }
+            }
+            let sorted = messages.sorted {
                 ($0["sequenceNumber"] as? Int ?? 0) < ($1["sequenceNumber"] as? Int ?? 0)
             }
-            let wrapper = ["messages": messages]
-            let data = (try? JSONSerialization.data(withJSONObject: wrapper)) ?? Data()
+            let wrapper = ["messages": sorted]
+            let msgData = (try? JSONSerialization.data(withJSONObject: wrapper)) ?? Data()
             send(conn: conn, status: "200 OK",
                  extraHeaders: corsHeaders() + [("Content-Type", "application/json")],
-                 body: String(data: data, encoding: .utf8) ?? #"{"messages":[]}"#)
+                 body: String(data: msgData, encoding: .utf8) ?? #"{"messages":[]}"#)
+            return
+        }
+
+        if method == "GET" && path.hasPrefix("/tasks/") && path.hasSuffix("/artifacts") {
+            let taskID = String(path.dropFirst("/tasks/".count).dropLast("/artifacts".count))
+            var artifacts = localArtifacts[taskID] ?? []
+            // On-demand CloudKit fetch when not cached locally
+            if artifacts.isEmpty, let ck = cloudKitService, !cloudKitMachineID.isEmpty {
+                let (fetched, urls) = await ck.fetchTaskArtifactsAsJSON(taskID: taskID, machineID: cloudKitMachineID)
+                if !fetched.isEmpty {
+                    localArtifacts[taskID] = fetched
+                    for (aid, url) in urls { artifactFileURLs[aid] = url }
+                    artifacts = fetched
+                }
+            }
+            let wrapper = ["artifacts": artifacts]
+            let artData = (try? JSONSerialization.data(withJSONObject: wrapper)) ?? Data()
+            send(conn: conn, status: "200 OK",
+                 extraHeaders: corsHeaders() + [("Content-Type", "application/json")],
+                 body: String(data: artData, encoding: .utf8) ?? #"{"artifacts":[]}"#)
+            return
+        }
+
+        if method == "GET" && path.hasPrefix("/artifacts/") && path.hasSuffix("/content") {
+            let artifactID = String(path.dropFirst("/artifacts/".count).dropLast("/content".count))
+            guard let fileURL = artifactFileURLs[artifactID],
+                  let content = try? Data(contentsOf: fileURL) else {
+                send(conn: conn, status: "404 Not Found", extraHeaders: corsHeaders(), body: "Not found")
+                return
+            }
+            let mimeType = localArtifacts.values
+                .flatMap { $0 }
+                .first { $0["artifactID"] as? String == artifactID }?["mimeType"] as? String
+                ?? "application/octet-stream"
+            sendData(conn: conn, status: "200 OK",
+                     extraHeaders: corsHeaders() + [("Content-Type", mimeType)],
+                     body: content)
             return
         }
 
@@ -303,11 +378,14 @@ final class LocalHTTPServer {
     // MARK: - Helpers
 
     private func send(conn: NWConnection, status: String, extraHeaders: [(String, String)], body: String) {
-        let bodyData = Data(body.utf8)
-        let headerLines = (extraHeaders + [("Content-Length", "\(bodyData.count)")]).map { "\($0.0): \($0.1)" }.joined(separator: "\r\n")
+        sendData(conn: conn, status: status, extraHeaders: extraHeaders, body: Data(body.utf8))
+    }
+
+    private func sendData(conn: NWConnection, status: String, extraHeaders: [(String, String)], body: Data) {
+        let headerLines = (extraHeaders + [("Content-Length", "\(body.count)")]).map { "\($0.0): \($0.1)" }.joined(separator: "\r\n")
         let response = "HTTP/1.1 \(status)\r\n\(headerLines)\r\n\r\n"
         var full = Data(response.utf8)
-        full.append(bodyData)
+        full.append(body)
         conn.send(content: full, completion: .contentProcessed { _ in conn.cancel() })
     }
 
