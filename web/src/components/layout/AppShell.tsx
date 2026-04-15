@@ -227,18 +227,30 @@ function AndroidStatusBar() {
 function IOSTabBar({ tab, isLight }: { tab: string; isLight: boolean }) {
   const navigate = useNavigate()
   const { action } = useStartSession()
-  const { blocks } = useBlocks()
+  const { scriptGroups } = useBlocks()
   const [popoverOpen, setPopoverOpen] = useState(false)
   const [bellOpen, setBellOpen] = useState(false)
 
-  // Compute alert groups: blocks with showsInInbox === 1, grouped by scriptID
-  const alertGroups = blocks
-    .filter(b => b.showsInInbox === 1)
-    .reduce<Record<string, { scriptName: string; count: number }>>((acc, b) => {
-      if (!acc[b.scriptID]) acc[b.scriptID] = { scriptName: b.scriptName, count: 0 }
-      acc[b.scriptID].count++
-      return acc
-    }, {})
+  // Alert groups: scripts with inbox blocks OR a pending agent session confirmation
+  const alertGroups = Object.entries(scriptGroups).reduce<
+    Record<string, { scriptName: string; count: number }>
+  >((acc, [scriptID, sBlocks]) => {
+    const inboxCount = sBlocks.filter(b => b.showsInInbox === 1).length
+    const hasPending = sBlocks.some(b => {
+      if (b.blockType !== 'agent_session') return false
+      try {
+        const p = JSON.parse(b.payload) as { pending_confirmation?: unknown }
+        return !!p.pending_confirmation
+      } catch { return false }
+    })
+    if (inboxCount > 0 || hasPending) {
+      acc[scriptID] = {
+        scriptName: sBlocks[0]?.scriptName ?? scriptID,
+        count: inboxCount + (hasPending ? 1 : 0),
+      }
+    }
+    return acc
+  }, {})
   const hasAlerts = Object.keys(alertGroups).length > 0
 
   const pillBg = isLight ? 'rgba(255,255,255,0.95)' : 'rgba(28,28,30,0.95)'
@@ -269,7 +281,7 @@ function IOSTabBar({ tab, isLight }: { tab: string; isLight: boolean }) {
           {Object.entries(alertGroups).map(([scriptID, { scriptName, count }], i, arr) => (
             <button
               key={scriptID}
-              onClick={() => { navigate(`/script/${scriptID}`); setBellOpen(false) }}
+              onClick={() => { navigate('/home'); setBellOpen(false) }}
               className={`w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-white/10 transition-colors ${
                 i < arr.length - 1 ? 'border-b' : ''
               }`}
