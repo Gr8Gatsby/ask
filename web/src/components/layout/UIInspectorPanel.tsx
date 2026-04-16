@@ -2,6 +2,7 @@ import { useLocation } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import { useBlocks } from '../../lib/useBlocks'
 import { useRedlines } from '../../lib/RedlinesContext'
+import ScriptIcon from '../shared/ScriptIcon'
 import type { Block } from '../../lib/types'
 
 type ScreenInfo = {
@@ -90,13 +91,18 @@ const BLOCK_TYPE_COLOR: Record<string, string> = {
   diagnostics: '#ff9f0a',
 }
 
+/** Highlight the specific block element; fall back to its script-group card if no block element exists */
 function highlightBlock(block: Block) {
   document.querySelectorAll('[data-block-id].inspector-highlighted, [data-script-id].inspector-highlighted')
     .forEach(el => el.classList.remove('inspector-highlighted'))
-  document.querySelectorAll(`[data-block-id="${block.blockID}"]`)
-    .forEach(el => el.classList.add('inspector-highlighted'))
-  document.querySelectorAll(`[data-script-id="${block.scriptID}"]`)
-    .forEach(el => el.classList.add('inspector-highlighted'))
+  const blockEls = document.querySelectorAll(`[data-block-id="${block.blockID}"]`)
+  if (blockEls.length > 0) {
+    blockEls.forEach(el => el.classList.add('inspector-highlighted'))
+  } else {
+    // Block not individually wrapped in DOM — highlight its containing script-group card
+    document.querySelectorAll(`[data-script-id="${block.scriptID}"]`)
+      .forEach(el => el.classList.add('inspector-highlighted'))
+  }
 }
 
 function clearHighlight() {
@@ -104,175 +110,246 @@ function clearHighlight() {
     .forEach(el => el.classList.remove('inspector-highlighted'))
 }
 
-function BlockRow({ block }: { block: Block }) {
-  const { showRedlines, focusedBlockID, setFocusedBlockID } = useRedlines()
+// ---- Compact block list row ----
+
+function BlockListRow({ block, onSelect, isSelected }: {
+  block: Block
+  onSelect: (id: string | null) => void
+  isSelected: boolean
+}) {
+  const { showRedlines, setFocusedBlockID } = useRedlines()
   const color = BLOCK_TYPE_COLOR[block.blockType] ?? '#8e8e93'
-  const shortID = block.blockID.slice(-8)
-  const isFocused = focusedBlockID === block.blockID
+
+  // Apply persistent DOM highlight when this row is selected; clear when deselected
+  useEffect(() => {
+    if (isSelected) {
+      highlightBlock(block)
+      return () => clearHighlight()
+    }
+  }, [isSelected, block])
 
   function handleClick() {
-    if (!showRedlines) return
-    setFocusedBlockID(isFocused ? null : block.blockID)
+    onSelect(isSelected ? null : block.blockID)
+    if (showRedlines) setFocusedBlockID(isSelected ? null : block.blockID)
   }
 
   return (
     <div
       onMouseEnter={() => highlightBlock(block)}
-      onMouseLeave={clearHighlight}
+      onMouseLeave={() => { if (!isSelected) clearHighlight() }}
       onClick={handleClick}
       style={{
-        borderLeft: `3px solid ${isFocused ? color : color}`,
-        paddingLeft: 8,
-        paddingTop: 5,
-        paddingBottom: 5,
-        marginBottom: 6,
-        cursor: showRedlines ? 'pointer' : 'default',
-        borderRadius: '0 4px 4px 0',
+        display: 'flex', alignItems: 'center', gap: 8,
+        padding: '5px 14px',
+        cursor: 'pointer',
+        background: isSelected ? `${color}18` : 'transparent',
+        borderLeft: `3px solid ${isSelected ? color : 'transparent'}`,
         transition: 'background 0.1s',
-        background: isFocused ? `${color}20` : 'transparent',
-        outline: isFocused ? `1.5px solid ${color}40` : 'none',
-        outlineOffset: -1,
       }}
-      onMouseOver={e => { if (!isFocused) (e.currentTarget as HTMLDivElement).style.background = `${color}14` }}
-      onMouseOut={e => { if (!isFocused) (e.currentTarget as HTMLDivElement).style.background = 'transparent' }}
+      onMouseOver={e => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = 'rgba(0,0,0,0.04)' }}
+      onMouseOut={e => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = 'transparent' }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
-        <span style={{
-          fontSize: 11,
-          fontWeight: 600,
-          color,
-          fontFamily: 'ui-monospace, monospace',
-          letterSpacing: 0.2,
-        }}>
-          {block.blockType}
-        </span>
-        {isFocused && (
-          <span style={{
-            fontSize: 9, fontWeight: 700, color,
-            background: `${color}18`, borderRadius: 4,
-            padding: '1px 4px', letterSpacing: 0.3,
-          }}>
-            FOCUSED
-          </span>
-        )}
+      {/* Color dot */}
+      <div style={{ width: 6, height: 6, borderRadius: '50%', background: color, flexShrink: 0 }} />
+
+      {/* Block type */}
+      <span style={{
+        fontSize: 12, fontWeight: 600, color: isSelected ? color : 'rgba(0,0,0,0.75)',
+        fontFamily: 'ui-monospace, monospace', flex: 1,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {block.blockType}
+      </span>
+
+      {/* Badges */}
+      <div style={{ display: 'flex', gap: 3, flexShrink: 0 }}>
         {block.requiresResponse === 1 && (
-          <span style={{
-            fontSize: 9,
-            fontWeight: 700,
-            color: '#ff6b35',
-            background: 'rgba(255,107,53,0.12)',
-            borderRadius: 4,
-            padding: '1px 4px',
-            letterSpacing: 0.3,
-          }}>
-            RESPONSE
-          </span>
+          <span style={{ fontSize: 8, fontWeight: 700, color: '#ff6b35', background: 'rgba(255,107,53,0.12)', borderRadius: 3, padding: '1px 3px' }}>R</span>
         )}
         {block.showsInInbox === 1 && (
-          <span style={{
-            fontSize: 9,
-            fontWeight: 700,
-            color: '#007aff',
-            background: 'rgba(0,122,255,0.12)',
-            borderRadius: 4,
-            padding: '1px 4px',
-            letterSpacing: 0.3,
-          }}>
-            INBOX
-          </span>
+          <span style={{ fontSize: 8, fontWeight: 700, color: '#007aff', background: 'rgba(0,122,255,0.12)', borderRadius: 3, padding: '1px 3px' }}>I</span>
         )}
       </div>
-      <div style={{ fontSize: 11, color: 'rgba(0,0,0,0.55)', marginTop: 1, fontFamily: 'ui-monospace, monospace' }}>
-        {shortID}
-      </div>
     </div>
   )
 }
 
-function ScriptSection({ scriptID: _scriptID, blocks }: { scriptID: string; blocks: Block[] }) {
-  const first = blocks[0]
-  const scriptName = first?.scriptName ?? 'Unknown Script'
+// ---- Script group header ----
 
+function ScriptGroupHeader({ blocks, allBlocks }: { blocks: Block[]; allBlocks: Block[] }) {
+  const scriptID = blocks[0]?.scriptID
+  // Use first block from the FULL blocks list for this script — icon data may only be on
+  // block types that don't pass the current screen filter (e.g. tile vs status)
+  const iconSource = allBlocks.find(b => b.scriptID === scriptID && (b.scriptIconSVG || b.scriptIconData || b.scriptIcon))
+    ?? blocks[0]
+  const scriptName = blocks[0]?.scriptName ?? 'Unknown'
   return (
-    <div style={{ marginBottom: 12 }}>
-      <div style={{
-        fontSize: 11,
-        fontWeight: 700,
-        color: 'rgba(0,0,0,0.8)',
-        marginBottom: 5,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 5,
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 6,
+      padding: '8px 14px 4px',
+    }}>
+      <ScriptIcon
+        scriptIconSVG={iconSource?.scriptIconSVG}
+        scriptIconData={iconSource?.scriptIconData}
+        scriptIcon={iconSource?.scriptIcon}
+        scriptName={scriptName}
+        size={14}
+      />
+      <span style={{
+        fontSize: 11, fontWeight: 700, color: 'rgba(0,0,0,0.6)',
+        flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>
-        <span style={{ fontSize: 13 }}>
-          {first?.scriptIcon ?? '📋'}
-        </span>
-        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {scriptName}
-        </span>
-        <span style={{
-          fontSize: 10,
-          fontWeight: 600,
-          color: 'rgba(0,0,0,0.35)',
-          background: 'rgba(0,0,0,0.06)',
-          borderRadius: 6,
-          padding: '1px 5px',
-        }}>
-          {blocks.length}
-        </span>
-      </div>
-      {blocks.map(b => (
-        <BlockRow key={b.blockID} block={b} />
-      ))}
+        {scriptName}
+      </span>
+      <span style={{
+        fontSize: 10, fontWeight: 600, color: 'rgba(0,0,0,0.3)',
+        background: 'rgba(0,0,0,0.05)', borderRadius: 5, padding: '0 4px',
+      }}>
+        {blocks.length}
+      </span>
     </div>
   )
 }
 
-function CopyAllButton({ blockID }: { blockID: string }) {
-  const [copied, setCopied] = useState(false)
+// ---- JSON viewer ----
 
-  function handleCopy() {
-    const phoneEl = document.getElementById('phone-screen')
-    if (!phoneEl) return
-    const el = phoneEl.querySelector(`[data-block-id="${blockID}"]`) as HTMLElement | null
-    if (!el) return
-    const cs = getComputedStyle(el)
-    const rect = el.getBoundingClientRect()
-    const phoneRect = phoneEl.getBoundingClientRect()
-    const scale = phoneRect.width / phoneEl.offsetWidth
-    const data = {
-      width: Math.round(rect.width / scale),
-      height: Math.round(rect.height / scale),
-      paddingTop: Math.round(parseFloat(cs.paddingTop) || 0),
-      paddingRight: Math.round(parseFloat(cs.paddingRight) || 0),
-      paddingBottom: Math.round(parseFloat(cs.paddingBottom) || 0),
-      paddingLeft: Math.round(parseFloat(cs.paddingLeft) || 0),
-      gap: (() => {
-        const parent = el.parentElement
-        if (!parent) return 0
-        const pcs = getComputedStyle(parent)
-        if (pcs.display !== 'flex' && pcs.display !== 'grid') return 0
-        return Math.round(parseFloat(pcs.gap.split(' ')[0]) || 0)
-      })(),
+function JsonToken({ value }: { value: unknown; depth?: number }) {
+  const [open, setOpen] = useState(true)
+
+  if (value === null) return <span style={{ color: '#999' }}>null</span>
+  if (typeof value === 'boolean') return <span style={{ color: '#569cd6' }}>{String(value)}</span>
+  if (typeof value === 'number') return <span style={{ color: '#b5cea8' }}>{value}</span>
+  if (typeof value === 'string') {
+    // Truncate very long strings but make them expandable
+    const MAX = 120
+    if (value.length > MAX) {
+      return <StringTruncated value={value} max={MAX} />
     }
-    navigator.clipboard.writeText(JSON.stringify(data, null, 2)).catch(() => {})
+    return <span style={{ color: '#ce9178' }}>"{value}"</span>
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span style={{ color: 'rgba(0,0,0,0.45)' }}>[]</span>
+    return (
+      <span>
+        <button onClick={() => setOpen(v => !v)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'rgba(0,0,0,0.5)', fontSize: 11 }}>
+          {open ? '▾' : '▸'}
+        </button>
+        {open ? (
+          <span>
+            {'['}
+            <div style={{ paddingLeft: 14 }}>
+              {value.map((item, i) => (
+                <div key={i}><JsonToken value={item} />{i < value.length - 1 ? ',' : ''}</div>
+              ))}
+            </div>
+            {']'}
+          </span>
+        ) : (
+          <span style={{ color: 'rgba(0,0,0,0.4)' }}>[{value.length}]</span>
+        )}
+      </span>
+    )
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+    if (entries.length === 0) return <span style={{ color: 'rgba(0,0,0,0.45)' }}>{'{}'}</span>
+    return (
+      <span>
+        <button onClick={() => setOpen(v => !v)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'rgba(0,0,0,0.5)', fontSize: 11 }}>
+          {open ? '▾' : '▸'}
+        </button>
+        {open ? (
+          <span>
+            {'{'}
+            <div style={{ paddingLeft: 14 }}>
+              {entries.map(([k, v], i) => (
+                <div key={k}>
+                  <span style={{ color: '#9cdcfe' }}>"{k}"</span>
+                  <span style={{ color: 'rgba(0,0,0,0.5)' }}>: </span>
+                  <JsonToken value={v} />
+                  {i < entries.length - 1 ? ',' : ''}
+                </div>
+              ))}
+            </div>
+            {'}'}
+          </span>
+        ) : (
+          <span style={{ color: 'rgba(0,0,0,0.4)' }}>{'{…}'}</span>
+        )}
+      </span>
+    )
+  }
+  return <span>{String(value)}</span>
+}
+
+function StringTruncated({ value, max }: { value: string; max: number }) {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <span style={{ color: '#ce9178' }}>
+      "{expanded ? value : value.slice(0, max) + '…'}"{' '}
+      <button
+        onClick={() => setExpanded(v => !v)}
+        style={{ fontSize: 9, color: 'rgba(0,0,0,0.4)', background: 'rgba(0,0,0,0.06)', border: 'none', borderRadius: 3, cursor: 'pointer', padding: '0 3px' }}
+      >
+        {expanded ? 'less' : 'more'}
+      </button>
+    </span>
+  )
+}
+
+function BlockPayloadPanel({ block, onClose }: { block: Block; onClose: () => void }) {
+  const [copied, setCopied] = useState(false)
+  const color = BLOCK_TYPE_COLOR[block.blockType] ?? '#8e8e93'
+  let parsed: unknown = null
+  let parseError = false
+  try { parsed = JSON.parse(block.payload) } catch { parseError = true }
+
+  function copyPayload() {
+    navigator.clipboard.writeText(block.payload).catch(() => {})
     setCopied(true)
     setTimeout(() => setCopied(false), 400)
   }
 
   return (
-    <button
-      onClick={handleCopy}
-      style={{
-        fontSize: 9, fontWeight: 600,
-        color: copied ? 'rgb(52,199,89)' : 'rgb(255,45,120)',
-        background: copied ? 'rgba(52,199,89,0.1)' : 'rgba(255,45,120,0.1)',
-        borderRadius: 4, padding: '1px 5px', letterSpacing: 0.3,
-        border: 'none', cursor: 'pointer',
-      }}
-    >
-      {copied ? 'copied!' : 'copy all'}
-    </button>
+    <div style={{ borderTop: '1px solid rgba(0,0,0,0.07)', flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
+      {/* Section header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px 6px', background: 'rgba(0,0,0,0.02)' }}>
+        <div style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }} />
+        <span style={{ fontSize: 12, fontWeight: 700, color: 'rgba(0,0,0,0.75)', fontFamily: 'ui-monospace, monospace', flex: 1 }}>
+          {block.blockType}
+        </span>
+        <span style={{ fontSize: 10, color: 'rgba(0,0,0,0.3)', fontFamily: 'ui-monospace, monospace' }}>
+          {block.blockID.slice(-8)}
+        </span>
+        <button
+          onClick={copyPayload}
+          style={{ fontSize: 9, fontWeight: 600, color: copied ? 'rgb(52,199,89)' : 'rgba(0,0,0,0.4)', background: copied ? 'rgba(52,199,89,0.1)' : 'rgba(0,0,0,0.06)', border: 'none', borderRadius: 4, padding: '2px 6px', cursor: 'pointer' }}
+        >
+          {copied ? 'copied' : 'copy'}
+        </button>
+        <button
+          onClick={onClose}
+          style={{ fontSize: 14, lineHeight: 1, color: 'rgba(0,0,0,0.3)', background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px' }}
+        >
+          ×
+        </button>
+      </div>
+
+      {/* JSON tree */}
+      <div style={{
+        maxHeight: 300, overflowY: 'auto',
+        padding: '6px 14px 12px',
+        fontSize: 11, lineHeight: 1.6,
+        fontFamily: 'ui-monospace, monospace',
+        color: 'rgba(0,0,0,0.75)',
+        scrollbarWidth: 'none',
+      }}>
+        {parseError
+          ? <span style={{ color: '#ff3b30', fontSize: 10 }}>{block.payload}</span>
+          : <JsonToken value={parsed} />
+        }
+      </div>
+    </div>
   )
 }
 
@@ -281,72 +358,58 @@ export default function UIInspectorPanel() {
   const { blocks, loading } = useBlocks()
   const { name: screenName, params, filterBlocks } = getScreenInfo(location.pathname)
   const { showRedlines, focusedBlockID, setFocusedBlockID } = useRedlines()
+  const [selectedBlockID, setSelectedBlockID] = useState<string | null>(null)
 
-  // Clear focus when redlines turns off or screen changes
-  useEffect(() => {
-    if (!showRedlines) setFocusedBlockID(null)
-  }, [showRedlines, setFocusedBlockID])
+  useEffect(() => { setSelectedBlockID(null) }, [location.pathname])
+  useEffect(() => { if (!showRedlines) setFocusedBlockID(null) }, [showRedlines, setFocusedBlockID])
+  useEffect(() => { setFocusedBlockID(null) }, [location.pathname, setFocusedBlockID])
 
-  useEffect(() => {
-    setFocusedBlockID(null)
-  }, [location.pathname, setFocusedBlockID])
-
-  // Apply the same block filter the current screen uses
   const screenBlocks = filterBlocks(blocks)
-
-  // Group filtered blocks by scriptID
   const grouped = screenBlocks.reduce<Record<string, Block[]>>((acc, block) => {
     if (!acc[block.scriptID]) acc[block.scriptID] = []
     acc[block.scriptID].push(block)
     return acc
   }, {})
-
   const scriptIDs = Object.keys(grouped)
 
+  // Active selection: local click takes priority, then redlines focus
+  const activeBlockID = selectedBlockID ?? focusedBlockID
+  const selectedBlock = activeBlockID ? blocks.find(b => b.blockID === activeBlockID) ?? null : null
+
+  function handleSelect(id: string | null) {
+    setSelectedBlockID(id)
+    if (showRedlines) setFocusedBlockID(id)
+  }
+
   return (
-    <div
-      style={{
-        width: 260,
-        height: 844,
-        flexShrink: 0,
-        alignSelf: 'flex-start',
-        display: 'flex',
-        flexDirection: 'column',
-        background: 'rgba(255,255,255,0.88)',
-        backdropFilter: 'blur(16px)',
-        WebkitBackdropFilter: 'blur(16px)',
-        borderRadius: 14,
-        border: '1px solid rgba(0,0,0,0.10)',
-        boxShadow: '0 4px 20px rgba(0,0,0,0.08)',
-        overflow: 'hidden',
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-      }}
-    >
-      {/* Header */}
-      <div style={{
-        padding: '10px 14px 8px',
-        borderBottom: '1px solid rgba(0,0,0,0.07)',
-        background: 'rgba(0,0,0,0.02)',
-      }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: 'rgba(0,0,0,0.4)', letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 6 }}>
+    <div style={{
+      width: 260,
+      maxHeight: 'calc(100vh - 120px)',
+      flexShrink: 0,
+      display: 'flex',
+      flexDirection: 'column',
+      background: 'rgba(255,255,255,0.92)',
+      backdropFilter: 'blur(16px)',
+      WebkitBackdropFilter: 'blur(16px)',
+      borderRadius: 14,
+      border: '1px solid rgba(0,0,0,0.10)',
+      boxShadow: '0 4px 20px rgba(0,0,0,0.08)',
+      overflow: 'hidden',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    }}>
+
+      {/* ── Header ── */}
+      <div style={{ padding: '10px 14px 8px', borderBottom: '1px solid rgba(0,0,0,0.07)', background: 'rgba(0,0,0,0.02)', flexShrink: 0 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: 'rgba(0,0,0,0.35)', letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 4 }}>
           UI Inspector
         </div>
-
-        {/* Screen name */}
-        <div style={{ fontSize: 15, fontWeight: 700, color: 'rgba(0,0,0,0.85)', marginBottom: 2 }}>
-          {screenName}
-        </div>
-        <div style={{ fontSize: 10, color: 'rgba(0,0,0,0.35)', fontFamily: 'ui-monospace, monospace' }}>
-          {location.pathname}
-        </div>
-
-        {/* Route params */}
+        <div style={{ fontSize: 15, fontWeight: 700, color: 'rgba(0,0,0,0.85)', marginBottom: 1 }}>{screenName}</div>
+        <div style={{ fontSize: 10, color: 'rgba(0,0,0,0.35)', fontFamily: 'ui-monospace, monospace' }}>{location.pathname}</div>
         {Object.keys(params).length > 0 && (
-          <div style={{ marginTop: 7, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 2 }}>
             {Object.entries(params).map(([k, v]) => (
               <div key={k} style={{ fontSize: 10, fontFamily: 'ui-monospace, monospace', color: 'rgba(0,0,0,0.5)' }}>
-                <span style={{ color: '#5856d6', fontWeight: 600 }}>{k}</span>
-                {': '}
+                <span style={{ color: '#5856d6', fontWeight: 600 }}>{k}</span>{': '}
                 <span style={{ color: 'rgba(0,0,0,0.6)' }}>{v.length > 22 ? v.slice(0, 22) + '…' : v}</span>
               </div>
             ))}
@@ -354,58 +417,38 @@ export default function UIInspectorPanel() {
         )}
       </div>
 
-      {/* Blocks section */}
-      <div style={{ flex: 1, padding: '10px 14px', overflowY: 'auto' }}>
-        <div style={{
-          fontSize: 11,
-          fontWeight: 700,
-          color: 'rgba(0,0,0,0.4)',
-          letterSpacing: 0.8,
-          textTransform: 'uppercase',
-          marginBottom: 10,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 5,
-        }}>
-          Blocks
-          {showRedlines && !focusedBlockID && (
-            <span style={{ fontSize: 9, fontWeight: 600, color: 'rgb(255,45,120)', background: 'rgba(255,45,120,0.1)', borderRadius: 4, padding: '1px 5px', letterSpacing: 0.3, textTransform: 'none' }}>
-              click to focus
-            </span>
-          )}
-          {showRedlines && focusedBlockID && (
-            <CopyAllButton blockID={focusedBlockID} />
-          )}
+      {/* ── Block list (scrollable, shrinks when detail is open) ── */}
+      <div style={{ flex: 1, overflowY: 'auto', scrollbarWidth: 'none', paddingBottom: 6 }}>
+        {/* Section label */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '8px 14px 4px' }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(0,0,0,0.35)', letterSpacing: 0.8, textTransform: 'uppercase' }}>
+            Blocks
+          </span>
           {!loading && (
-            <span style={{
-              fontSize: 10,
-              fontWeight: 600,
-              color: 'rgba(0,0,0,0.35)',
-              background: 'rgba(0,0,0,0.06)',
-              borderRadius: 6,
-              padding: '1px 5px',
-            }}>
+            <span style={{ fontSize: 10, fontWeight: 600, color: 'rgba(0,0,0,0.3)', background: 'rgba(0,0,0,0.05)', borderRadius: 5, padding: '0 4px' }}>
               {screenBlocks.length}
             </span>
           )}
+          {!selectedBlock && (
+            <span style={{ fontSize: 9, color: 'rgba(0,0,0,0.3)', marginLeft: 2 }}>tap to inspect</span>
+          )}
         </div>
 
-        {loading && (
-          <div style={{ fontSize: 12, color: 'rgba(0,0,0,0.35)', textAlign: 'center', paddingTop: 12 }}>
-            Loading…
-          </div>
-        )}
-
-        {!loading && screenBlocks.length === 0 && (
-          <div style={{ fontSize: 12, color: 'rgba(0,0,0,0.3)', textAlign: 'center', paddingTop: 12 }}>
-            No blocks
-          </div>
-        )}
+        {loading && <div style={{ fontSize: 12, color: 'rgba(0,0,0,0.3)', textAlign: 'center', padding: 16 }}>Loading…</div>}
+        {!loading && screenBlocks.length === 0 && <div style={{ fontSize: 12, color: 'rgba(0,0,0,0.3)', textAlign: 'center', padding: 16 }}>No blocks</div>}
 
         {!loading && scriptIDs.map(id => (
-          <ScriptSection key={id} scriptID={id} blocks={grouped[id]} />
+          <div key={id}>
+            <ScriptGroupHeader blocks={grouped[id]} allBlocks={blocks} />
+            {grouped[id].map(b => (
+              <BlockListRow key={b.blockID} block={b} onSelect={handleSelect} isSelected={activeBlockID === b.blockID} />
+            ))}
+          </div>
         ))}
       </div>
+
+      {/* ── Block detail / payload ── */}
+      {selectedBlock && <BlockPayloadPanel block={selectedBlock} onClose={() => handleSelect(null)} />}
     </div>
   )
 }

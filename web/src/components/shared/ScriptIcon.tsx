@@ -6,7 +6,7 @@ interface Props {
   size?: number
 }
 
-export default function ScriptIcon({ scriptIconData, scriptIconSVG, scriptIcon: _scriptIcon, scriptName, size = 36 }: Props) {
+export default function ScriptIcon({ scriptIconData, scriptIconSVG, scriptIcon, scriptName, size = 36 }: Props) {
   const style = { width: size, height: size, flexShrink: 0 }
 
   if (scriptIconData) {
@@ -38,6 +38,15 @@ export default function ScriptIcon({ scriptIconData, scriptIconSVG, scriptIcon: 
         className="rounded-xl overflow-hidden text-ask-text [&>svg]:block [&>svg]:w-full [&>svg]:h-full"
         dangerouslySetInnerHTML={{ __html: svg }}
       />
+    )
+  }
+
+  // Unicode emoji icon
+  if (scriptIcon) {
+    return (
+      <div style={{ ...style, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <span style={{ fontSize: size * 0.72, lineHeight: 1 }}>{scriptIcon}</span>
+      </div>
     )
   }
 

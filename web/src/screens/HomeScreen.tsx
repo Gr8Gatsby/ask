@@ -92,6 +92,11 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
   const inboxBlocks = blocks.filter(b => b.showsInInbox === 1)
   const urgency = dominantUrgency(inboxBlocks, blocks)
 
+  const tileBlock = blocks.find(b => b.blockType === 'tile')
+  const statusBlock = blocks.find(b => b.blockType === 'status')
+  // The block that drives the card's label/body/color display
+  const headerBlock = tileBlock ?? statusBlock
+
   const urgencyRank = (u?: Urgency) => u === 'urgent' ? 0 : u === 'info' ? 2 : 1
   const quickReplyBlock = inboxBlocks
     .filter(b => b.blockType === 'quick_reply')
@@ -139,7 +144,10 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
           scriptName={first.scriptName}
           size={36}
         />
-        <div className="flex-1 min-w-0">
+        <div
+          className="flex-1 min-w-0"
+          {...(headerBlock ? { 'data-block-id': headerBlock.blockID, 'data-block-type': headerBlock.blockType } : {})}
+        >
           <p className="text-[15px] font-semibold text-ask-text leading-tight truncate">{first.scriptName}</p>
           {label && (
             <div className="flex items-center gap-1.5 mt-0.5">
@@ -161,7 +169,11 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
       {agentSession && agentPayload && (
         <>
           <div className="h-px bg-ask-sep mx-3.5" />
-          <div className="flex items-center gap-2 px-3.5 py-2">
+          <div
+            className="flex items-center gap-2 px-3.5 py-2"
+            data-block-id={agentSession.blockID}
+            data-block-type="agent_session"
+          >
             <div
               className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${agentPayload.is_working ? 'animate-pulse' : ''}`}
               style={{ backgroundColor: agentPayload.is_working ? (useBrandColors ? (agentPayload.brand_color ?? '#8E8E93') : '#8E8E93') : undefined }}

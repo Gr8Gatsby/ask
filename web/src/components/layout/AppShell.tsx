@@ -1,9 +1,10 @@
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useState, useEffect, useRef, createContext, useContext } from 'react'
-import { Newspaper, GearSix, Bell, Code, FrameCorners } from '@phosphor-icons/react'
+import { Newspaper, GearSix, Bell, Code, FrameCorners, FolderOpen } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
 import UIInspectorPanel from './UIInspectorPanel'
 import RedlinesOverlay from './RedlinesOverlay'
+import RedlinesDetailPanel from './RedlinesDetailPanel'
 import { RedlinesProvider, useRedlines } from '../../lib/RedlinesContext'
 import { usePlatform, type Platform, type ThemeMode } from '../../lib/PlatformContext'
 import { ThemeProvider } from '@mui/material/styles'
@@ -100,46 +101,50 @@ function ControlBar() {
   const { showRedlines, setShowRedlines, inspectorOpen, setInspectorOpen } = useRedlines()
   return (
     <div
-      className="sticky top-0 z-10 flex items-center justify-center gap-3 px-6 py-2.5 border-b"
+      className="sticky top-0 z-10 border-b"
       style={{
-        background: 'rgba(245,245,247,0.85)',
+        background: 'rgba(245,245,247,0.92)',
         backdropFilter: 'blur(12px)',
         WebkitBackdropFilter: 'blur(12px)',
         borderColor: 'rgba(0,0,0,0.1)',
       }}
     >
-      <SegControl<Platform>
-        options={[{ value: 'ios', label: 'iOS' }, { value: 'android', label: 'Android' }]}
-        value={platform}
-        onChange={setPlatform}
-      />
-      <SegControl<ThemeMode>
-        options={[{ value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }]}
-        value={themeMode}
-        onChange={setThemeMode}
-      />
-      <button
-        onClick={() => setShowRedlines(!showRedlines)}
-        className="flex items-center gap-1.5 px-3 py-1 rounded-md text-[12px] font-semibold transition-all"
-        style={{
-          background: showRedlines ? 'rgba(255,45,120,0.12)' : 'rgba(0,0,0,0.06)',
-          color: showRedlines ? 'rgb(255,45,120)' : 'rgba(0,0,0,0.5)',
-        }}
-      >
-        <FrameCorners size={13} weight={showRedlines ? 'bold' : 'regular'} />
-        Redlines
-      </button>
-      <button
-        onClick={() => setInspectorOpen(!inspectorOpen)}
-        className="flex items-center gap-1.5 px-3 py-1 rounded-md text-[12px] font-semibold transition-all"
-        style={{
-          background: inspectorOpen ? 'rgba(0,122,255,0.12)' : 'rgba(0,0,0,0.06)',
-          color: inspectorOpen ? '#007aff' : 'rgba(0,0,0,0.5)',
-        }}
-      >
-        <Code size={13} weight={inspectorOpen ? 'bold' : 'regular'} />
-        Inspector
-      </button>
+      {/* Main row */}
+      <div className="flex items-center justify-center gap-3 px-6 py-2.5">
+        <SegControl<Platform>
+          options={[{ value: 'ios', label: 'iOS' }, { value: 'android', label: 'Android' }]}
+          value={platform}
+          onChange={setPlatform}
+        />
+        <SegControl<ThemeMode>
+          options={[{ value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }]}
+          value={themeMode}
+          onChange={setThemeMode}
+        />
+        <button
+          onClick={() => setShowRedlines(!showRedlines)}
+          className="flex items-center gap-1.5 px-3 py-1 rounded-md text-[12px] font-semibold transition-all"
+          style={{
+            background: showRedlines ? 'rgba(255,45,85,0.12)' : 'rgba(0,0,0,0.06)',
+            color: showRedlines ? 'rgb(255,45,85)' : 'rgba(0,0,0,0.5)',
+          }}
+        >
+          <FrameCorners size={13} weight={showRedlines ? 'bold' : 'regular'} />
+          Redlines
+        </button>
+        <button
+          onClick={() => setInspectorOpen(!inspectorOpen)}
+          className="flex items-center gap-1.5 px-3 py-1 rounded-md text-[12px] font-semibold transition-all"
+          style={{
+            background: inspectorOpen ? 'rgba(0,122,255,0.12)' : 'rgba(0,0,0,0.06)',
+            color: inspectorOpen ? '#007aff' : 'rgba(0,0,0,0.5)',
+          }}
+        >
+          <Code size={13} weight={inspectorOpen ? 'bold' : 'regular'} />
+          Inspector
+        </button>
+      </div>
+
     </div>
   )
 }
@@ -372,7 +377,7 @@ function IOSTabBar({ tab, isLight }: { tab: string; isLight: boolean }) {
               }`}
               style={{ borderColor: isLight ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.08)' }}
             >
-              <span className="text-base leading-none">📁</span>
+              <FolderOpen size={18} style={{ color: iconColor, flexShrink: 0 }} />
               <div className="min-w-0">
                 <p className="text-[14px] font-medium truncate" style={{ color: iconColor }}>{repo.name}</p>
                 <p className="text-[10px] font-mono truncate" style={{ color: isLight ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.4)' }}>{repo.path}</p>
@@ -544,7 +549,7 @@ function AppShellInner({ children }: Props) {
   const isLight = themeMode === 'light'
   const muiTheme = useMuiTheme()
   const [brandColor, setBrandColor] = useState<string | null>(null)
-  const { inspectorOpen } = useRedlines()
+  const { inspectorOpen, showRedlines } = useRedlines()
 
   const phoneAreaRef = useRef<HTMLDivElement>(null)
   const scale = usePhoneScale(phoneAreaRef)
@@ -574,11 +579,11 @@ function AppShellInner({ children }: Props) {
     : '0 0 0 0.5px rgba(0,0,0,0.3), 0 20px 60px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.3)'
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ background: '#f5f5f7' }}>
+    <div className="h-screen flex flex-col overflow-hidden" style={{ background: '#f5f5f7' }}>
       <ControlBar />
 
       {/* Phone area */}
-      <div ref={phoneAreaRef} className="flex-1 flex items-start justify-center py-8 px-8 overflow-hidden gap-6">
+      <div ref={phoneAreaRef} className="flex-1 flex items-start justify-center py-8 px-8 overflow-hidden" style={{ position: 'relative' }}>
         {/* zoom affects layout (unlike transform:scale), so sizing and absolute buttons all work naturally */}
         <div className="relative flex-shrink-0" style={{ zoom: scale }}>
           {/* Side buttons */}
@@ -635,12 +640,11 @@ function AppShellInner({ children }: Props) {
           <RedlinesOverlay framePad={framePad} />
         </div>
 
-        {/* Inspector panel — floats to the right of the phone */}
-        {inspectorOpen && (
-          <div style={{ paddingTop: 8 }}>
-            <UIInspectorPanel />
-          </div>
-        )}
+        {/* Side panels — fixed to viewport right edge, stacked vertically, don't affect phone position */}
+        <div style={{ position: 'fixed', top: 108, right: 16, zIndex: 50, display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 'calc(100vh - 120px)', overflowY: 'auto' }}>
+          {inspectorOpen && <UIInspectorPanel />}
+          {showRedlines && <RedlinesDetailPanel />}
+        </div>
       </div>
     </div>
   )

@@ -1,0 +1,8 @@
+{
+  "id": "hello-world",
+  "name": "Hello World",
+  "version": "1.0",
+  "description": "A simple Hello World demo script",
+  "entry": "main.py",
+  "icon": "hand.wave"
+}

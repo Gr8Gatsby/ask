@@ -195,6 +195,73 @@ function collectElements(): MeasuredEl[] {
 
 // ---- SVG helpers ----
 
+/** Inline W×H label centered on a non-named visual element */
+function SizeLabel({ el }: { el: MeasuredEl }) {
+  const text = `${Math.round(el.ow)}×${Math.round(el.oh)}`
+  const cx = el.ox + el.ow / 2
+  const cy = el.oy + el.oh / 2
+  const pillW = text.length * 5.5 + 8
+  const pillH = 14
+  // Don't render if element is too small to fit the label
+  if (el.ow < pillW + 4 || el.oh < pillH + 4) return null
+  return (
+    <g pointerEvents="none">
+      <rect x={cx - pillW / 2} y={cy - pillH / 2} width={pillW} height={pillH} rx={3}
+        fill="rgba(0,0,0,0.62)"
+      />
+      <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle"
+        fill="rgba(255,255,255,0.88)" fontSize={8} fontWeight={600}
+        fontFamily="ui-monospace, monospace" style={{ userSelect: 'none' }}
+      >
+        {text}
+      </text>
+    </g>
+  )
+}
+
+/** Blue spacing brackets between vertically adjacent named blocks */
+function SpacingAnnotations({ elements }: { elements: MeasuredEl[] }) {
+  const named = [...elements.filter(el => el.isNamedBlock)].sort((a, b) => a.oy - b.oy)
+  const SPACE_C = 'rgba(0,122,255,0.9)'
+  const FOOT = 10
+
+  const spacers: Array<{ y1: number; y2: number; cx: number; dist: number }> = []
+  for (let i = 0; i < named.length - 1; i++) {
+    const a = named[i], b = named[i + 1]
+    const gap = b.oy - (a.oy + a.oh)
+    if (gap <= 0) continue
+    // Only annotate if elements horizontally overlap
+    const xOverlap = Math.min(a.ox + a.ow, b.ox + b.ow) - Math.max(a.ox, b.ox)
+    if (xOverlap < 16) continue
+    const cx = Math.max(a.ox, b.ox) + xOverlap / 2
+    spacers.push({ y1: a.oy + a.oh, y2: b.oy, cx, dist: Math.round(gap) })
+  }
+
+  return (
+    <>
+      {spacers.map((s, i) => {
+        const midY = (s.y1 + s.y2) / 2
+        const labelW = String(s.dist).length * 5.5 + 14
+        return (
+          <g key={i} pointerEvents="none">
+            <line x1={s.cx} y1={s.y1} x2={s.cx} y2={s.y2} stroke={SPACE_C} strokeWidth={1} />
+            <line x1={s.cx - FOOT} y1={s.y1} x2={s.cx + FOOT} y2={s.y1} stroke={SPACE_C} strokeWidth={1} />
+            <line x1={s.cx - FOOT} y1={s.y2} x2={s.cx + FOOT} y2={s.y2} stroke={SPACE_C} strokeWidth={1} />
+            <rect x={s.cx - labelW / 2} y={midY - 8} width={labelW} height={16} rx={4}
+              fill="rgba(0,122,255,0.88)" />
+            <text x={s.cx} y={midY} textAnchor="middle" dominantBaseline="middle"
+              fill="white" fontSize={8} fontWeight={600}
+              fontFamily="ui-monospace, monospace" style={{ userSelect: 'none' }}
+            >
+              {s.dist}px
+            </text>
+          </g>
+        )
+      })}
+    </>
+  )
+}
+
 function TypeLabel({ x, y, text, color }: { x: number; y: number; text: string; color: string }) {
   const pillW = text.length * 6.2 + 8
   const pillH = 16
@@ -208,40 +275,6 @@ function TypeLabel({ x, y, text, color }: { x: number; y: number; text: string; 
         dominantBaseline="middle"
         fill={color} fillOpacity={1}
         fontSize={10} fontWeight={600} fontFamily="ui-monospace, monospace"
-        style={{ userSelect: 'none' }}
-      >
-        {text}
-      </text>
-    </g>
-  )
-}
-
-function CopyLabel({ x, y, text, anchor = 'start', copyValue }: {
-  x: number; y: number; text: string
-  anchor?: 'start' | 'middle' | 'end'
-  copyValue: string
-}) {
-  const [copied, setCopied] = useState(false)
-  const pillW = text.length * 6.2 + 10
-  const pillH = 18
-  const pillX = anchor === 'middle' ? x - pillW / 2 : anchor === 'end' ? x - pillW : x
-
-  function handleClick(e: React.MouseEvent) {
-    e.stopPropagation()
-    navigator.clipboard.writeText(copyValue).catch(() => {})
-    setCopied(true)
-    setTimeout(() => setCopied(false), 400)
-  }
-
-  return (
-    <g onClick={handleClick} style={{ pointerEvents: 'auto', cursor: 'pointer' }}>
-      <rect x={pillX} y={y - pillH / 2} width={pillW} height={pillH} rx={4}
-        fill={copied ? 'rgba(52,199,89,0.85)' : 'rgba(25,25,25,0.88)'}
-      />
-      <text
-        x={x} y={y}
-        textAnchor={anchor} dominantBaseline="middle"
-        fill="white" fontSize={10} fontWeight={500} fontFamily="ui-monospace, monospace"
         style={{ userSelect: 'none' }}
       >
         {text}
@@ -329,50 +362,19 @@ function DimensionLines({ el }: { el: MeasuredEl }) {
   )
 }
 
-/** Padding/gap labels rendered beside the left height rail for the focused element */
-function MeasurementLabels({ el }: { el: MeasuredEl }) {
-  const { oy: y, oh: h,
-    paddingTop: pt, paddingRight: pr, paddingBottom: pb, paddingLeft: pl,
-    rowGap: gap, showGap } = el
-
-  const items: Array<{ text: string; value: string }> = []
-  if (pt > 0) items.push({ text: `pt: ${Math.round(pt)}px`, value: `padding-top: ${Math.round(pt)}px` })
-  if (pr > 0) items.push({ text: `pr: ${Math.round(pr)}px`, value: `padding-right: ${Math.round(pr)}px` })
-  if (pb > 0) items.push({ text: `pb: ${Math.round(pb)}px`, value: `padding-bottom: ${Math.round(pb)}px` })
-  if (pl > 0) items.push({ text: `pl: ${Math.round(pl)}px`, value: `padding-left: ${Math.round(pl)}px` })
-  if (showGap && gap > 0) items.push({ text: `gap: ${Math.round(gap)}px`, value: `gap: ${Math.round(gap)}px` })
-
-  if (items.length === 0) return null
-
-  const labelH = 18
-  const labelGap = 4
-  const totalH = items.length * labelH + (items.length - 1) * labelGap
-  const startY = y + (h - totalH) / 2
-  const labelX = RAIL_LEFT - 14
-
-  return (
-    <>
-      {items.map((item, i) => (
-        <CopyLabel
-          key={item.text}
-          x={labelX}
-          y={startY + i * (labelH + labelGap) + labelH / 2}
-          text={item.text}
-          anchor="end"
-          copyValue={item.value}
-        />
-      ))}
-    </>
-  )
-}
-
 // ---- Main component ----
 
 export default function RedlinesOverlay({ framePad }: { framePad: number }) {
-  const { showRedlines, focusedBlockID, setFocusedBlockID } = useRedlines()
+  const { showRedlines, focusedBlockID, setFocusedBlockID, showSpacing, showAllDims } = useRedlines()
+  const focusedBlockIDRef = useRef<string | null>(null)
   const location = useLocation()
   const [elements, setElements] = useState<MeasuredEl[]>([])
   const pendingRaf = useRef<number | null>(null)
+  const elementsRef = useRef<MeasuredEl[]>([])
+
+  // Keep refs in sync so capture-phase handler always sees fresh data
+  useEffect(() => { elementsRef.current = elements }, [elements])
+  useEffect(() => { focusedBlockIDRef.current = focusedBlockID }, [focusedBlockID])
 
   const scheduleMeasure = useCallback(() => {
     if (pendingRaf.current !== null) cancelAnimationFrame(pendingRaf.current)
@@ -415,6 +417,38 @@ export default function RedlinesOverlay({ framePad }: { framePad: number }) {
     if (showRedlines) scheduleMeasure()
   }, [location.pathname, showRedlines, scheduleMeasure])
 
+  // Capture-phase click interceptor: DevTools inspect mode
+  useEffect(() => {
+    if (!showRedlines) return
+    const phoneEl = document.getElementById('phone-screen')
+    if (!phoneEl) return
+
+    phoneEl.style.cursor = 'crosshair'
+
+    function handleCapture(e: MouseEvent) {
+      e.stopPropagation()
+      e.preventDefault()
+      const phoneRect = phoneEl!.getBoundingClientRect()
+      const scale = phoneRect.width / phoneEl!.offsetWidth
+      const lx = (e.clientX - phoneRect.left) / scale
+      const ly = (e.clientY - phoneRect.top) / scale
+      const hits = elementsRef.current.filter(el =>
+        lx >= el.ox && lx <= el.ox + el.ow &&
+        ly >= el.oy && ly <= el.oy + el.oh
+      )
+      // Pick the smallest element at that point (most specific); click again to deselect
+      const best = hits.sort((a, b) => (a.ow * a.oh) - (b.ow * b.oh))[0]
+      const current = focusedBlockIDRef.current
+      setFocusedBlockID(best ? (current === best.id ? null : best.id) : null)
+    }
+
+    phoneEl.addEventListener('click', handleCapture, { capture: true })
+    return () => {
+      phoneEl.style.cursor = ''
+      phoneEl.removeEventListener('click', handleCapture, { capture: true })
+    }
+  }, [showRedlines, setFocusedBlockID])
+
   if (!showRedlines || elements.length === 0) return null
 
   const focused = focusedBlockID ? elements.find(e => e.id === focusedBlockID) ?? null : null
@@ -432,15 +466,18 @@ export default function RedlinesOverlay({ framePad }: { framePad: number }) {
         zIndex: 20,
       }}
     >
-      {/* Padding fills for focused element (drawn below outlines) */}
+      {/* Padding fills for focused element (drawn below everything) */}
       {focused && <PaddingFills el={focused} />}
       {focused && <GapFill el={focused} />}
 
-      {/* Dimension lines for ALL named blocks — always on, go to bottom and left rails */}
+      {/* Spacing annotations between adjacent named blocks */}
+      {showSpacing && <SpacingAnnotations elements={elements} />}
+
+      {/* Dimension lines for ALL named blocks — always on */}
       {elements.filter(el => el.isNamedBlock).map(el => (
         <DimensionLines key={el.id + '-dim'} el={el} />
       ))}
-      {/* Dimension lines for focused visual element (non-named) */}
+      {/* Dimension lines for focused non-named element */}
       {focused && !focused.isNamedBlock && (
         <DimensionLines el={focused} />
       )}
@@ -457,19 +494,19 @@ export default function RedlinesOverlay({ framePad }: { framePad: number }) {
               stroke={RL_STROKE}
               strokeWidth={isFocused ? 2 : el.isNamedBlock ? 1 : 0.75}
               strokeOpacity={dimmed ? 0.1 : isFocused ? 1 : el.isNamedBlock ? 0.75 : 0.45}
-              style={{ pointerEvents: 'auto', cursor: 'pointer' }}
-              onClick={() => setFocusedBlockID(isFocused ? null : el.id)}
             />
-            {/* Type label pill — named blocks only */}
+            {/* Type label — named blocks always; non-named blocks in allDims mode */}
             {el.isNamedBlock && (
               <TypeLabel x={el.x + 4} y={el.y + 4} text={el.blockType} color={el.color} />
+            )}
+            {/* Size label — non-named visual elements when allDims is on */}
+            {showAllDims && !el.isNamedBlock && !isFocused && (
+              <SizeLabel el={el} />
             )}
           </g>
         )
       })}
 
-      {/* Focused element: padding/gap measurement labels beside left rail */}
-      {focused && <MeasurementLabels el={focused} />}
     </svg>
   )
 }
