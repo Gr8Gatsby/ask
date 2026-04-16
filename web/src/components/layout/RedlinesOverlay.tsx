@@ -274,67 +274,72 @@ function GapFill({ el }: { el: MeasuredEl }) {
   )
 }
 
-// Dimension line constants
-const DIM_OFFSET = 20    // distance from element edge to the dimension line
-const DIM_GAP = 3        // gap between element edge and extension line start
-const DIM_OVERHANG = 5   // extension line extends this far past the dimension line
+// ---- Dimension rail constants ----
+// Width: extension lines go DOWN to a rail below the phone screen.
+// Height: extension lines go LEFT to a rail left of the phone screen.
+// This gives the architectural look with lines going to the far edges.
+const RAIL_BOTTOM = 864   // width dim lines — just below the 844px phone screen
+const RAIL_LEFT   = -18   // height dim lines — to the left of the phone screen
+const DIM_TICK    = 5     // half-length of tick marks at dimension line endpoints
 
-function DimensionLines({ el, side }: { el: MeasuredEl; side: 'left' | 'right' }) {
+/** Always-on architectural dimension lines: extension lines go to the bottom and left margin rails */
+function DimensionLines({ el }: { el: MeasuredEl }) {
   const { ox: x, oy: y, ow: w, oh: h } = el
-  const displayW = Math.round(w)
-  const displayH = Math.round(h)
-
-  // Width dimension line — above element
-  // Extension lines run from (element edge + GAP) perpendicular up to (dim line + OVERHANG)
-  const wDimY = y - DIM_OFFSET
-  const wExtFrom = y - DIM_GAP            // extension line starts just above element edge
-  const wExtTo = wDimY - DIM_OVERHANG     // extension line ends past the dimension line
-
-  // Height dimension line — on annotation side
-  // Extension lines run from (element edge + GAP) perpendicular out to (dim line + OVERHANG)
-  const hDimX = side === 'left' ? x - DIM_OFFSET : x + w + DIM_OFFSET
-  const hExtFrom = side === 'left' ? x - DIM_GAP : x + w + DIM_GAP
-  const hExtTo   = side === 'left' ? hDimX - DIM_OVERHANG : hDimX + DIM_OVERHANG
+  const dw = Math.round(w)
+  const dh = Math.round(h)
 
   return (
-    <>
-      {/* ── Width ── */}
-      {/* Extension lines — thin, project from element edges up through the dimension line */}
-      <line x1={x}     y1={wExtFrom} x2={x}     y2={wExtTo} stroke={RL_STROKE} strokeWidth={0.75} />
-      <line x1={x + w} y1={wExtFrom} x2={x + w} y2={wExtTo} stroke={RL_STROKE} strokeWidth={0.75} />
-      {/* Dimension line — spans exactly element width */}
-      <line x1={x} y1={wDimY} x2={x + w} y2={wDimY} stroke={RL_STROKE} strokeWidth={1} />
-      {/* Label — above the dimension line */}
-      <CopyLabel x={x + w / 2} y={wExtTo - 8} text={`${displayW}px`} anchor="middle" copyValue={`width: ${displayW}px`} />
+    <g pointerEvents="none">
+      {/* ── Width — extension lines go DOWN from element bottom to RAIL_BOTTOM ── */}
+      <line x1={x}     y1={y + h} x2={x}     y2={RAIL_BOTTOM} stroke={RL_STROKE} strokeWidth={0.5} strokeOpacity={0.5} />
+      <line x1={x + w} y1={y + h} x2={x + w} y2={RAIL_BOTTOM} stroke={RL_STROKE} strokeWidth={0.5} strokeOpacity={0.5} />
+      {/* Dimension line at the bottom rail */}
+      <line x1={x} y1={RAIL_BOTTOM} x2={x + w} y2={RAIL_BOTTOM} stroke={RL_STROKE} strokeWidth={1} strokeOpacity={0.9} />
+      {/* Tick marks */}
+      <line x1={x}     y1={RAIL_BOTTOM - DIM_TICK} x2={x}     y2={RAIL_BOTTOM + DIM_TICK} stroke={RL_STROKE} strokeWidth={1} strokeOpacity={0.9} />
+      <line x1={x + w} y1={RAIL_BOTTOM - DIM_TICK} x2={x + w} y2={RAIL_BOTTOM + DIM_TICK} stroke={RL_STROKE} strokeWidth={1} strokeOpacity={0.9} />
+      {/* Label below the rail */}
+      <text x={x + w / 2} y={RAIL_BOTTOM + 14}
+        textAnchor="middle" dominantBaseline="auto"
+        fill={RL_STROKE} fillOpacity={0.95}
+        fontSize={9} fontWeight={600} fontFamily="ui-monospace, monospace"
+        style={{ userSelect: 'none' }}
+      >
+        {dw}px
+      </text>
 
-      {/* ── Height ── */}
-      {/* Extension lines — project from element top/bottom edges out through the dimension line */}
-      <line x1={hExtFrom} y1={y}     x2={hExtTo} y2={y}     stroke={RL_STROKE} strokeWidth={0.75} />
-      <line x1={hExtFrom} y1={y + h} x2={hExtTo} y2={y + h} stroke={RL_STROKE} strokeWidth={0.75} />
-      {/* Dimension line — spans exactly element height */}
-      <line x1={hDimX} y1={y} x2={hDimX} y2={y + h} stroke={RL_STROKE} strokeWidth={1} />
-      {/* Label — beside the dimension line, beyond the overhang */}
-      <CopyLabel
-        x={side === 'left' ? hExtTo - 6 : hExtTo + 6}
-        y={y + h / 2}
-        text={`${displayH}px`}
-        anchor={side === 'left' ? 'end' : 'start'}
-        copyValue={`height: ${displayH}px`}
-      />
-    </>
+      {/* ── Height — extension lines go LEFT from element left edge to RAIL_LEFT ── */}
+      <line x1={x} y1={y}     x2={RAIL_LEFT} y2={y}     stroke={RL_STROKE} strokeWidth={0.5} strokeOpacity={0.5} />
+      <line x1={x} y1={y + h} x2={RAIL_LEFT} y2={y + h} stroke={RL_STROKE} strokeWidth={0.5} strokeOpacity={0.5} />
+      {/* Dimension line at the left rail */}
+      <line x1={RAIL_LEFT} y1={y} x2={RAIL_LEFT} y2={y + h} stroke={RL_STROKE} strokeWidth={1} strokeOpacity={0.9} />
+      {/* Tick marks */}
+      <line x1={RAIL_LEFT - DIM_TICK} y1={y}     x2={RAIL_LEFT + DIM_TICK} y2={y}     stroke={RL_STROKE} strokeWidth={1} strokeOpacity={0.9} />
+      <line x1={RAIL_LEFT - DIM_TICK} y1={y + h} x2={RAIL_LEFT + DIM_TICK} y2={y + h} stroke={RL_STROKE} strokeWidth={1} strokeOpacity={0.9} />
+      {/* Label to the left of the rail */}
+      <text x={RAIL_LEFT - 9} y={y + h / 2}
+        textAnchor="end" dominantBaseline="middle"
+        fill={RL_STROKE} fillOpacity={0.95}
+        fontSize={9} fontWeight={600} fontFamily="ui-monospace, monospace"
+        style={{ userSelect: 'none' }}
+      >
+        {dh}px
+      </text>
+    </g>
   )
 }
 
-function MeasurementLabels({ el, side }: { el: MeasuredEl; side: 'left' | 'right' }) {
-  const { ox: x, oy: y, ow: w, oh: h,
+/** Padding/gap labels rendered beside the left height rail for the focused element */
+function MeasurementLabels({ el }: { el: MeasuredEl }) {
+  const { oy: y, oh: h,
     paddingTop: pt, paddingRight: pr, paddingBottom: pb, paddingLeft: pl,
     rowGap: gap, showGap } = el
 
   const items: Array<{ text: string; value: string }> = []
-  if (pt > 0) items.push({ text: `padding-top: ${Math.round(pt)}px`, value: `padding-top: ${Math.round(pt)}px` })
-  if (pr > 0) items.push({ text: `padding-right: ${Math.round(pr)}px`, value: `padding-right: ${Math.round(pr)}px` })
-  if (pb > 0) items.push({ text: `padding-bottom: ${Math.round(pb)}px`, value: `padding-bottom: ${Math.round(pb)}px` })
-  if (pl > 0) items.push({ text: `padding-left: ${Math.round(pl)}px`, value: `padding-left: ${Math.round(pl)}px` })
+  if (pt > 0) items.push({ text: `pt: ${Math.round(pt)}px`, value: `padding-top: ${Math.round(pt)}px` })
+  if (pr > 0) items.push({ text: `pr: ${Math.round(pr)}px`, value: `padding-right: ${Math.round(pr)}px` })
+  if (pb > 0) items.push({ text: `pb: ${Math.round(pb)}px`, value: `padding-bottom: ${Math.round(pb)}px` })
+  if (pl > 0) items.push({ text: `pl: ${Math.round(pl)}px`, value: `padding-left: ${Math.round(pl)}px` })
   if (showGap && gap > 0) items.push({ text: `gap: ${Math.round(gap)}px`, value: `gap: ${Math.round(gap)}px` })
 
   if (items.length === 0) return null
@@ -343,11 +348,7 @@ function MeasurementLabels({ el, side }: { el: MeasuredEl; side: 'left' | 'right
   const labelGap = 4
   const totalH = items.length * labelH + (items.length - 1) * labelGap
   const startY = y + (h - totalH) / 2
-
-  const hDimX  = side === 'left' ? x - DIM_OFFSET : x + w + DIM_OFFSET
-  const hExtTo = side === 'left' ? hDimX - DIM_OVERHANG : hDimX + DIM_OVERHANG
-  const labelX = side === 'left' ? hExtTo - 6 : hExtTo + 6
-  const anchor: 'start' | 'end' = side === 'left' ? 'end' : 'start'
+  const labelX = RAIL_LEFT - 14
 
   return (
     <>
@@ -357,7 +358,7 @@ function MeasurementLabels({ el, side }: { el: MeasuredEl; side: 'left' | 'right
           x={labelX}
           y={startY + i * (labelH + labelGap) + labelH / 2}
           text={item.text}
-          anchor={anchor}
+          anchor="end"
           copyValue={item.value}
         />
       ))}
@@ -368,7 +369,7 @@ function MeasurementLabels({ el, side }: { el: MeasuredEl; side: 'left' | 'right
 // ---- Main component ----
 
 export default function RedlinesOverlay({ framePad }: { framePad: number }) {
-  const { showRedlines, focusedBlockID, setFocusedBlockID, inspectorOpen } = useRedlines()
+  const { showRedlines, focusedBlockID, setFocusedBlockID } = useRedlines()
   const location = useLocation()
   const [elements, setElements] = useState<MeasuredEl[]>([])
   const pendingRaf = useRef<number | null>(null)
@@ -417,7 +418,6 @@ export default function RedlinesOverlay({ framePad }: { framePad: number }) {
   if (!showRedlines || elements.length === 0) return null
 
   const focused = focusedBlockID ? elements.find(e => e.id === focusedBlockID) ?? null : null
-  const side: 'left' | 'right' = inspectorOpen ? 'left' : 'right'
 
   return (
     <svg
@@ -432,11 +432,20 @@ export default function RedlinesOverlay({ framePad }: { framePad: number }) {
         zIndex: 20,
       }}
     >
-      {/* Padding fills for focused block (drawn below outlines) */}
+      {/* Padding fills for focused element (drawn below outlines) */}
       {focused && <PaddingFills el={focused} />}
       {focused && <GapFill el={focused} />}
 
-      {/* Outlines for all blocks */}
+      {/* Dimension lines for ALL named blocks — always on, go to bottom and left rails */}
+      {elements.filter(el => el.isNamedBlock).map(el => (
+        <DimensionLines key={el.id + '-dim'} el={el} />
+      ))}
+      {/* Dimension lines for focused visual element (non-named) */}
+      {focused && !focused.isNamedBlock && (
+        <DimensionLines el={focused} />
+      )}
+
+      {/* Outlines for all elements */}
       {elements.map(el => {
         const isFocused = el.id === focusedBlockID
         const dimmed = !!focusedBlockID && !isFocused
@@ -446,22 +455,21 @@ export default function RedlinesOverlay({ framePad }: { framePad: number }) {
               x={el.x} y={el.y} width={el.w} height={el.h}
               fill="none"
               stroke={RL_STROKE}
-              strokeWidth={isFocused ? 2 : 1}
-              strokeOpacity={dimmed ? 0.12 : isFocused ? 1 : 0.7}
+              strokeWidth={isFocused ? 2 : el.isNamedBlock ? 1 : 0.75}
+              strokeOpacity={dimmed ? 0.1 : isFocused ? 1 : el.isNamedBlock ? 0.75 : 0.45}
               style={{ pointerEvents: 'auto', cursor: 'pointer' }}
               onClick={() => setFocusedBlockID(isFocused ? null : el.id)}
             />
-            {/* Type label pill — named blocks only, all-blocks mode only */}
-            {!focusedBlockID && el.isNamedBlock && (
+            {/* Type label pill — named blocks only */}
+            {el.isNamedBlock && (
               <TypeLabel x={el.x + 4} y={el.y + 4} text={el.blockType} color={el.color} />
             )}
           </g>
         )
       })}
 
-      {/* Dimension lines and measurement labels for focused block */}
-      {focused && <DimensionLines el={focused} side={side} />}
-      {focused && <MeasurementLabels el={focused} side={side} />}
+      {/* Focused element: padding/gap measurement labels beside left rail */}
+      {focused && <MeasurementLabels el={focused} />}
     </svg>
   )
 }
