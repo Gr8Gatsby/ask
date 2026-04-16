@@ -99,6 +99,23 @@
   user-select: none;
 }
 
+/* Bell rocking animation for alert notifications */
+/* Inspector highlight — inset ring so it isn't clipped by overflow:hidden on the phone frame */
+[data-block-id].inspector-highlighted,
+[data-script-id].inspector-highlighted {
+  box-shadow: inset 0 0 0 2px rgba(0, 122, 255, 0.85) !important;
+}
+
+
+@keyframes bell-rock {
+  0%, 60%, 100% { transform: rotate(0deg); transform-origin: top center; }
+  10% { transform: rotate(14deg); transform-origin: top center; }
+  20% { transform: rotate(-12deg); transform-origin: top center; }
+  30% { transform: rotate(10deg); transform-origin: top center; }
+  40% { transform: rotate(-8deg); transform-origin: top center; }
+  50% { transform: rotate(4deg); transform-origin: top center; }
+}
+
 @layer base {
   html, body, #root {
     @apply min-h-screen font-sans;

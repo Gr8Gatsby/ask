@@ -1,7 +1,10 @@
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useState, useEffect, useRef, createContext, useContext } from 'react'
-import { Newspaper, GearSix, Bell } from '@phosphor-icons/react'
+import { Newspaper, GearSix, Bell, Code, FrameCorners } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
+import UIInspectorPanel from './UIInspectorPanel'
+import RedlinesOverlay from './RedlinesOverlay'
+import { RedlinesProvider, useRedlines } from '../../lib/RedlinesContext'
 import { usePlatform, type Platform, type ThemeMode } from '../../lib/PlatformContext'
 import { ThemeProvider } from '@mui/material/styles'
 import CssBaseline from '@mui/material/CssBaseline'
@@ -94,6 +97,7 @@ function SegControl<T extends string>({
 
 function ControlBar() {
   const { platform, setPlatform, themeMode, setThemeMode } = usePlatform()
+  const { showRedlines, setShowRedlines, inspectorOpen, setInspectorOpen } = useRedlines()
   return (
     <div
       className="sticky top-0 z-10 flex items-center justify-center gap-3 px-6 py-2.5 border-b"
@@ -114,6 +118,28 @@ function ControlBar() {
         value={themeMode}
         onChange={setThemeMode}
       />
+      <button
+        onClick={() => setShowRedlines(!showRedlines)}
+        className="flex items-center gap-1.5 px-3 py-1 rounded-md text-[12px] font-semibold transition-all"
+        style={{
+          background: showRedlines ? 'rgba(255,45,120,0.12)' : 'rgba(0,0,0,0.06)',
+          color: showRedlines ? 'rgb(255,45,120)' : 'rgba(0,0,0,0.5)',
+        }}
+      >
+        <FrameCorners size={13} weight={showRedlines ? 'bold' : 'regular'} />
+        Redlines
+      </button>
+      <button
+        onClick={() => setInspectorOpen(!inspectorOpen)}
+        className="flex items-center gap-1.5 px-3 py-1 rounded-md text-[12px] font-semibold transition-all"
+        style={{
+          background: inspectorOpen ? 'rgba(0,122,255,0.12)' : 'rgba(0,0,0,0.06)',
+          color: inspectorOpen ? '#007aff' : 'rgba(0,0,0,0.5)',
+        }}
+      >
+        <Code size={13} weight={inspectorOpen ? 'bold' : 'regular'} />
+        Inspector
+      </button>
     </div>
   )
 }
@@ -180,23 +206,40 @@ function AndroidPhoneButtons({ isLight }: { isLight: boolean }) {
 
 // ---- iOS status bar — Dynamic Island + time + signal ----
 
-function IOSStatusBar({ isLight }: { isLight: boolean }) {
+// iOS nav bar style — transparent, content floats over the gradient
+export function iosGlassStyle(_isLight: boolean) {
+  return { background: 'transparent' } as const
+}
+
+// iOS 26 glass pill — for Back buttons, action buttons
+export function iosGlassPill(isLight: boolean) {
+  return isLight
+    ? {
+        backdropFilter: 'blur(12px) saturate(1.5)',
+        WebkitBackdropFilter: 'blur(12px) saturate(1.5)',
+        background: 'rgba(255,255,255,0.22)',
+        borderRadius: 20,
+        boxShadow: 'inset 0 0.5px 0 rgba(255,255,255,0.8), 0 1px 4px rgba(0,0,0,0.08)',
+      }
+    : {
+        backdropFilter: 'blur(12px) saturate(1.5)',
+        WebkitBackdropFilter: 'blur(12px) saturate(1.5)',
+        background: 'rgba(255,255,255,0.13)',
+        borderRadius: 20,
+        boxShadow: 'inset 0 0.5px 0 rgba(255,255,255,0.22), 0 1px 4px rgba(0,0,0,0.2)',
+      }
+}
+
+function IOSStatusBar() {
   const time = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
   return (
-    <div
-      className="flex-shrink-0 relative flex items-center justify-between px-6 h-12"
-      style={{
-        backdropFilter: 'blur(20px)',
-        WebkitBackdropFilter: 'blur(20px)',
-        background: isLight ? 'rgba(242,242,247,0.72)' : 'rgba(28,28,30,0.72)',
-      }}
-    >
+    <div className="flex-shrink-0 relative flex items-center justify-between px-6 h-12">
       <span className="text-[15px] font-semibold text-ask-text tabular-nums">{time}</span>
       {/* Dynamic Island */}
       <div className="absolute left-1/2 top-2 -translate-x-1/2 w-[120px] h-[34px] bg-black rounded-full" />
-      {/* Signal / battery icons */}
+      {/* Signal bars / wifi / battery icons */}
       <div className="flex items-center gap-[5px] text-ask-text">
-        <span className="text-[10px] font-bold tracking-[-2px]">●●●</span>
+        <span className="mat-icon" style={{ fontSize: 16, fontVariationSettings: "'FILL' 1, 'wght' 400, 'opsz' 16" }}>signal_cellular_alt</span>
         <span className="mat-icon" style={{ fontSize: 16, fontVariationSettings: "'FILL' 1, 'wght' 400, 'opsz' 16" }}>wifi</span>
         <span className="mat-icon" style={{ fontSize: 16, fontVariationSettings: "'FILL' 1, 'wght' 400, 'opsz' 16" }}>battery_full</span>
       </div>
@@ -417,18 +460,7 @@ function IOSTabBar({ tab, isLight }: { tab: string; isLight: boolean }) {
 function AndroidTabBar({ tab }: { tab: string }) {
   const navigate = useNavigate()
   const { action } = useStartSession()
-  const { blocks } = useBlocks()
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [bellDialogOpen, setBellDialogOpen] = useState(false)
-
-  const alertGroups = blocks
-    .filter(b => b.showsInInbox === 1)
-    .reduce<Record<string, { scriptName: string; count: number }>>((acc, b) => {
-      if (!acc[b.scriptID]) acc[b.scriptID] = { scriptName: b.scriptName, count: 0 }
-      acc[b.scriptID].count++
-      return acc
-    }, {})
-  const hasAlerts = Object.keys(alertGroups).length > 0
 
   return (
     <div className="flex-shrink-0 bg-ask-card" style={{ boxShadow: '0 -1px 0 rgb(73 69 79 / 0.4)' }}>
@@ -456,24 +488,6 @@ function AndroidTabBar({ tab }: { tab: string }) {
           )
         })}
 
-        {/* Bell tab — only visible when there are alert blocks */}
-        {hasAlerts && (
-          <button
-            onClick={() => setBellDialogOpen(true)}
-            className="flex-1 flex flex-col items-center justify-center gap-1 pt-3 pb-2"
-          >
-            <div className="flex items-center justify-center w-16 h-8 rounded-full">
-              <Bell
-                size={22}
-                weight="fill"
-                color="#ff453a"
-                style={{ animation: 'bell-rock 2.5s ease-in-out infinite' }}
-              />
-            </div>
-            <span className="text-[12px] font-medium tracking-[0.5px] text-ask-red">Alerts</span>
-          </button>
-        )}
-
         {/* "+" button — only visible when a start_session block is available */}
         {action && (
           <button
@@ -492,21 +506,6 @@ function AndroidTabBar({ tab }: { tab: string }) {
       <div className="flex justify-center py-2">
         <div className="w-[134px] h-[5px] rounded-full bg-ask-secondary/20" />
       </div>
-
-      {/* MUI Dialog for alerts */}
-      <Dialog open={bellDialogOpen} onClose={() => setBellDialogOpen(false)} fullWidth maxWidth="xs">
-        <DialogTitle>Alerts</DialogTitle>
-        <List sx={{ pt: 0 }}>
-          {Object.entries(alertGroups).map(([scriptID, { scriptName, count }]) => (
-            <ListItemButton key={scriptID} onClick={() => { navigate(`/script/${scriptID}`); setBellDialogOpen(false) }}>
-              <ListItemIcon>
-                <span className="mat-icon" style={{ fontSize: 24, color: '#ff453a', fontVariationSettings: "'FILL' 1, 'wght' 400, 'opsz' 24" }}>notifications</span>
-              </ListItemIcon>
-              <ListItemText primary={scriptName} secondary={count > 1 ? `${count} alerts` : '1 alert'} />
-            </ListItemButton>
-          ))}
-        </List>
-      </Dialog>
 
       {/* MUI Dialog for repo selection */}
       {action && (
@@ -531,12 +530,21 @@ function AndroidTabBar({ tab }: { tab: string }) {
 // ---- Shell ----
 
 export default function AppShell({ children }: Props) {
+  return (
+    <RedlinesProvider>
+      <AppShellInner>{children}</AppShellInner>
+    </RedlinesProvider>
+  )
+}
+
+function AppShellInner({ children }: Props) {
   const location = useLocation()
   const { platform, themeMode } = usePlatform()
   const isAndroid = platform === 'android'
   const isLight = themeMode === 'light'
   const muiTheme = useMuiTheme()
   const [brandColor, setBrandColor] = useState<string | null>(null)
+  const { inspectorOpen } = useRedlines()
 
   const phoneAreaRef = useRef<HTMLDivElement>(null)
   const scale = usePhoneScale(phoneAreaRef)
@@ -544,6 +552,8 @@ export default function AppShell({ children }: Props) {
   const tab = location.pathname.startsWith('/tasks') ? 'tasks'
     : location.pathname.startsWith('/settings') ? 'settings'
     : 'home'
+
+  const hideIOSTabBar = location.pathname.includes('/session/')
 
   // iPhone 16 Pro: 390px wide, titanium frame
   // Pixel 9 Pro: slightly different corner radius, dark metal frame
@@ -568,7 +578,7 @@ export default function AppShell({ children }: Props) {
       <ControlBar />
 
       {/* Phone area */}
-      <div ref={phoneAreaRef} className="flex-1 flex items-start justify-center py-8 px-8 overflow-hidden">
+      <div ref={phoneAreaRef} className="flex-1 flex items-start justify-center py-8 px-8 overflow-hidden gap-6">
         {/* zoom affects layout (unlike transform:scale), so sizing and absolute buttons all work naturally */}
         <div className="relative flex-shrink-0" style={{ zoom: scale }}>
           {/* Side buttons */}
@@ -586,6 +596,7 @@ export default function AppShell({ children }: Props) {
           }}>
             {/* Screen content */}
             <div
+              id="phone-screen"
               className={`flex flex-col ${isAndroid ? 'platform-android' : ''} ${isLight ? 'theme-light' : ''}`}
               style={{
                 position: 'relative',
@@ -594,13 +605,13 @@ export default function AppShell({ children }: Props) {
                 borderRadius: innerRadius,
                 overflow: 'hidden',
                 background: !isAndroid && brandColor
-                  ? `linear-gradient(180deg, ${brandColor}22 0%, ${isLight ? 'rgb(242,242,247)' : 'rgb(28,28,30)'} 110px)`
+                  ? `linear-gradient(180deg, ${brandColor}55 0%, ${brandColor}22 180px, ${isLight ? 'rgb(242,242,247)' : 'rgb(28,28,30)'} 360px)`
                   : (isAndroid
                       ? (isLight ? 'rgb(255 251 254)' : 'rgb(20 18 24)')
                       : (isLight ? 'rgb(242 242 247)' : 'rgb(28 28 30)')),
               }}
             >
-              {isAndroid ? <AndroidStatusBar /> : <IOSStatusBar isLight={isLight} />}
+              {isAndroid ? <AndroidStatusBar /> : <IOSStatusBar />}
 
               <BrandColorContext.Provider value={{ brandColor, setBrandColor }}>
                 <div className="flex-1 overflow-y-auto no-scrollbar min-h-0">
@@ -615,11 +626,21 @@ export default function AppShell({ children }: Props) {
 
               {isAndroid
                 ? <AndroidTabBar tab={tab} />
-                : <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0 }}><IOSTabBar tab={tab} isLight={isLight} /></div>
+                : !hideIOSTabBar && <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0 }}><IOSTabBar tab={tab} isLight={isLight} /></div>
               }
             </div>
           </div>
+
+          {/* SVG redlines overlay — sits over phone screen, overflow:visible draws annotations outside */}
+          <RedlinesOverlay framePad={framePad} />
         </div>
+
+        {/* Inspector panel — floats to the right of the phone */}
+        {inspectorOpen && (
+          <div style={{ paddingTop: 8 }}>
+            <UIInspectorPanel />
+          </div>
+        )}
       </div>
     </div>
   )
