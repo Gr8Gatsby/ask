@@ -39,16 +39,48 @@ const RL_STROKE = 'rgba(255,45,85,0.85)'
 
 interface MeasuredEl {
   id: string
+  isNamedBlock: boolean   // true = has data-block-id / data-script-id
   blockType: string
   color: string
-  // Clipped logical coords (viewport minus phone origin, divided by scale, clamped to phone bounds)
+  // Clipped logical coords (clamped to phone bounds)
   x: number; y: number; w: number; h: number
-  // Original unclipped logical coords (for focused mode annotations)
+  // Original unclipped logical coords (for focused annotations)
   ox: number; oy: number; ow: number; oh: number
-  // Padding from getComputedStyle (logical px, no scale needed)
+  // Padding from getComputedStyle (logical px)
   paddingTop: number; paddingRight: number; paddingBottom: number; paddingLeft: number
   rowGap: number
   showGap: boolean
+}
+
+// ---- Element collection helpers ----
+
+/** Generate a stable DOM-path key for elements without data-block-id */
+function domKey(el: HTMLElement, root: HTMLElement): string {
+  const parts: number[] = []
+  let node: HTMLElement | null = el
+  while (node && node !== root) {
+    const parent: HTMLElement | null = node.parentElement
+    if (!parent) break
+    parts.unshift(Array.from(parent.children).indexOf(node))
+    node = parent
+  }
+  return 'el-' + parts.join('.')
+}
+
+/** Returns true if the element has a visible surface worth annotating */
+function isVisualEl(el: HTMLElement): boolean {
+  const tag = el.tagName.toUpperCase()
+  // Always annotate interactive elements
+  if (['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA'].includes(tag)) return true
+  const cs = getComputedStyle(el)
+  // Skip invisible elements
+  if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0) return false
+  // Has a non-transparent background color
+  const bg = cs.backgroundColor
+  if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return true
+  // Has a visible border
+  if (parseFloat(cs.borderTopWidth) > 0 || parseFloat(cs.borderLeftWidth) > 0) return true
+  return false
 }
 
 // ---- Measurement pass ----
@@ -64,19 +96,13 @@ function collectElements(): MeasuredEl[] {
   const phoneLogW = phoneEl.offsetWidth
   const phoneLogH = phoneEl.offsetHeight
 
-  // Collect all candidate elements
-  const allEls = Array.from(
-    phoneEl.querySelectorAll('[data-block-id], [data-script-id]')
-  ) as HTMLElement[]
-
-  // Deduplicate: keep only outermost element per unique ID
-  const seen = new Map<string, HTMLElement>()
-  for (const el of allEls) {
+  // ── Phase 1: named blocks (data-block-id / data-script-id) ──────────────────
+  // Keep outermost element per unique ID (existing deduplication logic)
+  const namedMap = new Map<string, HTMLElement>()
+  for (const el of Array.from(phoneEl.querySelectorAll('[data-block-id], [data-script-id]')) as HTMLElement[]) {
     const bid = el.getAttribute('data-block-id')
     const sid = el.getAttribute('data-script-id')
     const key = bid ? `b:${bid}` : `s:${sid}`
-
-    // Skip if a DOM ancestor already claims the same ID
     let dominated = false
     let ancestor = el.parentElement
     while (ancestor && ancestor !== phoneEl) {
@@ -84,72 +110,84 @@ function collectElements(): MeasuredEl[] {
       if (sid && ancestor.getAttribute('data-script-id') === sid) { dominated = true; break }
       ancestor = ancestor.parentElement
     }
+    if (!dominated && !namedMap.has(key)) namedMap.set(key, el)
+  }
+  const namedSet = new Set(namedMap.values())
 
-    if (!dominated && !seen.has(key)) seen.set(key, el)
+  // ── Phase 2: all other visual UI elements ────────────────────────────────────
+  const visualEls: HTMLElement[] = []
+  for (const el of Array.from(phoneEl.querySelectorAll('*')) as HTMLElement[]) {
+    if (namedSet.has(el)) continue               // already captured as named block
+    if (!isVisualEl(el)) continue
+    const rect = el.getBoundingClientRect()
+    const logW = rect.width / scale
+    const logH = rect.height / scale
+    if (logW < 20 || logH < 8) continue          // too small to be meaningful
+    // Skip entirely outside phone
+    if (rect.bottom < phoneRect.top || rect.top > phoneRect.bottom ||
+        rect.right < phoneRect.left || rect.left > phoneRect.right) continue
+    visualEls.push(el)
   }
 
+  // ── Shared measurement function ──────────────────────────────────────────────
   const result: MeasuredEl[] = []
 
-  for (const [, el] of seen) {
+  const measureEl = (el: HTMLElement, id: string, isNamedBlock: boolean) => {
     const elRect = el.getBoundingClientRect()
+    if (elRect.width === 0 || elRect.height === 0) return
+    if (elRect.bottom < phoneRect.top || elRect.top > phoneRect.bottom ||
+        elRect.right < phoneRect.left || elRect.left > phoneRect.right) return
 
-    if (elRect.width === 0 || elRect.height === 0) continue
-
-    // Skip entirely outside phone viewport
-    if (
-      elRect.bottom < phoneRect.top || elRect.top > phoneRect.bottom ||
-      elRect.right < phoneRect.left || elRect.left > phoneRect.right
-    ) continue
-
-    const bid = el.getAttribute('data-block-id')
-    const sid = el.getAttribute('data-script-id')
-    const blockType = el.getAttribute('data-block-type') ?? 'unknown'
+    const blockType = el.getAttribute('data-block-type') ?? el.tagName.toLowerCase()
     const color = BLOCK_TYPE_COLOR[blockType] ?? '#8e8e93'
 
-    // Convert viewport coords to logical SVG coords (SVG origin = phone screen top-left)
     const ox = (elRect.left - phoneRect.left) / scale
     const oy = (elRect.top - phoneRect.top) / scale
     const ow = elRect.width / scale
     const oh = elRect.height / scale
 
-    // Clip to phone logical bounds for outline rendering
-    const cx1 = Math.max(0, ox)
-    const cy1 = Math.max(0, oy)
-    const cx2 = Math.min(phoneLogW, ox + ow)
-    const cy2 = Math.min(phoneLogH, oy + oh)
-    if (cx2 - cx1 <= 0 || cy2 - cy1 <= 0) continue
+    const cx1 = Math.max(0, ox), cy1 = Math.max(0, oy)
+    const cx2 = Math.min(phoneLogW, ox + ow), cy2 = Math.min(phoneLogH, oy + oh)
+    if (cx2 - cx1 <= 0 || cy2 - cy1 <= 0) return
 
-    // Padding
     const cs = getComputedStyle(el)
-    const paddingTop = parseFloat(cs.paddingTop) || 0
-    const paddingRight = parseFloat(cs.paddingRight) || 0
+    const paddingTop    = parseFloat(cs.paddingTop)    || 0
+    const paddingRight  = parseFloat(cs.paddingRight)  || 0
     const paddingBottom = parseFloat(cs.paddingBottom) || 0
-    const paddingLeft = parseFloat(cs.paddingLeft) || 0
+    const paddingLeft   = parseFloat(cs.paddingLeft)   || 0
 
-    // Gap from flex/grid parent
-    let rowGap = 0
-    let showGap = false
+    let rowGap = 0, showGap = false
     const parent = el.parentElement
     if (parent) {
       const pcs = getComputedStyle(parent)
       if (pcs.display === 'flex' || pcs.display === 'grid') {
         const parsed = parseFloat(pcs.gap.split(' ')[0])
         if (!isNaN(parsed) && parsed > 0 && el.nextElementSibling) {
-          rowGap = parsed
-          showGap = true
+          rowGap = parsed; showGap = true
         }
       }
     }
 
     result.push({
-      id: bid ?? sid ?? '',
-      blockType,
-      color,
+      id, isNamedBlock, blockType, color,
       x: cx1, y: cy1, w: cx2 - cx1, h: cy2 - cy1,
       ox, oy, ow, oh,
       paddingTop, paddingRight, paddingBottom, paddingLeft,
       rowGap, showGap,
     })
+  }
+
+  // Measure named blocks
+  for (const [, el] of namedMap) {
+    const bid = el.getAttribute('data-block-id')
+    const sid = el.getAttribute('data-script-id')
+    measureEl(el, bid ?? sid ?? '', true)
+  }
+
+  // Measure visual UI elements (cap to avoid overload)
+  const MAX_VISUAL = 150
+  for (const el of visualEls.slice(0, MAX_VISUAL)) {
+    measureEl(el, domKey(el, phoneEl), false)
   }
 
   return result
@@ -236,28 +274,48 @@ function GapFill({ el }: { el: MeasuredEl }) {
   )
 }
 
+// Dimension line constants
+const DIM_OFFSET = 20    // distance from element edge to the dimension line
+const DIM_GAP = 3        // gap between element edge and extension line start
+const DIM_OVERHANG = 5   // extension line extends this far past the dimension line
+
 function DimensionLines({ el, side }: { el: MeasuredEl; side: 'left' | 'right' }) {
   const { ox: x, oy: y, ow: w, oh: h } = el
   const displayW = Math.round(w)
   const displayH = Math.round(h)
 
-  const wLineY = y - 20
-  const hLineX = side === 'left' ? x - 20 : x + w + 20
+  // Width dimension line — above element
+  // Extension lines run from (element edge + GAP) perpendicular up to (dim line + OVERHANG)
+  const wDimY = y - DIM_OFFSET
+  const wExtFrom = y - DIM_GAP            // extension line starts just above element edge
+  const wExtTo = wDimY - DIM_OVERHANG     // extension line ends past the dimension line
+
+  // Height dimension line — on annotation side
+  // Extension lines run from (element edge + GAP) perpendicular out to (dim line + OVERHANG)
+  const hDimX = side === 'left' ? x - DIM_OFFSET : x + w + DIM_OFFSET
+  const hExtFrom = side === 'left' ? x - DIM_GAP : x + w + DIM_GAP
+  const hExtTo   = side === 'left' ? hDimX - DIM_OVERHANG : hDimX + DIM_OVERHANG
 
   return (
     <>
-      {/* Width line + ticks */}
-      <line x1={x - 8} y1={wLineY} x2={x + w + 8} y2={wLineY} stroke={RL_STROKE} strokeWidth={1} />
-      <line x1={x - 8} y1={wLineY - 4} x2={x - 8} y2={wLineY + 4} stroke={RL_STROKE} strokeWidth={1} />
-      <line x1={x + w + 8} y1={wLineY - 4} x2={x + w + 8} y2={wLineY + 4} stroke={RL_STROKE} strokeWidth={1} />
-      <CopyLabel x={x + w / 2} y={wLineY - 10} text={`${displayW}px`} anchor="middle" copyValue={`width: ${displayW}px`} />
+      {/* ── Width ── */}
+      {/* Extension lines — thin, project from element edges up through the dimension line */}
+      <line x1={x}     y1={wExtFrom} x2={x}     y2={wExtTo} stroke={RL_STROKE} strokeWidth={0.75} />
+      <line x1={x + w} y1={wExtFrom} x2={x + w} y2={wExtTo} stroke={RL_STROKE} strokeWidth={0.75} />
+      {/* Dimension line — spans exactly element width */}
+      <line x1={x} y1={wDimY} x2={x + w} y2={wDimY} stroke={RL_STROKE} strokeWidth={1} />
+      {/* Label — above the dimension line */}
+      <CopyLabel x={x + w / 2} y={wExtTo - 8} text={`${displayW}px`} anchor="middle" copyValue={`width: ${displayW}px`} />
 
-      {/* Height line + ticks */}
-      <line x1={hLineX} y1={y - 8} x2={hLineX} y2={y + h + 8} stroke={RL_STROKE} strokeWidth={1} />
-      <line x1={hLineX - 4} y1={y - 8} x2={hLineX + 4} y2={y - 8} stroke={RL_STROKE} strokeWidth={1} />
-      <line x1={hLineX - 4} y1={y + h + 8} x2={hLineX + 4} y2={y + h + 8} stroke={RL_STROKE} strokeWidth={1} />
+      {/* ── Height ── */}
+      {/* Extension lines — project from element top/bottom edges out through the dimension line */}
+      <line x1={hExtFrom} y1={y}     x2={hExtTo} y2={y}     stroke={RL_STROKE} strokeWidth={0.75} />
+      <line x1={hExtFrom} y1={y + h} x2={hExtTo} y2={y + h} stroke={RL_STROKE} strokeWidth={0.75} />
+      {/* Dimension line — spans exactly element height */}
+      <line x1={hDimX} y1={y} x2={hDimX} y2={y + h} stroke={RL_STROKE} strokeWidth={1} />
+      {/* Label — beside the dimension line, beyond the overhang */}
       <CopyLabel
-        x={side === 'left' ? hLineX - 10 : hLineX + 10}
+        x={side === 'left' ? hExtTo - 6 : hExtTo + 6}
         y={y + h / 2}
         text={`${displayH}px`}
         anchor={side === 'left' ? 'end' : 'start'}
@@ -286,8 +344,9 @@ function MeasurementLabels({ el, side }: { el: MeasuredEl; side: 'left' | 'right
   const totalH = items.length * labelH + (items.length - 1) * labelGap
   const startY = y + (h - totalH) / 2
 
-  const hLineX = side === 'left' ? x - 20 : x + w + 20
-  const labelX = side === 'left' ? hLineX - 10 : hLineX + 10
+  const hDimX  = side === 'left' ? x - DIM_OFFSET : x + w + DIM_OFFSET
+  const hExtTo = side === 'left' ? hDimX - DIM_OVERHANG : hDimX + DIM_OVERHANG
+  const labelX = side === 'left' ? hExtTo - 6 : hExtTo + 6
   const anchor: 'start' | 'end' = side === 'left' ? 'end' : 'start'
 
   return (
@@ -386,14 +445,14 @@ export default function RedlinesOverlay({ framePad }: { framePad: number }) {
             <rect
               x={el.x} y={el.y} width={el.w} height={el.h}
               fill="none"
-              stroke={el.color}
-              strokeWidth={isFocused ? 2 : 1.5}
-              strokeOpacity={dimmed ? 0.15 : 1}
+              stroke={RL_STROKE}
+              strokeWidth={isFocused ? 2 : 1}
+              strokeOpacity={dimmed ? 0.12 : isFocused ? 1 : 0.7}
               style={{ pointerEvents: 'auto', cursor: 'pointer' }}
               onClick={() => setFocusedBlockID(isFocused ? null : el.id)}
             />
-            {/* Type label pill — all-blocks mode only */}
-            {!focusedBlockID && (
+            {/* Type label pill — named blocks only, all-blocks mode only */}
+            {!focusedBlockID && el.isNamedBlock && (
               <TypeLabel x={el.x + 4} y={el.y + 4} text={el.blockType} color={el.color} />
             )}
           </g>
