@@ -528,30 +528,33 @@ struct HomeView: View {
     // MARK: - Custom bottom bar (avoids UIKitToolbar subview warning on iOS 26)
 
     private var bottomBar: some View {
-        VStack(spacing: 0) {
-            // Alert chips — one per script that needs a response, shown above main controls.
-            if !needsResponseGroups.isEmpty {
-                globalAlertChips
-                    .padding(.bottom, 8)
-                Divider()
-                    .padding(.horizontal, -4)
-                    .padding(.bottom, 6)
-            }
+        HStack {
+            Spacer(minLength: 0)
+            VStack(spacing: 0) {
+                // Alert chips — one per script that needs a response, shown above main controls.
+                if !needsResponseGroups.isEmpty {
+                    globalAlertChips
+                        .padding(.bottom, 8)
+                    Divider()
+                        .padding(.horizontal, -4)
+                        .padding(.bottom, 6)
+                }
 
-            HStack(spacing: 14) {
-                machineMenuButton
-                tabSwitcher
-                Spacer()
-                Button { showSettings = true } label: {
-                    Image(systemName: "gearshape")
+                HStack(spacing: 14) {
+                    machineMenuButton
+                    tabSwitcher
+                    Button { showSettings = true } label: {
+                        Image(systemName: "gearshape")
+                    }
                 }
             }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+            .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 28))
+            .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(.primary.opacity(0.12), lineWidth: 1))
+            .shadow(color: .black.opacity(0.22), radius: 16, y: 6)
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 10)
-        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 28))
-        .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(.primary.opacity(0.12), lineWidth: 1))
-        .shadow(color: .black.opacity(0.22), radius: 16, y: 6)
         .padding(.horizontal, 20)
         .padding(.bottom, 16)
         .padding(.top, 4)

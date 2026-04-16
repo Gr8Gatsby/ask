@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useBlocks } from '../lib/useBlocks'
-import { useTheme } from '../lib/PlatformContext'
+import { useTheme, usePlatform } from '../lib/PlatformContext'
 import { useSettings } from '../lib/SettingsContext'
+import { iosGlassStyle, iosGlassPill, useBrandColor } from '../components/layout/AppShell'
 import { getTaskMessages } from '../lib/api'
 import type { AgentSessionPayload, TaskMessage } from '../lib/types'
 import Markdown from '../components/shared/Markdown'
@@ -169,6 +170,8 @@ export default function SessionChatScreen() {
   const { scriptID, sessionID } = useParams<{ scriptID: string; sessionID: string }>()
   const navigate = useNavigate()
   const theme = useTheme()
+  const { themeMode } = usePlatform()
+  const isLight = themeMode === 'light'
   const { useBrandColors } = useSettings()
   const { blocks: allBlocks, respond } = useBlocks()
   const [reply, setReply] = useState('')
@@ -183,6 +186,13 @@ export default function SessionChatScreen() {
 
   const payload = sessionBlock ? parsePayload<AgentSessionPayload>(sessionBlock.payload) : null
   const accentColor = useBrandColors ? (payload?.brand_color ?? '#8E8E93') : '#8E8E93'
+
+  // Push brand color up to AppShell so the screen gradient extends behind the transparent nav bar
+  const { setBrandColor: setAppBrandColor } = useBrandColor()
+  useEffect(() => {
+    if (!theme.isAndroid) setAppBrandColor(accentColor !== '#8E8E93' ? accentColor : null)
+    return () => setAppBrandColor(null)
+  }, [accentColor, theme.isAndroid]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load chat history from task messages
   useEffect(() => {
@@ -213,126 +223,160 @@ export default function SessionChatScreen() {
     await respond(sessionBlock.blockID, '__permissions__')
   }
 
-  return (
-    <div className="flex flex-col h-full">
-      {/* Nav bar */}
-      <div className="flex items-center gap-3 px-4 pt-3 pb-3 border-b border-ask-sep flex-shrink-0">
-        <button onClick={() => navigate(-1)} className={`flex-shrink-0 ${theme.navBackClass}`}>
-          {theme.navBackIcon}
-          {!theme.isAndroid && <span>Back</span>}
-        </button>
-        <div className="flex items-center gap-2 flex-1 min-w-0">
-          {payload?.is_working && (
-            <div className="w-2 h-2 rounded-full flex-shrink-0 animate-pulse" style={{ backgroundColor: accentColor }} />
-          )}
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-ask-text truncate">{payload?.project ?? sessionID}</p>
-            <div className="flex items-center gap-2">
-              <p className="text-[10px] text-ask-secondary">{payload?.agent_name ?? 'Claude Code'}</p>
-              {payload?.permission_mode && (
-                <button
-                  onClick={handlePermissionToggle}
-                  className="text-[10px] px-1.5 py-0.5 rounded bg-ask-card2 text-ask-secondary hover:text-ask-text transition-colors"
-                >
-                  {payload.permission_mode === 'full-auto' ? 'auto' : 'supervised'}
-                </button>
-              )}
-            </div>
+  // Nav bar — Android: full info; iOS: Back + working dot + ✕ only
+  const androidNavBar = (
+    <>
+      <button onClick={() => navigate(-1)} className={`flex-shrink-0 flex items-center gap-1 ${theme.navBackClass}`}>
+        {theme.navBackIcon}
+      </button>
+
+      <div className="flex items-center gap-2 flex-1 min-w-0">
+        {payload?.is_working && (
+          <div className="w-2 h-2 rounded-full flex-shrink-0 animate-pulse" style={{ backgroundColor: accentColor }} />
+        )}
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-ask-text truncate">{payload?.project ?? sessionID}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-[10px] text-ask-secondary">{payload?.agent_name ?? 'Claude Code'}</p>
+            {payload?.permission_mode && (
+              <button
+                onClick={handlePermissionToggle}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-ask-card2 text-ask-secondary hover:text-ask-text transition-colors"
+              >
+                {payload.permission_mode === 'full-auto' ? 'auto' : 'supervised'}
+              </button>
+            )}
           </div>
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          {payload?.task_id && (
-            <button onClick={() => navigate(`/tasks/${payload.task_id}`)} className="text-xs text-ask-blue">
-              Feed
-            </button>
-          )}
-          {sessionBlock && (
-            <button
-              onClick={handleStop}
-              className="text-xs text-ask-red font-medium border border-ask-red/30 px-2 py-0.5 rounded-lg hover:bg-ask-red/10 transition-colors"
-            >
-              Stop
-            </button>
-          )}
         </div>
       </div>
 
-      {/* Last message context bar — shown when working and there's a previous message */}
-      {payload?.is_working && payload.last_message && (
-        <LastMessageBar message={payload.last_message} color={accentColor} />
-      )}
+      <div className="flex items-center gap-2 flex-shrink-0">
+        {payload?.task_id && (
+          <button onClick={() => navigate(`/tasks/${payload.task_id}`)} className="text-xs text-ask-blue">
+            Feed
+          </button>
+        )}
+        {sessionBlock && (
+          <button
+            onClick={handleStop}
+            className="text-xs text-ask-red font-medium border border-ask-red/30 px-2 py-0.5 rounded-lg hover:bg-ask-red/10 transition-colors"
+          >
+            Stop
+          </button>
+        )}
+      </div>
+    </>
+  )
 
-      {/* Chat history */}
-      <div className="flex-1 overflow-y-auto no-scrollbar px-4 py-3 flex flex-col gap-2">
-        {!sessionBlock ? (
-          <div className="flex items-center justify-center h-24 text-ask-secondary text-sm">Session ended</div>
-        ) : (
-          <>
-            {/* Task message history */}
-            {messages.map(msg => {
-              let parts: Part[] = []
-              try { parts = JSON.parse(msg.partsJSON) } catch { /* */ }
-              const textParts = parts.filter(p => p.type === 'text' && p.text)
-              if (textParts.length === 0 && parts.some(p => p.type === 'tool_use' || p.type === 'tool_result')) {
-                // Tool-only message — skip in session chat (shown in feed thread)
-                return null
-              }
+  const iosNavBar = (
+    <>
+      {/* Back — glass pill */}
+      <button
+        onClick={() => navigate(-1)}
+        className="flex-shrink-0 flex items-center gap-1 text-ask-text"
+        style={{ ...iosGlassPill(isLight), padding: '5px 11px 5px 8px' }}
+      >
+        {theme.navBackIcon}
+        <span className="text-[14px] font-medium">Back</span>
+      </button>
+
+      {/* Working indicator in center */}
+      <div className="flex-1 flex items-center justify-center">
+        {payload?.is_working && (
+          <div className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: accentColor }} />
+        )}
+      </div>
+
+      {/* Stop — glass circle */}
+      {sessionBlock && (
+        <button
+          onClick={handleStop}
+          className="flex items-center justify-center text-ask-text text-[15px] font-medium"
+          style={{ ...iosGlassPill(isLight), borderRadius: '50%', width: 28, height: 28, padding: 0 }}
+        >
+          ✕
+        </button>
+      )}
+    </>
+  )
+
+  // Gradient is handled by AppShell via BrandColorContext (brand color pushed in useEffect above)
+
+  // Shared chat history content
+  const chatHistory = (
+    <div className="px-4 py-3 flex flex-col gap-2">
+      {!sessionBlock ? (
+        <div className="flex items-center justify-center h-24 text-ask-secondary text-sm">Session ended</div>
+      ) : (
+        <>
+          {messages.map(msg => {
+            let parts: Part[] = []
+            try { parts = JSON.parse(msg.partsJSON) } catch { /* */ }
+            const textParts = parts.filter(p => p.type === 'text' && p.text)
+            if (textParts.length === 0 && parts.some(p => p.type === 'tool_use' || p.type === 'tool_result')) {
+              return null
+            }
+            if (msg.role === 'user') {
               return (
-                <div key={msg.messageID} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${
-                    msg.role === 'user'
-                      ? 'bg-ask-blue text-white rounded-br-sm'
-                      : 'bg-ask-card text-ask-text rounded-bl-sm'
-                  }`}>
+                <div key={msg.messageID} className="flex justify-end">
+                  <div className="max-w-[80%] rounded-[20px] rounded-br-[5px] px-3.5 py-2.5 bg-ask-blue text-white text-[15px] leading-snug">
                     {parts.map((p, i) => renderPart(p, i))}
                   </div>
                 </div>
               )
-            })}
-
-            {/* Live status — current tool or last message */}
-            <div className="flex justify-start">
-              <div className="max-w-[85%] bg-ask-card rounded-2xl rounded-bl-sm px-3 py-2.5">
-                <div className="flex items-center gap-2 mb-2">
-                  <div
-                    className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0"
-                    style={{ backgroundColor: accentColor }}
-                  >
-                    {(payload?.agent_name ?? 'C')[0]}
-                  </div>
-                  <span className="text-[10px] font-semibold text-ask-secondary">
-                    {payload?.agent_name ?? 'Claude Code'}
-                  </span>
-                </div>
-                {payload?.is_working ? (
-                  <>
-                    {payload.tool_history && payload.tool_history.length > 0 && (
-                      <ToolHistoryTimeline entries={payload.tool_history.slice(-5)} color={accentColor} />
-                    )}
-                    {payload.current_tool && (
-                      <ToolStatusLine tool={payload.current_tool} preview={payload.current_preview} color={accentColor} />
-                    )}
-                    <div className="flex items-center gap-2">
-                      {[0, 1, 2].map(i => (
-                        <div key={i} className="w-1.5 h-1.5 rounded-full animate-bounce"
-                          style={{ backgroundColor: accentColor, animationDelay: `${i * 0.15}s` }} />
-                      ))}
-                      <span className="text-xs text-ask-secondary ml-1">Working…</span>
-                    </div>
-                  </>
-                ) : payload?.last_message ? (
-                  <Markdown>{payload.last_message}</Markdown>
-                ) : (
-                  <span className="text-xs text-ask-secondary">Session started</span>
-                )}
+            }
+            return (
+              <div key={msg.messageID} className="text-ask-text text-[15px] leading-relaxed">
+                {parts.map((p, i) => renderPart(p, i))}
               </div>
-            </div>
-            <div ref={bottomRef} />
-          </>
-        )}
-      </div>
+            )
+          })}
 
-      {/* Pending confirmation bar — above compose */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-1.5">
+              <div
+                className="w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold text-white flex-shrink-0"
+                style={{ backgroundColor: accentColor }}
+              >
+                {(payload?.agent_name ?? 'C')[0]}
+              </div>
+              <span className="text-[11px] font-semibold text-ask-secondary">
+                {payload?.agent_name ?? 'Claude Code'}
+              </span>
+            </div>
+            {payload?.is_working ? (
+              <div className="flex flex-col gap-1.5 pl-0.5">
+                {payload.tool_history && payload.tool_history.length > 0 && (
+                  <ToolHistoryTimeline entries={payload.tool_history.slice(-5)} color={accentColor} />
+                )}
+                {payload.current_tool && (
+                  <ToolStatusLine tool={payload.current_tool} preview={payload.current_preview} color={accentColor} />
+                )}
+                <div className="flex items-center gap-2">
+                  {[0, 1, 2].map(i => (
+                    <div key={i} className="w-1.5 h-1.5 rounded-full animate-bounce"
+                      style={{ backgroundColor: accentColor, animationDelay: `${i * 0.15}s` }} />
+                  ))}
+                  <span className="text-xs text-ask-secondary ml-1">Working…</span>
+                </div>
+              </div>
+            ) : payload?.last_message ? (
+              <div className="text-[15px] text-ask-text leading-relaxed">
+                <Markdown>{payload.last_message}</Markdown>
+              </div>
+            ) : (
+              <span className="text-xs text-ask-secondary">Session started</span>
+            )}
+          </div>
+          <div ref={bottomRef} />
+        </>
+      )}
+    </div>
+  )
+
+  // Shared pending confirmation + compose bar
+  const composeArea = (
+    <>
       {sessionBlock && payload?.pending_confirmation && (
         <PendingConfirmationBar
           title={payload.pending_confirmation.title}
@@ -342,8 +386,6 @@ export default function SessionChatScreen() {
           onRespond={val => handleSend(val)}
         />
       )}
-
-      {/* Compose bar */}
       {sessionBlock && (
         <div className="flex-shrink-0 px-4 py-3 border-t border-ask-sep/50">
           <div className="flex gap-2 items-center">
@@ -370,6 +412,102 @@ export default function SessionChatScreen() {
                 ? <span className="mat-icon text-white" style={{ fontSize: 20, fontVariationSettings: "'FILL' 1, 'wght' 400, 'opsz' 20" }}>send</span>
                 : (sending ? '…' : '→')}
             </button>
+          </div>
+        </div>
+      )}
+    </>
+  )
+
+  if (theme.isAndroid) {
+    return (
+      <div className="flex flex-col h-full" data-block-id={sessionBlock?.blockID} data-block-type="agent_session">
+        <div
+          className="flex items-center gap-3 px-4 pt-3 pb-3 border-b border-ask-sep flex-shrink-0"
+          style={accentColor !== '#8E8E93' ? { borderBottomColor: `${accentColor}30` } : undefined}
+        >
+          {androidNavBar}
+        </div>
+        {payload?.is_working && payload.last_message && (
+          <LastMessageBar message={payload.last_message} color={accentColor} />
+        )}
+        <div className="flex-1 overflow-y-auto no-scrollbar">
+          {chatHistory}
+        </div>
+        {composeArea}
+      </div>
+    )
+  }
+
+  // iOS — glass nav bar + floating glass compose bar
+  const pillBg = isLight ? 'rgba(255,255,255,0.92)' : 'rgba(28,28,30,0.92)'
+  const pillBorder = isLight ? '1px solid rgba(0,0,0,0.10)' : '1px solid rgba(255,255,255,0.10)'
+  const pillShadow = isLight
+    ? '0 6px 24px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06)'
+    : '0 6px 24px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.3)'
+
+  return (
+    <div className="relative flex flex-col h-full" data-block-id={sessionBlock?.blockID} data-block-type="agent_session">
+      {/* Glass nav bar — absolute, content scrolls under it */}
+      <div
+        className="absolute top-0 left-0 right-0 flex items-center gap-3 px-4 pt-3 pb-3 z-10"
+        style={iosGlassStyle(isLight)}
+      >
+        {iosNavBar}
+      </div>
+
+      {/* Scroll area — full height, padded to clear floating bars */}
+      <div className="flex-1 overflow-y-auto no-scrollbar">
+        <div className="pt-[52px] pb-[100px]">
+          {payload?.is_working && payload.last_message && (
+            <LastMessageBar message={payload.last_message} color={accentColor} />
+          )}
+          {chatHistory}
+        </div>
+      </div>
+
+      {/* Floating glass compose bar */}
+      {sessionBlock && (
+        <div className="absolute bottom-0 left-0 right-0 px-4 pb-6 flex flex-col gap-2 z-10">
+          {payload?.pending_confirmation && (
+            <div
+              className="rounded-2xl overflow-hidden"
+              style={{ background: pillBg, backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', border: pillBorder, boxShadow: pillShadow }}
+            >
+              <PendingConfirmationBar
+                title={payload.pending_confirmation.title}
+                body={payload.pending_confirmation.body}
+                options={payload.pending_confirmation.options}
+                accentColor={accentColor}
+                onRespond={val => handleSend(val)}
+              />
+            </div>
+          )}
+          <div
+            className="flex items-center gap-2 pl-4 pr-2 py-2"
+            style={{ background: pillBg, backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderRadius: 24, border: pillBorder, boxShadow: pillShadow }}
+          >
+            <input
+              type="text"
+              value={reply}
+              onChange={e => setReply(e.target.value)}
+              placeholder={payload?.placeholder ?? 'Message Claude…'}
+              disabled={sending}
+              onKeyDown={e => { if (e.key === 'Enter') handleSend(reply) }}
+              className="flex-1 bg-transparent outline-none text-[15px] text-ask-text placeholder-ask-secondary/50 disabled:opacity-50"
+            />
+            {(reply.trim() || sending) && (
+              <button
+                onClick={() => handleSend(reply)}
+                disabled={sending}
+                className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 transition-all"
+                style={{ backgroundColor: '#007AFF' }}
+              >
+                {sending
+                  ? <span className="text-white text-xs font-semibold">…</span>
+                  : <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 13V3M8 3L3.5 7.5M8 3L12.5 7.5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                }
+              </button>
+            )}
           </div>
         </div>
       )}

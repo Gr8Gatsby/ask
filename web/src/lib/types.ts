@@ -166,6 +166,16 @@ export interface Machine {
   status: 'idle' | 'busy'
 }
 
+export interface TaskArtifact {
+  artifactID: string
+  taskID: string
+  filename: string
+  mimeType: string
+  description?: string
+  sizeBytes: number
+  updatedAt: string
+}
+
 export interface AskTask {
   taskID: string
   machineID: string

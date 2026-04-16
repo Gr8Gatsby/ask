@@ -124,7 +124,7 @@ function AndroidToggle({ on, onToggle }: { on: boolean; onToggle: () => void }) 
 
 function MachineDetailSheet({ machine, onDismiss }: { machine: Machine; onDismiss: () => void }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-end">
+    <div className="absolute inset-0 z-50 flex items-end">
       <div className="absolute inset-0 bg-black/40" onClick={onDismiss} />
       <div className="relative w-full bg-ask-bg rounded-t-2xl pb-8 pt-2 px-4 max-h-[60vh] overflow-y-auto">
         <div className="w-10 h-1 bg-ask-secondary/30 rounded-full mx-auto mb-4" />
@@ -153,15 +153,68 @@ function MachineDetailSheet({ machine, onDismiss }: { machine: Machine; onDismis
   )
 }
 
+// ---- Computer filter sheet ----
+
+function ComputerFilterSheet({
+  machines,
+  selectedMachineID,
+  onSelect,
+  onDismiss,
+}: {
+  machines: Machine[]
+  selectedMachineID: string | null
+  onSelect: (id: string | null) => void
+  onDismiss: () => void
+}) {
+  return (
+    <div className="absolute inset-0 z-50 flex items-end">
+      <div className="absolute inset-0 bg-black/40" onClick={onDismiss} />
+      <div className="relative w-full bg-ask-bg rounded-t-2xl pb-8 pt-2 px-4 max-h-[60vh] overflow-y-auto">
+        <div className="w-10 h-1 bg-ask-secondary/30 rounded-full mx-auto mb-4" />
+        <h2 className="text-[22px] font-semibold text-ask-text mb-4">Computer</h2>
+        <div className="rounded-xl overflow-hidden">
+          {/* All computers option */}
+          <button
+            onClick={() => { onSelect(null); onDismiss() }}
+            className="w-full flex items-center min-h-[44px] px-4 bg-ask-card border-b border-ask-sep/40 active:opacity-70"
+          >
+            <span className="flex-1 text-[17px] text-ask-text text-left">All Computers</span>
+            {selectedMachineID === null && (
+              <span className="mat-icon text-ask-blue" style={{ fontSize: 20, fontVariationSettings: "'FILL' 1" }}>check</span>
+            )}
+          </button>
+          {machines.map((m, i) => (
+            <button
+              key={m.machineID}
+              onClick={() => { onSelect(m.machineID); onDismiss() }}
+              className={`w-full flex items-center min-h-[44px] px-4 bg-ask-card active:opacity-70 ${i < machines.length - 1 ? 'border-b border-ask-sep/40' : ''}`}
+            >
+              <span className="flex-1 text-[17px] text-ask-text text-left">{m.name}</span>
+              {selectedMachineID === m.machineID && (
+                <span className="mat-icon text-ask-blue" style={{ fontSize: 20, fontVariationSettings: "'FILL' 1" }}>check</span>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ---- Screen ----
 
 export default function SettingsScreen() {
   const { platform } = usePlatform()
   const isAndroid = platform === 'android'
 
-  const { useBrandColors, setUseBrandColors, showDebugInfo, setShowDebugInfo } = useSettings()
+  const { useBrandColors, setUseBrandColors, selectedMachineID, setSelectedMachineID } = useSettings()
   const [machines, setMachines] = useState<Machine[]>([])
   const [selectedMachine, setSelectedMachine] = useState<Machine | null>(null)
+  const [showComputerFilter, setShowComputerFilter] = useState(false)
+
+  const selectedMachineName = selectedMachineID
+    ? (machines.find(m => m.machineID === selectedMachineID)?.name ?? 'Unknown')
+    : 'All'
 
   useEffect(() => {
     getMachines().then(setMachines).catch(() => {})
@@ -175,6 +228,15 @@ export default function SettingsScreen() {
         </div>
 
         <AndroidCategoryHeader label="Machines" />
+        <AndroidPref
+          title="Computer"
+          summary={selectedMachineName === 'All' ? 'All Computers' : selectedMachineName}
+          onTap={() => setShowComputerFilter(true)}
+        >
+          <svg width="8" height="13" viewBox="0 0 8 13" fill="none" className="text-ask-secondary/50">
+            <path d="M1 1l6 5.5L1 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </AndroidPref>
         {machines.map((m, i) => (
           <AndroidPref
             key={m.machineID}
@@ -195,9 +257,6 @@ export default function SettingsScreen() {
         </AndroidPref>
 
         <AndroidCategoryHeader label="Developer" />
-        <AndroidPref title="Show Debug Info on Cards">
-          <AndroidToggle on={showDebugInfo} onToggle={() => setShowDebugInfo(!showDebugInfo)} />
-        </AndroidPref>
         <AndroidPref title="CloudKit Environment" summary="Development" />
         <AndroidPref title="App Version" summary="0.1.0 (1)" last />
 
@@ -205,6 +264,14 @@ export default function SettingsScreen() {
 
         {selectedMachine && (
           <MachineDetailSheet machine={selectedMachine} onDismiss={() => setSelectedMachine(null)} />
+        )}
+        {showComputerFilter && (
+          <ComputerFilterSheet
+            machines={machines}
+            selectedMachineID={selectedMachineID}
+            onSelect={setSelectedMachineID}
+            onDismiss={() => setShowComputerFilter(false)}
+          />
         )}
       </div>
     )
@@ -220,23 +287,27 @@ export default function SettingsScreen() {
       {/* Machines section */}
       <IOSSectionHeader label="Machines" />
       <div className="mx-4">
-        {machines.length === 0 ? (
-          <IOSRow label="No machines found" value="" first last />
-        ) : (
-          machines.map((m, i) => (
-            <IOSRow
-              key={m.machineID}
-              label={m.name}
-              value={m.status === 'busy' ? 'Active' : 'Idle'}
-              chevron
-              first={i === 0}
-              last={i === machines.length - 1}
-              onTap={() => setSelectedMachine(m)}
-            />
-          ))
-        )}
+        <IOSRow
+          label="Computer"
+          value={selectedMachineName}
+          chevron
+          first
+          last={machines.length === 0}
+          onTap={() => setShowComputerFilter(true)}
+        />
+        {machines.map((m, i) => (
+          <IOSRow
+            key={m.machineID}
+            label={m.name}
+            value={m.status === 'busy' ? 'Active' : 'Idle'}
+            chevron
+            first={false}
+            last={i === machines.length - 1}
+            onTap={() => setSelectedMachine(m)}
+          />
+        ))}
       </div>
-      <IOSSectionFooter text="Swipe left to hide a machine from the home screen, or delete its CloudKit records. A running Mac re-registers within 30 seconds." />
+      <IOSSectionFooter text="Filter to a single computer or view all. A running Mac re-registers within 30 seconds." />
 
       {/* Appearance section */}
       <IOSSectionHeader label="Appearance" />
@@ -249,10 +320,7 @@ export default function SettingsScreen() {
       {/* Developer section */}
       <IOSSectionHeader label="Developer" />
       <div className="mx-4">
-        <IOSRow label="Show Debug Info on Cards" first>
-          <IOSToggle on={showDebugInfo} onToggle={() => setShowDebugInfo(!showDebugInfo)} />
-        </IOSRow>
-        <IOSRow label="CloudKit Environment" value="Development" />
+        <IOSRow label="CloudKit Environment" value="Development" first />
         <IOSRow label="App Version" value="0.1.0 (1)" last />
       </div>
 
@@ -260,6 +328,14 @@ export default function SettingsScreen() {
 
       {selectedMachine && (
         <MachineDetailSheet machine={selectedMachine} onDismiss={() => setSelectedMachine(null)} />
+      )}
+      {showComputerFilter && (
+        <ComputerFilterSheet
+          machines={machines}
+          selectedMachineID={selectedMachineID}
+          onSelect={setSelectedMachineID}
+          onDismiss={() => setShowComputerFilter(false)}
+        />
       )}
     </div>
   )

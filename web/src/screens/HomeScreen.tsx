@@ -122,7 +122,7 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
   const brandColor = useBrandColors ? (agentPayload?.brand_color ?? null) : null
 
   return (
-    <div className={cardClass}>
+    <div className={cardClass} data-script-id={scriptID} data-block-type="script-group">
       {/* Brand color accent strip */}
       {brandColor && (
         <div style={{ height: 3, backgroundColor: brandColor, opacity: 0.85 }} />
@@ -202,7 +202,7 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
       {quickReplyBlock && (
         <>
           <div className="h-px bg-ask-sep mx-3.5" />
-          <div className="px-3.5 pt-3 pb-3.5">
+          <div data-block-id={quickReplyBlock.blockID} data-block-type="quick_reply" className="px-3.5 pt-3 pb-3.5">
             <QuickReplyBlock
               block={quickReplyBlock}
               payload={parsePayload<QuickReplyPayload>(quickReplyBlock.payload)!}
@@ -272,6 +272,8 @@ function ScriptTile({ scriptID, blocks }: { scriptID: string; blocks: Block[] })
 
   return (
     <button
+      data-script-id={scriptID}
+      data-block-type="script-group"
       onClick={() => navigate(`/script/${scriptID}`)}
       className={tileClass}
     >
@@ -306,9 +308,30 @@ function ScriptTile({ scriptID, blocks }: { scriptID: string; blocks: Block[] })
   )
 }
 
+// ---- Alert chip (Android only) ----
+
+function AlertChip({ blocks, onClick }: { blocks: Block[]; onClick: () => void }) {
+  const inboxBlocks = blocks.filter(b => b.showsInInbox === 1)
+  const urgency = dominantUrgency(inboxBlocks, blocks)
+  const first = blocks[0]
+  const chipColor = urgency === 'urgent' ? 'bg-ask-red text-white'
+    : urgency === 'info' ? 'bg-ask-blue text-white' : 'bg-ask-orange text-white'
+  return (
+    <button onClick={onClick}
+      className={`flex items-center gap-1.5 px-3 py-1.5 flex-shrink-0 ${chipColor} rounded-xl`}>
+      <span className="w-1.5 h-1.5 rounded-full bg-white/70 flex-shrink-0" />
+      <span className="text-[11px] font-semibold whitespace-nowrap">{first.scriptName}</span>
+      {inboxBlocks.length > 1 && (
+        <span className="text-[10px] font-bold bg-white/25 rounded-full w-4 h-4 flex items-center justify-center">{inboxBlocks.length}</span>
+      )}
+    </button>
+  )
+}
+
 // ---- Screen ----
 
 export default function HomeScreen() {
+  const navigate = useNavigate()
   const { scriptGroups, loading, error, respond } = useBlocks()
   const theme = useTheme()
 
@@ -383,6 +406,18 @@ export default function HomeScreen() {
           <div className="flex items-center justify-center h-40 text-ask-secondary text-sm">No active scripts</div>
         )}
       </div>
+
+      {/* Android alert chips — sticky bar at the bottom */}
+      {theme.isAndroid && needsResponseGroups.length > 0 && (
+        <div className="flex-shrink-0 border-t border-ask-sep/50 px-4 py-2">
+          <div className="flex gap-2 overflow-x-auto no-scrollbar">
+            {needsResponseGroups.map(([scriptID, blocks]) => (
+              <AlertChip key={scriptID} blocks={blocks}
+                onClick={() => navigate(`/script/${scriptID}`)} />
+            ))}
+          </div>
+        </div>
+      )}
 
     </div>
   )

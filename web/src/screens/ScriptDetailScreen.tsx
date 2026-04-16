@@ -1,13 +1,13 @@
 import { useNavigate, useParams } from 'react-router-dom'
 import { useEffect } from 'react'
 import { useBlocks } from '../lib/useBlocks'
-import { useTheme } from '../lib/PlatformContext'
+import { useTheme, usePlatform } from '../lib/PlatformContext'
 import { useSettings } from '../lib/SettingsContext'
 import type { AgentSessionPayload, ConfirmationPayload } from '../lib/types'
 import BlockRenderer from '../components/blocks/BlockRenderer'
 import ScriptIcon from '../components/shared/ScriptIcon'
 import { useStartSession } from '../lib/StartSessionContext'
-import { useBrandColor } from '../components/layout/AppShell'
+import { useBrandColor, iosGlassStyle } from '../components/layout/AppShell'
 
 function parsePayload<T>(json: string): T | null {
   try { return JSON.parse(json) as T } catch { return null }
@@ -65,6 +65,8 @@ export default function ScriptDetailScreen() {
   const { scriptID } = useParams<{ scriptID: string }>()
   const navigate = useNavigate()
   const theme = useTheme()
+  const { themeMode } = usePlatform()
+  const isLight = themeMode === 'light'
   const { blocks: allBlocks, respond } = useBlocks()
   const { setAction } = useStartSession()
   const { useBrandColors } = useSettings()
@@ -115,17 +117,124 @@ export default function ScriptDetailScreen() {
 
   const isEmpty = headerBlocks.length === 0 && sessionBlocks.length === 0
 
+  // Scrollable content (shared between iOS and Android)
+  const scrollContent = (
+    <>
+      {isEmpty ? (
+        <div className="flex items-center justify-center h-40 text-ask-secondary text-sm">No active blocks</div>
+      ) : (
+        <div className="flex flex-col">
+          {/* Header blocks */}
+          {headerBlocks.map(block => (
+            <div key={block.blockID} className="px-4 py-3 border-b border-ask-sep">
+              <BlockRenderer block={block} onRespond={respond} />
+            </div>
+          ))}
+
+          {/* Sessions section */}
+          {sessionBlocks.length > 0 && (
+            <div className={theme.isAndroid ? 'mt-1' : 'mt-4 px-4'}>
+              <p className={`pb-1 ${theme.isAndroid ? 'px-4 pt-3' : 'pt-0 pb-2'} ${theme.sectionHeader}`}>
+                {theme.isAndroid ? 'Sessions' : 'SESSIONS'}
+              </p>
+
+              {/* iOS: inset-grouped card; Android: flat full-width list */}
+              <div className={theme.isAndroid
+                ? ''
+                : 'bg-ask-card rounded-xl overflow-hidden border border-ask-sep/40'
+              }>
+                {sessionBlocks.map((block, idx) => {
+                  const payload = parsePayload<AgentSessionPayload>(block.payload)
+                  const confs = payload ? sessionConfirmations(payload.session_id) : []
+                  const isLast = idx === sessionBlocks.length - 1
+                  return (
+                    <div key={block.blockID} data-block-id={block.blockID} data-block-type="agent_session">
+                      <div className={
+                        theme.isAndroid
+                          ? `px-4 border-b border-ask-sep ${confs.length > 0 ? 'bg-ask-orange/5' : ''}`
+                          : `${confs.length > 0 ? 'bg-ask-orange/5' : ''} ${!isLast || confs.length > 0 ? 'border-b border-ask-sep/40' : ''}`
+                      }>
+                        <SessionRow
+                          block={block}
+                          confirmationCount={confs.length}
+                          isAndroid={theme.isAndroid}
+                          onClick={() => {
+                            if (payload) navigate(`/script/${scriptID}/session/${payload.session_id}`)
+                          }}
+                        />
+                      </div>
+
+                      {/* Linked confirmations — indented, orange tint */}
+                      {confs.map((conf, ci) => (
+                        <div
+                          key={conf.blockID}
+                          className={`pl-8 pr-4 py-3 bg-ask-orange/5 ${
+                            theme.isAndroid
+                              ? 'border-b border-ask-sep'
+                              : (!isLast || ci < confs.length - 1 ? 'border-b border-ask-sep/40' : '')
+                          }`}
+                        >
+                          <BlockRenderer block={conf} onRespond={respond} />
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  )
+
+  if (theme.isAndroid) {
+    return (
+      <div className="flex flex-col h-full">
+        {/* Android nav bar — solid with border */}
+        <div className="flex items-center gap-3 px-4 pt-3 pb-3 flex-shrink-0 border-b border-ask-sep/50">
+          <button onClick={() => navigate(-1)} className={theme.navBackClass}>
+            {theme.navBackIcon}
+          </button>
+          {first && (
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              <ScriptIcon
+                scriptIconData={first.scriptIconData}
+                scriptIconSVG={first.scriptIconSVG}
+                scriptIcon={first.scriptIcon}
+                scriptName={first.scriptName}
+                size={24}
+              />
+              <span className={`${theme.typeTitleMedium} text-ask-text truncate`}>{first.scriptName}</span>
+            </div>
+          )}
+        </div>
+        <div className="flex-1 overflow-y-auto no-scrollbar">
+          {scrollContent}
+        </div>
+      </div>
+    )
+  }
+
+  // iOS — content scrolls under a frosted-glass nav bar
   return (
-    <div className="flex flex-col h-full">
-      {/* Nav bar — iOS: no border, blends into frosted status bar; Android: border-b */}
+    <div className="relative h-full">
+      {/* Full-height scroll area — content starts behind the nav bar */}
+      <div className="h-full overflow-y-auto no-scrollbar">
+        {/* Top padding pushes content below the nav bar */}
+        <div className="pt-[52px]">
+          {scrollContent}
+        </div>
+      </div>
+
+      {/* Glass nav bar — floats over scroll content */}
       <div
-        className={`flex items-center gap-3 px-4 pt-3 pb-3 flex-shrink-0 ${
-          theme.isAndroid ? 'border-b border-ask-sep/50' : ''
-        }`}
+        className="absolute top-0 left-0 right-0 flex items-center gap-3 px-4 pt-3 pb-3 z-10"
+        style={iosGlassStyle(isLight)}
       >
         <button onClick={() => navigate(-1)} className={theme.navBackClass}>
           {theme.navBackIcon}
-          {!theme.isAndroid && <span>Home</span>}
+          <span>Home</span>
         </button>
         {first && (
           <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -140,76 +249,6 @@ export default function ScriptDetailScreen() {
           </div>
         )}
       </div>
-
-      {/* Scrollable content */}
-      <div className="flex-1 overflow-y-auto no-scrollbar">
-        {isEmpty ? (
-          <div className="flex items-center justify-center h-40 text-ask-secondary text-sm">No active blocks</div>
-        ) : (
-          <div className="flex flex-col">
-            {/* Header blocks */}
-            {headerBlocks.map(block => (
-              <div key={block.blockID} className="px-4 py-3 border-b border-ask-sep">
-                <BlockRenderer block={block} onRespond={respond} />
-              </div>
-            ))}
-
-            {/* Sessions section */}
-            {sessionBlocks.length > 0 && (
-              <div className={theme.isAndroid ? 'mt-1' : 'mt-4 px-4'}>
-                <p className={`pb-1 ${theme.isAndroid ? 'px-4 pt-3' : 'pt-0 pb-2'} ${theme.sectionHeader}`}>
-                  {theme.isAndroid ? 'Sessions' : 'SESSIONS'}
-                </p>
-
-                {/* iOS: inset-grouped card; Android: flat full-width list */}
-                <div className={theme.isAndroid
-                  ? ''
-                  : 'bg-ask-card rounded-xl overflow-hidden border border-ask-sep/40'
-                }>
-                  {sessionBlocks.map((block, idx) => {
-                    const payload = parsePayload<AgentSessionPayload>(block.payload)
-                    const confs = payload ? sessionConfirmations(payload.session_id) : []
-                    const isLast = idx === sessionBlocks.length - 1
-                    return (
-                      <div key={block.blockID}>
-                        <div className={
-                          theme.isAndroid
-                            ? `px-4 border-b border-ask-sep ${confs.length > 0 ? 'bg-ask-orange/5' : ''}`
-                            : `${confs.length > 0 ? 'bg-ask-orange/5' : ''} ${!isLast || confs.length > 0 ? 'border-b border-ask-sep/40' : ''}`
-                        }>
-                          <SessionRow
-                            block={block}
-                            confirmationCount={confs.length}
-                            isAndroid={theme.isAndroid}
-                            onClick={() => {
-                              if (payload) navigate(`/script/${scriptID}/session/${payload.session_id}`)
-                            }}
-                          />
-                        </div>
-
-                        {/* Linked confirmations — indented, orange tint */}
-                        {confs.map((conf, ci) => (
-                          <div
-                            key={conf.blockID}
-                            className={`pl-8 pr-4 py-3 bg-ask-orange/5 ${
-                              theme.isAndroid
-                                ? 'border-b border-ask-sep'
-                                : (!isLast || ci < confs.length - 1 ? 'border-b border-ask-sep/40' : '')
-                            }`}
-                          >
-                            <BlockRenderer block={conf} onRespond={respond} />
-                          </div>
-                        ))}
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
     </div>
   )
 }
