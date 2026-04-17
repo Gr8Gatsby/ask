@@ -130,6 +130,73 @@ jobs:
             $UPLOAD_LIST
           echo "✅ Uploaded: $UPLOAD_LIST"
 
+      - name: Update appcast signature for stapled Sparkle DMG
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          VERSION="${{ steps.tag.outputs.version }}"
+          STAPLED="${{ steps.staple.outputs.stapled }}"
+
+          # Only update appcast if the Sparkle DMG was actually stapled
+          SPARKLE_DMG=""
+          for f in $STAPLED; do
+            [[ "$f" == *"AskMac-${VERSION}.dmg" ]] && SPARKLE_DMG="$f"
+          done
+          if [[ -z "$SPARKLE_DMG" ]]; then
+            echo "Sparkle DMG was not stapled — skipping appcast update."
+            exit 0
+          fi
+
+          echo "==> Signing stapled Sparkle DMG for appcast…"
+          # Checkout repo so we can update appcast.xml
+          git clone --depth=1 "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" repo
+          cd repo
+
+          # Download Sparkle sign_update tool
+          SPARKLE_VERSION=$(grep -r 'sparkle-project/Sparkle' AskMac/project.yml 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "2.9.1")
+          SPARKLE_URL="https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
+          echo "Downloading Sparkle ${SPARKLE_VERSION}…"
+          curl -fsSL "$SPARKLE_URL" -o /tmp/sparkle.tar.xz
+          mkdir -p sparkle && tar -xf /tmp/sparkle.tar.xz -C sparkle
+
+          SIGN_OUTPUT=$(./sparkle/bin/sign_update "../$SPARKLE_DMG")
+          echo "sign_update output: $SIGN_OUTPUT"
+          NEW_SIG=$(echo "$SIGN_OUTPUT" | sed 's/.*edSignature="\([^"]*\)".*/\1/')
+          NEW_LEN=$(echo "$SIGN_OUTPUT" | sed 's/.*length="\([^"]*\)".*/\1/')
+
+          echo "==> Patching appcast.xml (sig=${NEW_SIG:0:20}… len=${NEW_LEN})…"
+          python3 - <<PYEOF
+import re
+with open('docs/appcast.xml', 'r') as f:
+    content = f.read()
+
+# Replace length and edSignature inside the v${VERSION} item block
+def patch_version_item(m):
+    block = m.group(0)
+    block = re.sub(r'length="[^"]*"', f'length="${NEW_LEN}"', block)
+    block = re.sub(r'sparkle:edSignature="[^"]*"', f'sparkle:edSignature="${NEW_SIG}"', block)
+    return block
+
+content = re.sub(
+    r'<item>.*?<sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>.*?</item>',
+    patch_version_item,
+    content,
+    flags=re.DOTALL
+)
+with open('docs/appcast.xml', 'w') as f:
+    f.write(content)
+print('appcast.xml patched.')
+PYEOF
+
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add docs/appcast.xml
+          git diff --cached --quiet && echo "No appcast changes needed." && exit 0
+          git commit -m "fix(appcast): update v${VERSION} EdDSA signature after CI staple"
+          git push origin main
+          echo "✅ appcast.xml updated with stapled DMG signature."
+
       - name: Report
         run: |
           if [[ -n "${{ steps.staple.outputs.stapled }}" ]]; then
