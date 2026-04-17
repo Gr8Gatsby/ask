@@ -580,6 +580,14 @@ function AppShellInner({ children }: Props) {
 
   const phoneAreaRef = useRef<HTMLDivElement>(null)
   const scale = usePhoneScale(phoneAreaRef)
+  const { cleanView, setCleanView } = useRedlines()
+
+  useEffect(() => {
+    if (!cleanView) return
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setCleanView(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [cleanView, setCleanView])
 
   const tab = location.pathname.startsWith('/tasks') ? 'tasks'
     : location.pathname.startsWith('/settings') ? 'settings'
@@ -611,6 +619,54 @@ function AppShellInner({ children }: Props) {
     ? '0 0 0 0.5px rgba(0,0,0,0.12), 0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.08)'
     : '0 0 0 0.5px rgba(0,0,0,0.3), 0 20px 60px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.3)'
 
+  if (cleanView) {
+    return (
+      <div
+        className="h-screen flex items-center justify-center overflow-hidden"
+        style={{ background: '#f5f5f7' }}
+        id="clean-view-root"
+      >
+        <div className="relative flex-shrink-0" style={{ zoom: scale }}>
+          {isAndroid ? <AndroidPhoneButtons isLight={isLight} /> : <IOSPhoneButtons isLight={isLight} />}
+          <div id="phone-frame" style={{ background: frameBackground, borderRadius: outerRadius, padding: framePad, boxShadow: frameBoxShadow }}>
+            <div
+              id="phone-screen"
+              className={`flex flex-col ${isAndroid ? 'platform-android' : ''} ${isLight ? 'theme-light' : ''}`}
+              style={{
+                position: 'relative', width: 390, height: 844,
+                borderRadius: innerRadius, overflow: 'hidden',
+                background: !isAndroid && brandColor
+                  ? `linear-gradient(${brandColor}${isLight ? '40' : '55'}, ${brandColor}${isLight ? '40' : '55'}), ${isLight ? 'rgb(242,242,247)' : 'rgb(28,28,30)'}`
+                  : (isAndroid ? (isLight ? 'rgb(255 251 254)' : 'rgb(20 18 24)') : (isLight ? 'rgb(242 242 247)' : 'rgb(28 28 30)')),
+              }}
+            >
+              {isAndroid && <AndroidStatusBar />}
+              <BrandColorContext.Provider value={{ brandColor, setBrandColor }}>
+                <div className={isAndroid ? 'flex-1 overflow-y-auto no-scrollbar min-h-0' : 'absolute inset-0 overflow-y-auto no-scrollbar'}>
+                  {isAndroid
+                    ? <ThemeProvider theme={muiTheme}><CssBaseline enableColorScheme={false} />{children}</ThemeProvider>
+                    : children
+                  }
+                </div>
+                {!isAndroid && !hidesOwnStatusBar && <IOSStatusBar isLight={isLight} />}
+                {!isAndroid && !hideIOSTabBar && <IOSTabBar tab={tab} isLight={isLight} />}
+              </BrandColorContext.Provider>
+            </div>
+          </div>
+        </div>
+        {/* Esc hint */}
+        <div style={{
+          position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+          fontSize: 12, color: 'rgba(0,0,0,0.35)', background: 'rgba(0,0,0,0.06)',
+          borderRadius: 8, padding: '6px 12px', pointerEvents: 'none',
+          fontFamily: '-apple-system, sans-serif',
+        }}>
+          Press <kbd style={{ fontFamily: 'inherit', background: 'rgba(0,0,0,0.08)', borderRadius: 4, padding: '1px 5px' }}>Esc</kbd> to exit clean view
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="h-screen flex flex-col overflow-hidden" style={{ background: '#f5f5f7' }}>
       <ControlBar />
@@ -626,7 +682,7 @@ function AppShellInner({ children }: Props) {
           }
 
           {/* Phone frame (metallic border) */}
-          <div style={{
+          <div id="phone-frame" style={{
             background: frameBackground,
             borderRadius: outerRadius,
             padding: framePad,

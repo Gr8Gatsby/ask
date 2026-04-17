@@ -997,7 +997,7 @@ private struct ScriptTileView: View {
                     iconData: group.iconData,
                     sfSymbol: group.icon ?? "terminal.fill"
                 )
-                .frame(width: 30, height: 30)
+                .frame(width: 36, height: 36)
                 .colorInvert(useBrandColors && group.brandColorScheme == .dark)
 
                 VStack(alignment: .leading, spacing: 3) {
@@ -1011,7 +1011,7 @@ private struct ScriptTileView: View {
                         HStack(spacing: 5) {
                             Circle()
                                 .fill(effectiveHighlight ?? blockStatusColor(group.tileStatusColor))
-                                .frame(width: 7, height: 7)
+                                .frame(width: 8, height: 8)
                             Text(label)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -1048,10 +1048,15 @@ private struct ScriptTileView: View {
                     Image(systemName: "exclamationmark.circle.fill")
                         .foregroundStyle(effectiveHighlight ?? .orange)
                         .font(.caption)
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary.opacity(0.6))
                 }
             }
             .padding(.horizontal, 14)
-            .frame(maxWidth: .infinity, minHeight: 64, maxHeight: 64, alignment: .leading)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
             .background(effectiveBackground)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(
@@ -1059,10 +1064,11 @@ private struct ScriptTileView: View {
                     .strokeBorder(
                         group.isActionRequired
                             ? (effectiveHighlight ?? Color.orange).opacity(0.5)
-                            : Color(.separator).opacity(0.3),
-                        lineWidth: 1
+                            : Color(.separator).opacity(0.2),
+                        lineWidth: 0.5
                     )
             )
+            .shadow(color: .black.opacity(0.08), radius: 4, x: 0, y: 2)
         }
         .buttonStyle(.plain)
         .environment(\.colorScheme, effectiveColorScheme)
@@ -1158,7 +1164,7 @@ private struct ActionQueueCardView: View {
                         iconData: group.iconData,
                         sfSymbol: group.icon ?? "terminal.fill"
                     )
-                    .frame(width: 30, height: 30)
+                    .frame(width: 36, height: 36)
                     .colorInvert(useBrandColors && group.brandColorScheme == .dark)
 
                     VStack(alignment: .leading, spacing: 3) {
@@ -1171,7 +1177,7 @@ private struct ActionQueueCardView: View {
                             HStack(spacing: 5) {
                                 Circle()
                                     .fill(effectiveHighlight ?? blockStatusColor(group.tileStatusColor))
-                                    .frame(width: 7, height: 7)
+                                    .frame(width: 8, height: 8)
                                 Text(label)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)

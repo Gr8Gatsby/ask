@@ -190,6 +190,7 @@ class Claude3:
         self._start_choices: dict[str, dict] = {}
         self._tty_monitors: set[str] = set()  # session_ids with running monitors
         self._initialized = False
+        self._emitted_payloads: dict[str, str] = {}  # block_id → last serialized payload
 
     # ------------------------------------------------------------------
     # MCP JSON-RPC primitives
@@ -232,6 +233,10 @@ class Claude3:
 
     async def emit_block(self, block_id: str, block_type: str, payload: dict,
                          ttl: int = None, inbox: bool = False):
+        serialized = json.dumps(payload, sort_keys=True)
+        if self._emitted_payloads.get(block_id) == serialized:
+            return  # nothing changed — skip the emit
+        self._emitted_payloads[block_id] = serialized
         args = {'blockId': block_id, 'blockType': block_type, 'payload': payload}
         if ttl is not None:
             args['ttl'] = ttl

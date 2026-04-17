@@ -134,6 +134,7 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
       <button
         onClick={() => navigate(cardTarget)}
         className="w-full flex items-center gap-3 px-3.5 py-3.5 hover:bg-ask-text/[0.05] transition-colors text-left"
+        data-inspect="script-row"
       >
         <ScriptIcon
           scriptIconData={first.scriptIconData}
@@ -146,14 +147,14 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
           className="flex-1 min-w-0"
           {...(tileBlock ? { 'data-block-id': tileBlock.blockID, 'data-block-type': 'tile' } : {})}
         >
-          <p className="text-[15px] font-semibold text-ask-text leading-tight truncate">{first.scriptName}</p>
+          <p className="text-[15px] font-semibold text-ask-text leading-tight truncate" data-inspect="script-row-title">{first.scriptName}</p>
           {label && (
             <div
               className="flex items-center gap-1.5 mt-0.5"
               {...(statusBlock ? { 'data-block-id': statusBlock.blockID, 'data-block-type': 'status' } : {})}
             >
               {color && <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${DOT[color] ?? 'bg-ask-secondary'}`} />}
-              <span className="text-xs text-ask-secondary truncate">{label}</span>
+              <span className="text-xs text-ask-secondary truncate" data-inspect="script-row-subtitle">{label}</span>
             </div>
           )}
           {body && !label && (
@@ -283,6 +284,7 @@ function ScriptTile({ scriptID, blocks }: { scriptID: string; blocks: Block[] })
 
   return (
     <button
+      data-inspect="script-card"
       data-script-id={scriptID}
       data-block-type="script-group"
       onClick={() => navigate(`/script/${scriptID}`)}

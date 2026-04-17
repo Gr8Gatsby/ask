@@ -10,17 +10,19 @@ struct SessionRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            // Status dot — standalone left element matching web mock layout
+            Circle()
+                .fill(payload.isWorking == true ? Color.blue : Color(.systemGray4))
+                .frame(width: 10, height: 10)
+                .padding(.top, 2) // align with first text line
+
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(payload.isWorking == true ? Color.blue : Color(.systemGray4))
-                        .frame(width: 8, height: 8)
-                    Text(payload.project)
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .lineLimit(1)
-                        .accessibilityIdentifier("session-row-project")
-                }
+                Text(payload.project)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+                    .accessibilityIdentifier("session-row-project")
+
                 Group {
                     if let msg = payload.lastMessage, !msg.isEmpty {
                         Text(msg.components(separatedBy: "\n").first(where: { !$0.isEmpty }) ?? msg)
@@ -48,7 +50,9 @@ struct SessionRowView: View {
                 .font(.caption)
                 .lineLimit(1)
             }
+
             Spacer()
+
             HStack(spacing: 6) {
                 if payload.isHeadless == true {
                     Image(systemName: "rectangle.slash")
@@ -62,7 +66,7 @@ struct SessionRowView: View {
                 }
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
     }
 }
 

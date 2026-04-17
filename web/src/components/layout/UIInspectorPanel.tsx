@@ -1,5 +1,5 @@
 import { useLocation } from 'react-router-dom'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useBlocks } from '../../lib/useBlocks'
 import { useRedlines } from '../../lib/RedlinesContext'
 import ScriptIcon from '../shared/ScriptIcon'
@@ -376,18 +376,296 @@ function BlockPayloadPanel({ block, onClose }: { block: Block; onClose: () => vo
   )
 }
 
+// Per-screen structural layout descriptions — describes the component hierarchy,
+// not the live data values, so it's useful as a design spec prompt.
+const SCREEN_LAYOUT_DESCRIPTIONS: Record<string, (params: Record<string, string>, blockTypes: string[], scriptCount: number) => string> = {
+  'Home': (_, blockTypes, scriptCount) => `
+**Purpose:** Main dashboard. Shows one card per active script.
+
+**Chrome:**
+- Navigation bar: large title "Ask", no back button
+- Tab bar (bottom): Home (selected) | Feed | Settings
+
+**Content — Inset-grouped script list:**
+- ${scriptCount} script card${scriptCount !== 1 ? 's' : ''}, each row contains:
+  - Left: 28×28pt script icon (colored SVG or SF Symbol, rounded)
+  - Center stack: script name (17pt semibold, primary) / status subtitle (13pt, secondary color)
+  - Right: disclosure chevron (6×10pt, medium weight, secondary/45% opacity)
+- Rows are separated by inset hairline dividers (starts at x=56pt, ends 16pt from right edge)
+- List style: inset-grouped (rounded corners, card-like grouping)
+- Block types driving cards: ${[...new Set(blockTypes)].join(', ') || 'tile'}
+`.trim(),
+
+  'Script Detail': ({ scriptID }, blockTypes) => `
+**Purpose:** Detail view for a single script ("${scriptID}"). Shows all blocks emitted by this script.
+
+**Chrome:**
+- Navigation bar: back button + script name as title
+- No tab bar (pushed onto nav stack)
+
+**Content — sections:**
+1. Script header: large icon (40pt) + name + description/status, full-width card
+2. Sessions list (if any agent_session blocks): each row has status dot + session label + timestamp + chevron
+   - Row height: ~44pt, separator at x=38pt from left
+3. Status / info blocks rendered inline (status, info_card, tile, etc.)
+4. Interactive blocks at top if present (confirmation, prompt, picker)
+
+**Block types present:** ${[...new Set(blockTypes)].join(', ') || 'none'}
+`.trim(),
+
+  'Session Chat': ({ scriptID, sessionID }, blockTypes) => `
+**Purpose:** Full-screen chat view for a Claude Code / agent session.
+
+**Chrome:**
+- Navigation bar: back button + session title
+- No tab bar
+
+**Content:**
+- Scrollable message thread (top → bottom, newest at bottom)
+- Each message bubble: role indicator + content + timestamp
+- Text input bar pinned at bottom (multiline, send button)
+- Session ID context: ${sessionID ?? '—'}
+- Script: ${scriptID ?? '—'}
+
+**Block types present:** ${[...new Set(blockTypes)].join(', ') || 'agent_session'}
+`.trim(),
+
+  'Task Feed': (_, blockTypes, scriptCount) => `
+**Purpose:** Activity feed across all scripts — recent events in reverse-chronological order.
+
+**Chrome:**
+- Navigation bar: "Feed" title, filter controls
+- Tab bar (bottom): Home | Feed (selected) | Settings
+
+**Content — chronological event list:**
+- Rows show: status dot (colored by script) + event description + script name + relative time
+- No grouping by script — all events interleaved by time
+- Pull-to-refresh supported
+- ${scriptCount} script${scriptCount !== 1 ? 's' : ''} with activity shown
+
+**Block types present:** ${[...new Set(blockTypes)].join(', ') || 'agent_session, session_event'}
+`.trim(),
+
+  'Task Thread': ({ taskID }) => `
+**Purpose:** Thread view for a single task/session.
+
+**Chrome:**
+- Navigation bar: back + task title
+- No tab bar
+
+**Content:**
+- Chronological list of events for task "${taskID ?? '—'}"
+- Each row: event type icon + description + timestamp
+- May include sub-threads or expandable detail rows
+`.trim(),
+
+  'Settings': () => `
+**Purpose:** App configuration screen.
+
+**Chrome:**
+- Navigation bar: "Settings" title
+- Tab bar (bottom): Home | Feed | Settings (selected)
+
+**Content — inset-grouped settings list:**
+- Sections with header labels (all caps, secondary color)
+- Each row: label (17pt) + value or control on right + optional chevron
+- Row separator: inset hairline (starts at x=16pt, ends 16pt from right)
+- Standard iOS settings visual style
+`.trim(),
+}
+
+// Read a handful of computed style values from a DOM element, formatted for the prompt
+function inspectElement(selector: string): Record<string, string> | null {
+  const el = document.querySelector<HTMLElement>(selector)
+  if (!el) return null
+  const s = window.getComputedStyle(el)
+  const rect = el.getBoundingClientRect()
+  return {
+    background: s.backgroundColor,
+    color: s.color,
+    fontSize: s.fontSize,
+    fontWeight: s.fontWeight,
+    lineHeight: s.lineHeight,
+    padding: s.padding,
+    borderRadius: s.borderRadius,
+    height: `${Math.round(rect.height)}px`,
+    width: `${Math.round(rect.width)}px`,
+  }
+}
+
+function fmtInspect(label: string, styles: Record<string, string> | null): string {
+  if (!styles) return ''
+  const relevant = Object.entries(styles)
+    .filter(([, v]) => v && v !== 'none' && v !== 'normal' && v !== '0px' && v !== 'auto')
+    .map(([k, v]) => `    ${k}: ${v}`)
+    .join('\n')
+  return relevant ? `  ${label}:\n${relevant}` : ''
+}
+
+function buildLayoutPrompt(
+  screenName: string,
+  pathname: string,
+  params: Record<string, string>,
+  screenBlocks: Block[],
+  _allBlocks: Block[],
+): string {
+  const blockTypes = screenBlocks.map(b => b.blockType)
+  const scriptIDs = [...new Set(screenBlocks.map(b => b.scriptID))]
+  const descFn = SCREEN_LAYOUT_DESCRIPTIONS[screenName]
+  const layoutDesc = descFn
+    ? descFn(params, blockTypes, scriptIDs.length)
+    : `Screen: ${screenName}\nRoute: ${pathname}\nBlocks: ${screenBlocks.length}`
+
+  const lines: string[] = []
+  lines.push(`## iOS Screen Layout — ${screenName}`)
+  lines.push(`Route: \`${pathname}\``)
+  lines.push('')
+  lines.push(layoutDesc)
+
+  // Live CSS values measured from the rendered DOM
+  const domSamples: string[] = []
+  const phoneScreen = inspectElement('#phone-screen')
+  const scriptCard  = inspectElement('[data-inspect="script-card"]')
+  const scriptRow   = inspectElement('[data-inspect="script-row"]')
+  const rowTitle    = inspectElement('[data-inspect="script-row-title"]')
+  const rowSubtitle = inspectElement('[data-inspect="script-row-subtitle"]')
+
+  if (phoneScreen || scriptCard || scriptRow || rowTitle || rowSubtitle) {
+    lines.push('')
+    lines.push('**Live CSS — measured from rendered DOM:**')
+    lines.push('```')
+    if (phoneScreen) domSamples.push(fmtInspect('Phone screen (background, size)', phoneScreen))
+    if (scriptCard)  domSamples.push(fmtInspect('Script card (bg, radius, padding)', scriptCard))
+    if (scriptRow)   domSamples.push(fmtInspect('Script row button (padding, height)', scriptRow))
+    if (rowTitle)    domSamples.push(fmtInspect('Row title text', rowTitle))
+    if (rowSubtitle) domSamples.push(fmtInspect('Row subtitle text', rowSubtitle))
+    lines.push(domSamples.filter(Boolean).join('\n'))
+    lines.push('```')
+  }
+
+  // Block type schema reference — what each block type renders as in the UI
+  const uniqueTypes = [...new Set(blockTypes)]
+  if (uniqueTypes.length > 0) {
+    lines.push('')
+    lines.push('**Block type → UI component mapping:**')
+    const TYPE_UI: Record<string, string> = {
+      tile: 'Home screen card (icon + title + subtitle row)',
+      status: 'Inline status row (icon + label + color dot)',
+      info_card: 'Expandable card with key/value pairs',
+      confirmation: 'Modal or inline prompt with action buttons',
+      prompt: 'Text input card with submit button',
+      chat_prompt: 'Chat-style input with context bubble',
+      picker: 'Native dropdown / segmented selector',
+      agent_session: 'Chat session row (expandable into SessionChatScreen)',
+      session_event: 'Timeline event row in session thread',
+      countdown: 'Live countdown label on tile and detail',
+      alert: 'Transient banner (not persisted)',
+      quick_reply: 'Inline reply chips',
+    }
+    for (const t of uniqueTypes) {
+      lines.push(`- \`${t}\`: ${TYPE_UI[t] ?? 'custom block'}`)
+    }
+  }
+
+  return lines.join('\n')
+}
+
 export default function UIInspectorPanel() {
   const location = useLocation()
   const { blocks, loading } = useBlocks()
   const { name: screenName, params, filterBlocks } = getScreenInfo(location.pathname)
   const { showRedlines, focusedBlockID, setFocusedBlockID } = useRedlines()
   const [selectedBlockID, setSelectedBlockID] = useState<string | null>(null)
+  const [promptCopied, setPromptCopied] = useState(false)
+  const [screenshotState, setScreenshotState] = useState<'idle' | 'capturing' | 'copied'>('idle')
+  const { setCleanView } = useRedlines()
 
   useEffect(() => { setSelectedBlockID(null) }, [location.pathname])
   useEffect(() => { if (!showRedlines) setFocusedBlockID(null) }, [showRedlines, setFocusedBlockID])
   useEffect(() => { setFocusedBlockID(null) }, [location.pathname, setFocusedBlockID])
 
   const screenBlocks = filterBlocks(blocks)
+
+  const captureScreenshot = useCallback(async () => {
+    setScreenshotState('capturing')
+    try {
+      // getDisplayMedia captures actual rendered pixels — no DOM-to-canvas conversion.
+      // preferCurrentTab pre-selects this tab in Chrome so the user just clicks "Share".
+      const stream = await (navigator.mediaDevices as MediaDevices & {
+        getDisplayMedia(c?: object): Promise<MediaStream>
+      }).getDisplayMedia({
+        video: { displaySurface: 'browser' },
+        preferCurrentTab: true,
+      })
+
+      // Draw one frame from the stream then stop immediately
+      const video = document.createElement('video')
+      video.srcObject = stream
+      video.muted = true
+      await new Promise<void>(resolve => { video.onloadedmetadata = () => resolve() })
+      await video.play()
+
+      const track = stream.getVideoTracks()[0]
+      const { width: capW = window.innerWidth, height: capH = window.innerHeight } = track.getSettings()
+
+      // Map CSS viewport coordinates → capture pixel coordinates
+      const scaleX = capW / window.innerWidth
+      const scaleY = capH / window.innerHeight
+
+      // Crop to the phone frame element
+      const frame = document.getElementById('phone-frame')
+      const rect = frame?.getBoundingClientRect()
+
+      const canvas = document.createElement('canvas')
+      if (rect) {
+        canvas.width  = Math.round(rect.width  * scaleX)
+        canvas.height = Math.round(rect.height * scaleY)
+        canvas.getContext('2d')!.drawImage(
+          video,
+          Math.round(rect.left * scaleX), Math.round(rect.top * scaleY),
+          canvas.width, canvas.height,
+          0, 0, canvas.width, canvas.height,
+        )
+      } else {
+        // Fallback: full viewport
+        canvas.width = capW; canvas.height = capH
+        canvas.getContext('2d')!.drawImage(video, 0, 0)
+      }
+
+      video.pause()
+      stream.getTracks().forEach(t => t.stop())
+
+      canvas.toBlob(async (blob) => {
+        if (!blob) { setScreenshotState('idle'); return }
+        try {
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+          setScreenshotState('copied')
+          setTimeout(() => setScreenshotState('idle'), 2000)
+        } catch {
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = `ask-${screenName.toLowerCase().replace(/\s+/g, '-')}.png`
+          a.click()
+          URL.revokeObjectURL(url)
+          setScreenshotState('idle')
+        }
+      }, 'image/png')
+    } catch (e) {
+      // User cancelled the share dialog or browser doesn't support it
+      console.warn('screenshot cancelled or unsupported', e)
+      setScreenshotState('idle')
+    }
+  }, [screenName])
+
+  function copyPrompt() {
+    const text = buildLayoutPrompt(screenName, location.pathname, params, screenBlocks, blocks)
+    navigator.clipboard.writeText(text).catch(() => {})
+    setPromptCopied(true)
+    setTimeout(() => setPromptCopied(false), 1500)
+  }
+
+
   const grouped = screenBlocks.reduce<Record<string, Block[]>>((acc, block) => {
     if (!acc[block.scriptID]) acc[block.scriptID] = []
     acc[block.scriptID].push(block)
@@ -423,8 +701,57 @@ export default function UIInspectorPanel() {
 
       {/* ── Header ── */}
       <div style={{ padding: '10px 14px 8px', borderBottom: '1px solid rgba(0,0,0,0.07)', background: 'rgba(0,0,0,0.02)', flexShrink: 0 }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: 'rgba(0,0,0,0.35)', letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 4 }}>
-          UI Inspector
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'rgba(0,0,0,0.35)', letterSpacing: 0.8, textTransform: 'uppercase' }}>
+            UI Inspector
+          </div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <button
+              onClick={copyPrompt}
+              title="Copy layout prompt for Claude"
+              style={{
+                fontSize: 10, fontWeight: 600, cursor: 'pointer', border: 'none', borderRadius: 5,
+                padding: '3px 7px',
+                color: promptCopied ? 'rgb(52,199,89)' : 'rgba(0,0,0,0.5)',
+                background: promptCopied ? 'rgba(52,199,89,0.1)' : 'rgba(0,0,0,0.07)',
+                transition: 'all 0.15s',
+                display: 'flex', alignItems: 'center', gap: 3,
+              }}
+            >
+              <span style={{ fontSize: 9 }}>{promptCopied ? '✓' : '⌘'}</span>
+              {promptCopied ? 'copied!' : 'copy prompt'}
+            </button>
+            <button
+              onClick={captureScreenshot}
+              title="Copy screenshot to clipboard"
+              disabled={screenshotState === 'capturing'}
+              style={{
+                fontSize: 10, fontWeight: 600,
+                cursor: screenshotState === 'capturing' ? 'default' : 'pointer',
+                border: 'none', borderRadius: 5, padding: '3px 7px',
+                color: screenshotState === 'copied' ? 'rgb(52,199,89)' : 'rgba(0,0,0,0.5)',
+                background: screenshotState === 'copied' ? 'rgba(52,199,89,0.1)' : 'rgba(0,0,0,0.07)',
+                transition: 'all 0.15s', display: 'flex', alignItems: 'center', gap: 3,
+              }}
+            >
+              <span style={{ fontSize: 9 }}>
+                {screenshotState === 'capturing' ? '…' : screenshotState === 'copied' ? '✓' : '📷'}
+              </span>
+              {screenshotState === 'copied' ? 'copied!' : screenshotState === 'capturing' ? 'capturing…' : 'screenshot'}
+            </button>
+            <button
+              onClick={() => setCleanView(true)}
+              title="Clean view for manual screenshot (Esc to exit)"
+              style={{
+                fontSize: 10, fontWeight: 600, cursor: 'pointer',
+                border: 'none', borderRadius: 5, padding: '3px 7px',
+                color: 'rgba(0,0,0,0.5)', background: 'rgba(0,0,0,0.07)',
+                display: 'flex', alignItems: 'center', gap: 3,
+              }}
+            >
+              <span style={{ fontSize: 9 }}>⛶</span>
+            </button>
+          </div>
         </div>
         <div style={{ fontSize: 15, fontWeight: 700, color: 'rgba(0,0,0,0.85)', marginBottom: 1 }}>{screenName}</div>
         <div style={{ fontSize: 10, color: 'rgba(0,0,0,0.35)', fontFamily: 'ui-monospace, monospace' }}>{location.pathname}</div>

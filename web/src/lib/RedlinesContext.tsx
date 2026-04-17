@@ -11,6 +11,8 @@ interface RedlinesCtx {
   setShowSpacing: (v: boolean) => void
   showAllDims: boolean
   setShowAllDims: (v: boolean) => void
+  cleanView: boolean
+  setCleanView: (v: boolean) => void
 }
 
 const RedlinesContext = createContext<RedlinesCtx>({
@@ -19,6 +21,7 @@ const RedlinesContext = createContext<RedlinesCtx>({
   inspectorOpen: false, setInspectorOpen: () => {},
   showSpacing: false, setShowSpacing: () => {},
   showAllDims: false, setShowAllDims: () => {},
+  cleanView: false, setCleanView: () => {},
 })
 
 export function RedlinesProvider({ children }: { children: React.ReactNode }) {
@@ -27,6 +30,7 @@ export function RedlinesProvider({ children }: { children: React.ReactNode }) {
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [showSpacing, setShowSpacing] = useState(false)
   const [showAllDims, setShowAllDims] = useState(false)
+  const [cleanView, setCleanView] = useState(false)
   return (
     <RedlinesContext.Provider value={{
       showRedlines, setShowRedlines,
@@ -34,6 +38,7 @@ export function RedlinesProvider({ children }: { children: React.ReactNode }) {
       inspectorOpen, setInspectorOpen,
       showSpacing, setShowSpacing,
       showAllDims, setShowAllDims,
+      cleanView, setCleanView,
     }}>
       {children}
     </RedlinesContext.Provider>
