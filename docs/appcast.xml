@@ -14,22 +14,9 @@
       <pubDate>Fri, 17 Apr 2026 23:32:26 +0000</pubDate>
       <enclosure
         url="https://github.com/Gr8Gatsby/ask/releases/download/v0.9.0/AskMac-0.9.0.dmg"
-        length="3815263"
+        length="3817184"
         type="application/octet-stream"
-        sparkle:edSignature="WtXk1fyd1YRVftd/QZiN4oSp8QgMHWsvMxkJeKvtiSfSNQJ0ktbvqhjeJBpQCWcbJ4UXN11LOUYpKKj+GaLaDQ=="
-      />
-    </item>
-    <item>
-      <title>Version 0.9.0</title>
-      <sparkle:version>1776464636</sparkle:version>
-      <sparkle:shortVersionString>0.9.0</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Fri, 17 Apr 2026 22:26:56 +0000</pubDate>
-      <enclosure
-        url="https://github.com/Gr8Gatsby/ask/releases/download/v0.9.0/AskMac-0.9.0.dmg"
-        length="3815380"
-        type="application/octet-stream"
-        sparkle:edSignature="lEgohA2gIbuk1jo4uNICwT+GQ9i0kXlqAE+CHGpVLd9/vptUxyGiL2RuSn4+LK/tTg9E9xZ+2tULQERwyrXxCg=="
+        sparkle:edSignature="/wefg89tcJbxbs9VH+hLi5Pw8VtjM6jglNotusZ04VKQt5AA7ASZi7npYB0WV/kQ+nKPfmPqzq3y/Uz2Umc0Bw=="
       />
     </item>
     <item>
