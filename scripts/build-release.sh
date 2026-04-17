@@ -376,10 +376,13 @@ PUB_DATE=$(date -u '+%a, %d %b %Y %H:%M:%S +0000')
 DMG_NAME="AskMac-${VERSION}.dmg"
 
 python3 - <<PYEOF
+import re
 channel = "${CHANNEL}"
 channel_tag = f"\n      <sparkle:channel>{channel}</sparkle:channel>" if channel != "stable" else ""
 with open('docs/appcast.xml', 'r') as f:
     content = f.read()
+# Remove any existing entries for this version before inserting to avoid duplicates
+content = re.sub(r'\s*<item>\s*<title>Version ${VERSION}</title>.*?</item>', '', content, flags=re.DOTALL)
 new_item = f"""    <item>
       <title>Version ${VERSION}</title>
       <sparkle:version>${BUILD_NUMBER}</sparkle:version>
