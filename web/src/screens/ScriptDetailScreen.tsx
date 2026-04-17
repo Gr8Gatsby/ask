@@ -7,7 +7,7 @@ import type { AgentSessionPayload, ConfirmationPayload } from '../lib/types'
 import BlockRenderer from '../components/blocks/BlockRenderer'
 import ScriptIcon from '../components/shared/ScriptIcon'
 import { useStartSession } from '../lib/StartSessionContext'
-import { useBrandColor, iosGlassStyle } from '../components/layout/AppShell'
+import { useBrandColor, IOSStatusBarRow, iosNavChromeStyle } from '../components/layout/AppShell'
 
 function parsePayload<T>(json: string): T | null {
   try { return JSON.parse(json) as T } catch { return null }
@@ -32,12 +32,12 @@ function SessionRow({
   return (
     <button
       onClick={onClick}
-      className={`w-full flex items-center gap-3 py-3 transition-colors text-left ${
+      className={`w-full flex items-center gap-3 py-2 transition-colors text-left ${
         isAndroid ? 'hover:bg-white/5' : 'px-4 hover:bg-ask-card2/60'
       }`}
     >
       <div
-        className={`w-2 h-2 rounded-full flex-shrink-0 ${payload.is_working ? 'bg-ask-blue animate-pulse' : 'bg-ask-card2'}`}
+        className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${payload.is_working ? 'bg-ask-blue animate-pulse' : 'bg-ask-card2'}`}
       />
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold text-ask-text">{payload.project}</p>
@@ -53,7 +53,9 @@ function SessionRow({
             {confirmationCount}
           </span>
         )}
-        <span className="text-ask-secondary">›</span>
+        <svg width="6" height="10" viewBox="0 0 6 10" fill="none" className="text-ask-secondary/45 flex-shrink-0">
+          <path d="M1 1l4 4-4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
       </div>
     </button>
   )
@@ -139,21 +141,17 @@ export default function ScriptDetailScreen() {
               </p>
 
               {/* iOS: inset-grouped card; Android: flat full-width list */}
-              <div className={theme.isAndroid
-                ? ''
-                : 'bg-ask-card rounded-xl overflow-hidden border border-ask-sep/40'
-              }>
+              <div className={theme.isAndroid ? '' : 'bg-ask-card rounded-xl overflow-hidden shadow-sm shadow-black/[0.06]'}>
                 {sessionBlocks.map((block, idx) => {
                   const payload = parsePayload<AgentSessionPayload>(block.payload)
                   const confs = payload ? sessionConfirmations(payload.session_id) : []
-                  const isLast = idx === sessionBlocks.length - 1
                   return (
                     <div key={block.blockID} data-block-id={block.blockID} data-block-type="agent_session">
-                      <div className={
-                        theme.isAndroid
-                          ? `px-4 border-b border-ask-sep ${confs.length > 0 ? 'bg-ask-orange/5' : ''}`
-                          : `${confs.length > 0 ? 'bg-ask-orange/5' : ''} ${!isLast || confs.length > 0 ? 'border-b border-ask-sep/40' : ''}`
-                      }>
+                      {/* Inset separator (iOS) or full-width (Android) */}
+                      {idx > 0 && (
+                        <div className={theme.isAndroid ? 'border-t border-ask-sep' : 'h-px bg-ask-sep/50 ml-[38px] mr-4'} />
+                      )}
+                      <div className={confs.length > 0 ? 'bg-ask-orange/5' : ''}>
                         <SessionRow
                           block={block}
                           confirmationCount={confs.length}
@@ -165,16 +163,12 @@ export default function ScriptDetailScreen() {
                       </div>
 
                       {/* Linked confirmations — indented, orange tint */}
-                      {confs.map((conf, ci) => (
-                        <div
-                          key={conf.blockID}
-                          className={`pl-8 pr-4 py-3 bg-ask-orange/5 ${
-                            theme.isAndroid
-                              ? 'border-b border-ask-sep'
-                              : (!isLast || ci < confs.length - 1 ? 'border-b border-ask-sep/40' : '')
-                          }`}
-                        >
-                          <BlockRenderer block={conf} onRespond={respond} />
+                      {confs.map((conf) => (
+                        <div key={conf.blockID}>
+                          <div className={theme.isAndroid ? 'border-t border-ask-sep' : 'h-px bg-ask-sep/50 ml-8'} />
+                          <div className="pl-8 pr-4 py-3 bg-ask-orange/5">
+                            <BlockRenderer block={conf} onRespond={respond} />
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -216,38 +210,36 @@ export default function ScriptDetailScreen() {
     )
   }
 
-  // iOS — content scrolls under a frosted-glass nav bar
+  // iOS — combined status+nav chrome (same pattern as SessionChatScreen)
   return (
     <div className="relative h-full">
-      {/* Full-height scroll area — content starts behind the nav bar */}
-      <div className="h-full overflow-y-auto no-scrollbar">
-        {/* Top padding pushes content below the nav bar */}
-        <div className="pt-[52px]">
-          {scrollContent}
-        </div>
+      <div className="absolute inset-0 overflow-y-auto no-scrollbar">
+        <div className="pt-24 pb-4">{scrollContent}</div>
       </div>
 
-      {/* Glass nav bar — floats over scroll content */}
+      {/* One combined frosted element — status bar row + nav row, no seam */}
       <div
-        className="absolute top-0 left-0 right-0 flex items-center gap-3 px-4 pt-3 pb-3 z-10"
-        style={iosGlassStyle(isLight)}
+        className="absolute top-0 left-0 right-0 z-20"
+        style={iosNavChromeStyle(isLight)}
       >
-        <button onClick={() => navigate(-1)} className={theme.navBackClass}>
-          {theme.navBackIcon}
-          <span>Home</span>
-        </button>
-        {first && (
-          <div className="flex items-center gap-2 flex-1 min-w-0">
-            <ScriptIcon
-              scriptIconData={first.scriptIconData}
-              scriptIconSVG={first.scriptIconSVG}
-              scriptIcon={first.scriptIcon}
-              scriptName={first.scriptName}
-              size={24}
-            />
-            <span className={`${theme.typeTitleMedium} text-ask-text truncate`}>{first.scriptName}</span>
-          </div>
-        )}
+        <IOSStatusBarRow />
+        <div className="relative flex items-center px-4 pb-3">
+          <button onClick={() => navigate(-1)} className={theme.navBackClass}>
+            {theme.navBackIcon}
+            <span>Home</span>
+          </button>
+          {first && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <ScriptIcon
+                scriptIconData={first.scriptIconData}
+                scriptIconSVG={first.scriptIconSVG}
+                scriptIcon={first.scriptIcon}
+                scriptName={first.scriptName}
+                size={28}
+              />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

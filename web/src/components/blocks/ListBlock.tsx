@@ -1,3 +1,4 @@
+import React from 'react'
 import type { Block, ListPayload } from '../../lib/types'
 import { useTheme } from '../../lib/PlatformContext'
 
@@ -52,24 +53,33 @@ export default function ListBlock({ block, payload, onRespond }: Props) {
     )
   }
 
+  // iOS — inset grouped card style
   return (
     <div className="flex flex-col gap-2">
-      {payload.title && <p className="text-sm font-semibold text-ask-text">{payload.title}</p>}
-      <div className="border-t border-ask-sep">
-        {payload.items.map(item => (
-          <button key={item.id} onClick={() => onRespond(block.blockID, item.id)} className="w-full flex items-center justify-between py-2.5 border-b border-ask-sep last:border-0 hover:bg-ask-text/[0.05] transition-colors text-left px-0.5">
-            <div>
-              <p className="text-sm text-ask-text">{item.label}</p>
-              {item.subtitle && <p className="text-xs text-ask-secondary">{item.subtitle}</p>}
-            </div>
-            <span className="text-ask-secondary text-sm">›</span>
-          </button>
+      {payload.title && <p className="text-[13px] font-semibold text-ask-secondary uppercase tracking-wide px-1 pb-0.5">{payload.title}</p>}
+      <div className="bg-ask-card rounded-xl overflow-hidden shadow-sm shadow-black/[0.06]">
+        {payload.items.map((item, i) => (
+          <React.Fragment key={item.id}>
+            {i > 0 && <div className="h-px bg-ask-sep/50 ml-4 mr-4" />}
+            <button
+              onClick={() => onRespond(block.blockID, item.id)}
+              className="w-full flex items-center justify-between min-h-[44px] px-4 active:bg-ask-sep/30 transition-colors text-left"
+            >
+              <div className="flex-1 min-w-0">
+                <p className="text-[17px] text-ask-text">{item.label}</p>
+                {item.subtitle && <p className="text-[13px] text-ask-secondary">{item.subtitle}</p>}
+              </div>
+              <svg width="6" height="10" viewBox="0 0 6 10" fill="none" className="ml-2 text-ask-secondary/45 flex-shrink-0">
+                <path d="M1 1l4 4-4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
+          </React.Fragment>
         ))}
       </div>
       {payload.actions && payload.actions.length > 0 && (
         <div className="flex flex-col gap-2 pt-1">
           {payload.actions.map(action => (
-            <button key={action} onClick={() => onRespond(block.blockID, action)} className="w-full py-2 rounded-lg bg-ask-card2 text-sm font-medium text-ask-text hover:bg-ask-card2/60 transition-colors">{action}</button>
+            <button key={action} onClick={() => onRespond(block.blockID, action)} className="w-full py-3 rounded-xl bg-ask-card text-[17px] text-ask-blue font-normal active:bg-ask-sep/30 transition-colors shadow-sm shadow-black/[0.06]">{action}</button>
           ))}
         </div>
       )}

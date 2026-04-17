@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getTasks } from '../lib/api'
 import type { AskTask, Block, AgentSessionPayload, FeedItemPayload, CompactSummaryPayload } from '../lib/types'
 import { usePlatform } from '../lib/PlatformContext'
 import { useBlocks } from '../lib/useBlocks'
 import ScriptIcon from '../components/shared/ScriptIcon'
+import { IOSStatusBarRow, iosNavChromeStyle } from '../components/layout/AppShell'
 
 function relativeTime(iso: string) {
   const diff = Date.now() - new Date(iso).getTime()
@@ -30,81 +31,89 @@ function sessionStatus(payload: AgentSessionPayload): { label: string; color: st
 
 // ---- iOS ----
 
-function IOSSessionRow({ block, payload, onClick, first, last }: {
-  block: Block; payload: AgentSessionPayload; onClick: () => void; first: boolean; last: boolean
-}) {
-  const borderT = first ? '' : 'border-t border-ask-sep/40'
-  const roundT = first ? 'rounded-t-xl' : ''
-  const roundB = last ? 'rounded-b-xl' : ''
-  const { label, color, pulse } = sessionStatus(payload)
+// Inset grouped card container — wraps a list group iOS-style
+function IOSListCard({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mx-4 bg-ask-card rounded-xl overflow-hidden shadow-sm shadow-black/[0.06]">
+      {children}
+    </div>
+  )
+}
 
+// Inset separator — starts after icon column (px-4=16 + icon=28 + gap=12 = 56px), ends 16px from right
+function IOSSep() {
+  return <div className="h-px bg-ask-sep/50 ml-14 mr-4" />
+}
+
+const IOSChevron = () => (
+  <svg width="6" height="10" viewBox="0 0 6 10" fill="none" className="text-ask-secondary/45 flex-shrink-0">
+    <path d="M1 1l4 4-4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+  </svg>
+)
+
+function IOSSessionRow({ block, payload, onClick }: {
+  block: Block; payload: AgentSessionPayload; onClick: () => void
+}) {
+  const { label, color, pulse } = sessionStatus(payload)
   return (
     <button
       data-block-id={block.blockID}
       data-block-type="agent_session"
       onClick={onClick}
-      className={`w-full flex items-center gap-3 min-h-[56px] px-4 py-3 bg-ask-card text-left active:opacity-70 transition-opacity ${borderT} ${roundT} ${roundB}`}
+      className="w-full flex items-center gap-3 px-4 min-h-[44px] py-1 text-left active:bg-ask-sep/30 transition-colors"
     >
+      <ScriptIcon
+        scriptIconData={block.scriptIconData}
+        scriptIconSVG={block.scriptIconSVG}
+        scriptIcon={block.scriptIcon}
+        scriptName={block.scriptName}
+        size={28}
+      />
       <div className="flex-1 min-w-0">
         <p className="text-[17px] text-ask-text leading-snug truncate">{payload.project}</p>
-        <p className="text-[13px] text-ask-secondary truncate">{block.scriptName}</p>
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
         <span className={`flex items-center gap-1.5 ${color}`}>
-          {pulse && <span className="w-1.5 h-1.5 rounded-full bg-ask-blue animate-pulse" />}
-          <span className="text-[13px]">{label}</span>
+          {pulse && <span className="w-2 h-2 rounded-full bg-ask-blue animate-pulse" />}
+          <span className="text-[15px]">{label}</span>
         </span>
-        <svg width="8" height="13" viewBox="0 0 8 13" fill="none" className="text-ask-secondary/50 flex-shrink-0">
-          <path d="M1 1l6 5.5L1 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-        </svg>
+        <IOSChevron />
       </div>
     </button>
   )
 }
 
-function IOSTaskRow({ task, onClick, first, last }: { task: AskTask; onClick: () => void; first: boolean; last: boolean }) {
-  const borderT = first ? '' : 'border-t border-ask-sep/40'
-  const roundT = first ? 'rounded-t-xl' : ''
-  const roundB = last ? 'rounded-b-xl' : ''
+function IOSTaskRow({ task, onClick }: { task: AskTask; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      className={`w-full flex items-center gap-3 min-h-[56px] px-4 py-3 bg-ask-card text-left active:opacity-70 transition-opacity ${borderT} ${roundT} ${roundB}`}
+      className="w-full flex items-center gap-3 px-4 min-h-[44px] py-1 text-left active:bg-ask-sep/30 transition-colors"
     >
+      <ScriptIcon
+        scriptIcon={task.scriptIcon}
+        scriptName={task.scriptName}
+        size={28}
+      />
       <div className="flex-1 min-w-0">
         <p className="text-[17px] text-ask-text leading-snug truncate">{task.title}</p>
-        <div className="flex items-center gap-1.5 mt-0.5">
-          <span className="text-[13px] text-ask-secondary truncate">{task.scriptName}</span>
-          {task.artifactCount > 0 && (
-            <>
-              <span className="text-ask-secondary/40 text-[11px]">·</span>
-              <span className="text-[13px] text-ask-secondary flex-shrink-0">
-                {task.artifactCount} {task.artifactCount === 1 ? 'file' : 'files'}
-              </span>
-            </>
-          )}
-        </div>
+        {task.artifactCount > 0 && (
+          <p className="text-[13px] text-ask-secondary truncate">
+            {task.artifactCount} {task.artifactCount === 1 ? 'file' : 'files'}
+          </p>
+        )}
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
-        <span className="text-[13px] text-ask-secondary">Done</span>
-        <svg width="8" height="13" viewBox="0 0 8 13" fill="none" className="text-ask-secondary/50 flex-shrink-0">
-          <path d="M1 1l6 5.5L1 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-        </svg>
+        <span className="text-[15px] text-ask-secondary">Done</span>
+        <IOSChevron />
       </div>
     </button>
   )
 }
 
-function IOSActivityRow({ block, first, last }: { block: Block; first: boolean; last: boolean }) {
-  const borderT = first ? '' : 'border-t border-ask-sep/40'
-  const roundT = first ? 'rounded-t-xl' : ''
-  const roundB = last ? 'rounded-b-xl' : ''
-
+function IOSActivityRow({ block }: { block: Block }) {
   let title = block.scriptName
   let body: string | undefined
   let timestamp = block.createdAt
-  let fileCount = 0
-
   if (block.blockType === 'feed_item') {
     const p = parsePayload<FeedItemPayload>(block.payload)
     if (p) { title = p.title; body = p.body; timestamp = p.timestamp ?? timestamp }
@@ -114,79 +123,86 @@ function IOSActivityRow({ block, first, last }: { block: Block; first: boolean; 
   }
 
   return (
-    <div data-block-id={block.blockID} data-block-type={block.blockType} className={`flex items-center gap-3 min-h-[56px] px-4 py-3 bg-ask-card ${borderT} ${roundT} ${roundB}`}>
-      <div className="w-8 h-8 rounded-full bg-ask-green/20 flex items-center justify-center flex-shrink-0">
-        <span className="mat-icon text-ask-green" style={{ fontSize: 16, fontVariationSettings: "'FILL' 1" }}>check_circle</span>
-      </div>
+    <div data-block-id={block.blockID} data-block-type={block.blockType} className="flex items-center gap-3 px-4 min-h-[44px] py-1">
+      <ScriptIcon
+        scriptIconData={block.scriptIconData}
+        scriptIconSVG={block.scriptIconSVG}
+        scriptIcon={block.scriptIcon}
+        scriptName={block.scriptName}
+        size={28}
+      />
       <div className="flex-1 min-w-0">
         <p className="text-[17px] text-ask-text leading-snug truncate">{title}</p>
-        <div className="flex items-center gap-1.5 mt-0.5">
-          <span className="text-[13px] text-ask-secondary truncate">{block.scriptName}</span>
-          {fileCount > 0 && (
-            <>
-              <span className="text-ask-secondary/40 text-[11px]">·</span>
-              <span className="text-[13px] text-ask-secondary flex-shrink-0">{fileCount} {fileCount === 1 ? 'file' : 'files'}</span>
-            </>
-          )}
-        </div>
-        {body && <p className="text-[12px] text-ask-secondary/70 line-clamp-1 mt-0.5">{body}</p>}
+        {body && <p className="text-[13px] text-ask-secondary/70 line-clamp-1">{body}</p>}
       </div>
-      <span className="text-[13px] text-ask-secondary/60 flex-shrink-0 ml-2">{relativeTime(timestamp)}</span>
+      <span className="text-[15px] text-ask-secondary/60 flex-shrink-0 ml-2">{relativeTime(timestamp)}</span>
     </div>
   )
 }
 
-function IOSFeedScreen({ sessions, recentTasks, activityBlocks, onNavigateSession, onNavigateTask }: {
+function IOSFeedScreen({ sessions, recentTasks, activityBlocks, onNavigateSession, onNavigateTask, isLight }: {
   sessions: Array<{ block: Block; payload: AgentSessionPayload }>
   recentTasks: AskTask[]
   activityBlocks: Block[]
   onNavigateSession: (block: Block, payload: AgentSessionPayload) => void
   onNavigateTask: (taskID: string) => void
+  isLight: boolean
 }) {
   const totalRecent = recentTasks.length + activityBlocks.length
-  return (
-    <div className="flex flex-col h-full overflow-y-auto no-scrollbar bg-ask-bg">
-      <div className="px-4 pt-3 pb-2">
-        <h1 className="text-[34px] font-bold text-ask-text leading-tight">Feed</h1>
-      </div>
 
+  const scrollContent = (
+    <>
       {sessions.length > 0 && (
         <>
           <p className="text-[13px] text-ask-secondary uppercase tracking-wide px-4 pb-1 pt-3">Active</p>
-          <div className="mx-4">
+          <IOSListCard>
             {sessions.map(({ block, payload }, i) => (
-              <IOSSessionRow
-                key={block.blockID} block={block} payload={payload}
-                onClick={() => onNavigateSession(block, payload)}
-                first={i === 0} last={i === sessions.length - 1}
-              />
+              <React.Fragment key={block.blockID}>
+                {i > 0 && <IOSSep />}
+                <IOSSessionRow block={block} payload={payload} onClick={() => onNavigateSession(block, payload)} />
+              </React.Fragment>
             ))}
-          </div>
+          </IOSListCard>
         </>
       )}
 
       {totalRecent > 0 && (
         <>
           <p className="text-[13px] text-ask-secondary uppercase tracking-wide px-4 pb-1 pt-5">Recent</p>
-          <div className="mx-4">
-            {recentTasks.map((t, i) => (
-              <IOSTaskRow
-                key={t.taskID} task={t} onClick={() => onNavigateTask(t.taskID)}
-                first={i === 0} last={i === recentTasks.length - 1 && activityBlocks.length === 0}
-              />
+          <IOSListCard>
+            {[
+              ...recentTasks.map(t => ({ key: t.taskID, el: <IOSTaskRow task={t} onClick={() => onNavigateTask(t.taskID)} /> })),
+              ...activityBlocks.map(b => ({ key: b.blockID, el: <IOSActivityRow block={b} /> })),
+            ].map(({ key, el }, i) => (
+              <React.Fragment key={key}>
+                {i > 0 && <IOSSep />}
+                {el}
+              </React.Fragment>
             ))}
-            {activityBlocks.map((b, i) => (
-              <IOSActivityRow
-                key={b.blockID} block={b}
-                first={recentTasks.length === 0 && i === 0}
-                last={i === activityBlocks.length - 1}
-              />
-            ))}
-          </div>
+          </IOSListCard>
         </>
       )}
 
       <div className="h-6" />
+    </>
+  )
+
+  return (
+    <div className="relative h-full bg-ask-bg">
+      <div className="absolute inset-0 overflow-y-auto no-scrollbar">
+        <div className="pt-24 pb-4">{scrollContent}</div>
+      </div>
+
+      {/* Frosted chrome — status bar + inline "Feed" title */}
+      <div
+        className="absolute top-0 left-0 right-0 z-20"
+        style={iosNavChromeStyle(isLight)}
+      >
+        <IOSStatusBarRow />
+        <div className="flex items-center justify-center px-4 pb-3 relative">
+          <p className="text-[17px] font-semibold text-ask-text">Feed</p>
+        </div>
+      </div>
     </div>
   )
 }
@@ -348,8 +364,9 @@ const ACTIVITY_BLOCK_TYPES = new Set(['feed_item', 'compact_summary'])
 export default function TaskFeedScreen() {
   const [tasks, setTasks] = useState<AskTask[]>([])
   const navigate = useNavigate()
-  const { platform } = usePlatform()
+  const { platform, themeMode } = usePlatform()
   const isAndroid = platform === 'android'
+  const isLight = themeMode === 'light'
   const { blocks } = useBlocks()
 
   const load = useCallback(() => {
@@ -397,12 +414,22 @@ export default function TaskFeedScreen() {
   }
 
   if (sessions.length === 0 && recentTasks.length === 0 && activityBlocks.length === 0) {
+    if (!isAndroid) {
+      return (
+        <div className="relative h-full bg-ask-bg">
+          <div className="flex items-center justify-center h-full text-ask-secondary text-sm pt-24">No activity yet</div>
+          <div className="absolute top-0 left-0 right-0 z-20" style={iosNavChromeStyle(isLight)}>
+            <IOSStatusBarRow />
+            <div className="flex items-center justify-center px-4 pb-3">
+              <p className="text-[17px] font-semibold text-ask-text">Feed</p>
+            </div>
+          </div>
+        </div>
+      )
+    }
     return (
       <div className="flex flex-col h-full">
-        {isAndroid
-          ? <div className="px-4 pt-4 pb-3 flex-shrink-0"><h1 className="text-[28px] font-medium text-ask-text leading-tight">Feed</h1></div>
-          : <div className="px-4 pt-3 pb-2"><h1 className="text-[34px] font-bold text-ask-text leading-tight">Feed</h1></div>
-        }
+        <div className="px-4 pt-4 pb-3 flex-shrink-0"><h1 className="text-[28px] font-medium text-ask-text leading-tight">Feed</h1></div>
         <div className="flex items-center justify-center flex-1 text-ask-secondary text-sm">No activity yet</div>
       </div>
     )
@@ -420,6 +447,7 @@ export default function TaskFeedScreen() {
     <IOSFeedScreen
       sessions={sessions} recentTasks={recentTasks} activityBlocks={activityBlocks}
       onNavigateSession={handleNavigateSession} onNavigateTask={id => navigate(`/tasks/${id}`)}
+      isLight={isLight}
     />
   )
 }

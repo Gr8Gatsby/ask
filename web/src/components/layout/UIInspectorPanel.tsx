@@ -55,11 +55,18 @@ function getScreenInfo(pathname: string): ScreenInfo {
   if (pathname.startsWith('/settings')) {
     return { name: 'Settings', params: {}, filterBlocks: () => [] }
   }
-  // Home: tile-type blocks (same filter as scriptGroups in useBlocks)
+  // Home: one tile block per script group drives the card.
+  // Inbox blocks (quick_reply / confirmation with showsInInbox=1) appear inline.
+  // Everything else (status, agent_session, picker, etc.) only renders inside Script Detail.
   return {
     name: 'Home',
     params: {},
-    filterBlocks: (blocks) => blocks.filter(b => b.scriptType === 'tile'),
+    filterBlocks: (blocks) => blocks.filter(b =>
+      b.scriptType === 'tile' && (
+        b.blockType === 'tile' ||
+        b.showsInInbox === 1
+      )
+    ),
   }
 }
 
@@ -91,15 +98,19 @@ const BLOCK_TYPE_COLOR: Record<string, string> = {
   diagnostics: '#ff9f0a',
 }
 
-/** Highlight the specific block element; fall back to its script-group card if no block element exists */
+/** Highlight the specific block element AND its containing script-group card */
 function highlightBlock(block: Block) {
   document.querySelectorAll('[data-block-id].inspector-highlighted, [data-script-id].inspector-highlighted')
     .forEach(el => el.classList.remove('inspector-highlighted'))
+
   const blockEls = document.querySelectorAll(`[data-block-id="${block.blockID}"]`)
   if (blockEls.length > 0) {
     blockEls.forEach(el => el.classList.add('inspector-highlighted'))
+    // Also highlight the containing script-group card so context is clear
+    document.querySelectorAll(`[data-script-id="${block.scriptID}"]`)
+      .forEach(el => el.classList.add('inspector-highlighted'))
   } else {
-    // Block not individually wrapped in DOM — highlight its containing script-group card
+    // Block not individually wrapped in DOM — highlight only the containing script-group card
     document.querySelectorAll(`[data-script-id="${block.scriptID}"]`)
       .forEach(el => el.classList.add('inspector-highlighted'))
   }
@@ -194,6 +205,7 @@ function ScriptGroupHeader({ blocks, allBlocks }: { blocks: Block[]; allBlocks: 
         scriptIcon={iconSource?.scriptIcon}
         scriptName={scriptName}
         size={14}
+        svgColor="rgba(0,0,0,0.75)"
       />
       <span style={{
         fontSize: 11, fontWeight: 700, color: 'rgba(0,0,0,0.6)',
@@ -213,68 +225,78 @@ function ScriptGroupHeader({ blocks, allBlocks }: { blocks: Block[]; allBlocks: 
 
 // ---- JSON viewer ----
 
-function JsonToken({ value }: { value: unknown; depth?: number }) {
+// Light-background JSON token colors (high contrast on white)
+const J = {
+  key:       '#0055b3',   // strong blue
+  string:    '#b24000',   // burnt orange
+  number:    '#1a7f37',   // green
+  boolean:   '#7c3aed',   // purple
+  null:      '#6b7280',   // gray
+  bracket:   'rgba(0,0,0,0.55)',
+  comma:     'rgba(0,0,0,0.4)',
+  toggle:    'rgba(0,0,0,0.4)',
+  collapsed: 'rgba(0,0,0,0.35)',
+}
+
+function JsonToken({ value }: { value: unknown }) {
   const [open, setOpen] = useState(true)
 
-  if (value === null) return <span style={{ color: '#999' }}>null</span>
-  if (typeof value === 'boolean') return <span style={{ color: '#569cd6' }}>{String(value)}</span>
-  if (typeof value === 'number') return <span style={{ color: '#b5cea8' }}>{value}</span>
+  if (value === null) return <span style={{ color: J.null }}>null</span>
+  if (typeof value === 'boolean') return <span style={{ color: J.boolean }}>{String(value)}</span>
+  if (typeof value === 'number') return <span style={{ color: J.number }}>{value}</span>
   if (typeof value === 'string') {
-    // Truncate very long strings but make them expandable
     const MAX = 120
-    if (value.length > MAX) {
-      return <StringTruncated value={value} max={MAX} />
-    }
-    return <span style={{ color: '#ce9178' }}>"{value}"</span>
+    if (value.length > MAX) return <StringTruncated value={value} max={MAX} />
+    return <span style={{ color: J.string }}>"{value}"</span>
   }
   if (Array.isArray(value)) {
-    if (value.length === 0) return <span style={{ color: 'rgba(0,0,0,0.45)' }}>[]</span>
+    if (value.length === 0) return <span style={{ color: J.bracket }}>[]</span>
     return (
       <span>
-        <button onClick={() => setOpen(v => !v)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'rgba(0,0,0,0.5)', fontSize: 11 }}>
+        <button onClick={() => setOpen(v => !v)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px 0 0', color: J.toggle, fontSize: 10 }}>
           {open ? '▾' : '▸'}
         </button>
         {open ? (
           <span>
-            {'['}
-            <div style={{ paddingLeft: 14 }}>
+            <span style={{ color: J.bracket }}>[</span>
+            <div style={{ paddingLeft: 16 }}>
               {value.map((item, i) => (
-                <div key={i}><JsonToken value={item} />{i < value.length - 1 ? ',' : ''}</div>
+                <div key={i}><JsonToken value={item} />{i < value.length - 1 ? <span style={{ color: J.comma }}>,</span> : ''}</div>
               ))}
             </div>
-            {']'}
+            <span style={{ color: J.bracket }}>]</span>
           </span>
         ) : (
-          <span style={{ color: 'rgba(0,0,0,0.4)' }}>[{value.length}]</span>
+          <span style={{ color: J.collapsed }}>[{value.length} items]</span>
         )}
       </span>
     )
   }
   if (typeof value === 'object') {
     const entries = Object.entries(value as Record<string, unknown>)
-    if (entries.length === 0) return <span style={{ color: 'rgba(0,0,0,0.45)' }}>{'{}'}</span>
+    if (entries.length === 0) return <span style={{ color: J.bracket }}>{'{}'}</span>
     return (
       <span>
-        <button onClick={() => setOpen(v => !v)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'rgba(0,0,0,0.5)', fontSize: 11 }}>
+        <button onClick={() => setOpen(v => !v)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px 0 0', color: J.toggle, fontSize: 10 }}>
           {open ? '▾' : '▸'}
         </button>
         {open ? (
           <span>
-            {'{'}
-            <div style={{ paddingLeft: 14 }}>
+            <span style={{ color: J.bracket }}>{'{'}</span>
+            <div style={{ paddingLeft: 16 }}>
               {entries.map(([k, v], i) => (
                 <div key={k}>
-                  <span style={{ color: '#9cdcfe' }}>"{k}"</span>
-                  <span style={{ color: 'rgba(0,0,0,0.5)' }}>: </span>
+                  <span style={{ color: J.key }}>"{k}"</span>
+                  <span style={{ color: J.comma }}>: </span>
                   <JsonToken value={v} />
-                  {i < entries.length - 1 ? ',' : ''}
+                  {i < entries.length - 1 ? <span style={{ color: J.comma }}>,</span> : ''}
                 </div>
               ))}
             </div>
-            {'}'}
+            <span style={{ color: J.bracket }}>{'}'}</span>
           </span>
         ) : (
-          <span style={{ color: 'rgba(0,0,0,0.4)' }}>{'{…}'}</span>
+          <span style={{ color: J.collapsed }}>{'{…}'}</span>
         )}
       </span>
     )
@@ -285,11 +307,11 @@ function JsonToken({ value }: { value: unknown; depth?: number }) {
 function StringTruncated({ value, max }: { value: string; max: number }) {
   const [expanded, setExpanded] = useState(false)
   return (
-    <span style={{ color: '#ce9178' }}>
+    <span style={{ color: J.string }}>
       "{expanded ? value : value.slice(0, max) + '…'}"{' '}
       <button
         onClick={() => setExpanded(v => !v)}
-        style={{ fontSize: 9, color: 'rgba(0,0,0,0.4)', background: 'rgba(0,0,0,0.06)', border: 'none', borderRadius: 3, cursor: 'pointer', padding: '0 3px' }}
+        style={{ fontSize: 9, color: 'rgba(0,0,0,0.4)', background: 'rgba(0,0,0,0.07)', border: 'none', borderRadius: 3, cursor: 'pointer', padding: '1px 4px' }}
       >
         {expanded ? 'less' : 'more'}
       </button>
@@ -338,10 +360,11 @@ function BlockPayloadPanel({ block, onClose }: { block: Block; onClose: () => vo
       {/* JSON tree */}
       <div style={{
         maxHeight: 300, overflowY: 'auto',
-        padding: '6px 14px 12px',
-        fontSize: 11, lineHeight: 1.6,
+        padding: '8px 14px 14px',
+        fontSize: 12, lineHeight: 1.7,
         fontFamily: 'ui-monospace, monospace',
         color: 'rgba(0,0,0,0.75)',
+        background: 'rgba(0,0,0,0.02)',
         scrollbarWidth: 'none',
       }}>
         {parseError
@@ -383,7 +406,7 @@ export default function UIInspectorPanel() {
 
   return (
     <div style={{
-      width: 260,
+      width: 320,
       maxHeight: 'calc(100vh - 120px)',
       flexShrink: 0,
       display: 'flex',

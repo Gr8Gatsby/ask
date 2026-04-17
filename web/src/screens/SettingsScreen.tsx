@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { usePlatform } from '../lib/PlatformContext'
 import { useSettings } from '../lib/SettingsContext'
 import { getMachines } from '../lib/api'
 import type { Machine } from '../lib/types'
+import { IOSStatusBarRow, iosNavChromeStyle } from '../components/layout/AppShell'
 
 // ---- iOS Settings primitives ----
 
@@ -12,6 +13,20 @@ function IOSSectionHeader({ label }: { label: string }) {
       {label}
     </p>
   )
+}
+
+// Inset grouped card container
+function IOSListCard({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mx-4 bg-ask-card rounded-xl overflow-hidden shadow-sm shadow-black/[0.06]">
+      {children}
+    </div>
+  )
+}
+
+// Inset separator
+function IOSSep() {
+  return <div className="h-px bg-ask-sep/50 ml-4 mr-4" />
 }
 
 function IOSSectionFooter({ text }: { text: string }) {
@@ -31,21 +46,18 @@ interface IOSRowProps {
   onTap?: () => void
 }
 
-function IOSRow({ label, value, chevron, first, last, destructive, children, onTap }: IOSRowProps) {
-  const borderT = first ? '' : 'border-t border-ask-sep/40'
-  const roundT = first ? 'rounded-t-xl' : ''
-  const roundB = last ? 'rounded-b-xl' : ''
+function IOSRow({ label, value, chevron, destructive, children, onTap }: Omit<IOSRowProps, 'first' | 'last'>) {
   return (
     <div
       onClick={onTap}
-      className={`flex items-center min-h-[44px] px-4 bg-ask-card ${roundT} ${roundB} ${borderT} ${onTap ? 'active:opacity-70 cursor-pointer' : ''}`}
+      className={`flex items-center min-h-[44px] px-4 ${onTap ? 'active:bg-ask-sep/30 cursor-pointer transition-colors' : ''}`}
     >
       <span className={`flex-1 text-[17px] font-normal ${destructive ? 'text-red-500' : 'text-ask-text'}`}>{label}</span>
       {value && <span className="text-[17px] text-ask-secondary mr-2">{value}</span>}
       {children}
       {chevron && (
-        <svg width="8" height="13" viewBox="0 0 8 13" fill="none" className="ml-1 text-ask-secondary/50 flex-shrink-0">
-          <path d="M1 1l6 5.5L1 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        <svg width="6" height="10" viewBox="0 0 6 10" fill="none" className="ml-1 text-ask-secondary/45 flex-shrink-0">
+          <path d="M1 1l4 4-4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
         </svg>
       )}
     </div>
@@ -204,7 +216,7 @@ function ComputerFilterSheet({
 // ---- Screen ----
 
 export default function SettingsScreen() {
-  const { platform } = usePlatform()
+  const { platform, themeMode } = usePlatform()
   const isAndroid = platform === 'android'
 
   const { useBrandColors, setUseBrandColors, selectedMachineID, setSelectedMachineID } = useSettings()
@@ -277,54 +289,54 @@ export default function SettingsScreen() {
     )
   }
 
-  // iOS — inset grouped table style
+  // iOS — frosted glass chrome + inset grouped table style
+  const isLight = themeMode === 'light'
   return (
-    <div className="flex flex-col h-full overflow-y-auto no-scrollbar bg-ask-bg">
-      <div className="px-4 pt-3 pb-2">
-        <h1 className="text-[34px] font-bold text-ask-text leading-tight">Settings</h1>
+    <div className="relative h-full bg-ask-bg">
+      <div
+        className="absolute top-0 left-0 right-0 z-20"
+        style={iosNavChromeStyle(isLight)}
+      >
+        <IOSStatusBarRow />
+        <div className="flex items-center justify-center px-4 pb-3">
+          <p className="text-[17px] font-semibold text-ask-text">Settings</p>
+        </div>
       </div>
 
-      {/* Machines section */}
-      <IOSSectionHeader label="Machines" />
-      <div className="mx-4">
-        <IOSRow
-          label="Computer"
-          value={selectedMachineName}
-          chevron
-          first
-          last={machines.length === 0}
-          onTap={() => setShowComputerFilter(true)}
-        />
-        {machines.map((m, i) => (
-          <IOSRow
-            key={m.machineID}
-            label={m.name}
-            value={m.status === 'busy' ? 'Active' : 'Idle'}
-            chevron
-            first={false}
-            last={i === machines.length - 1}
-            onTap={() => setSelectedMachine(m)}
-          />
-        ))}
-      </div>
-      <IOSSectionFooter text="Filter to a single computer or view all. A running Mac re-registers within 30 seconds." />
+      <div className="absolute inset-0 overflow-y-auto no-scrollbar">
+        <div className="pt-24">
+          {/* Machines section */}
+          <IOSSectionHeader label="Machines" />
+          <IOSListCard>
+            <IOSRow label="Computer" value={selectedMachineName} chevron onTap={() => setShowComputerFilter(true)} />
+            {machines.map(m => (
+              <React.Fragment key={m.machineID}>
+                <IOSSep />
+                <IOSRow label={m.name} value={m.status === 'busy' ? 'Active' : 'Idle'} chevron onTap={() => setSelectedMachine(m)} />
+              </React.Fragment>
+            ))}
+          </IOSListCard>
+          <IOSSectionFooter text="Filter to a single computer or view all. A running Mac re-registers within 30 seconds." />
 
-      {/* Appearance section */}
-      <IOSSectionHeader label="Appearance" />
-      <div className="mx-4">
-        <IOSRow label="Script Brand Colors" first last>
-          <IOSToggle on={useBrandColors} onToggle={() => setUseBrandColors(!useBrandColors)} />
-        </IOSRow>
-      </div>
+          {/* Appearance section */}
+          <IOSSectionHeader label="Appearance" />
+          <IOSListCard>
+            <IOSRow label="Script Brand Colors">
+              <IOSToggle on={useBrandColors} onToggle={() => setUseBrandColors(!useBrandColors)} />
+            </IOSRow>
+          </IOSListCard>
 
-      {/* Developer section */}
-      <IOSSectionHeader label="Developer" />
-      <div className="mx-4">
-        <IOSRow label="CloudKit Environment" value="Development" first />
-        <IOSRow label="App Version" value="0.1.0 (1)" last />
-      </div>
+          {/* Developer section */}
+          <IOSSectionHeader label="Developer" />
+          <IOSListCard>
+            <IOSRow label="CloudKit Environment" value="Development" />
+            <IOSSep />
+            <IOSRow label="App Version" value="0.1.0 (1)" />
+          </IOSListCard>
 
-      <div className="h-8" />
+          <div className="h-8" />
+        </div>
+      </div>
 
       {selectedMachine && (
         <MachineDetailSheet machine={selectedMachine} onDismiss={() => setSelectedMachine(null)} />

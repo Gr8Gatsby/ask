@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useBlocks } from '../lib/useBlocks'
 import { useTheme, usePlatform } from '../lib/PlatformContext'
 import { useSettings } from '../lib/SettingsContext'
-import { iosGlassStyle, iosGlassPill, useBrandColor } from '../components/layout/AppShell'
+import { useBrandColor, IOSStatusBarRow, iosNavChromeStyle } from '../components/layout/AppShell'
 import { getTaskMessages } from '../lib/api'
 import type { AgentSessionPayload, TaskMessage } from '../lib/types'
 import Markdown from '../components/shared/Markdown'
@@ -187,7 +187,7 @@ export default function SessionChatScreen() {
   const payload = sessionBlock ? parsePayload<AgentSessionPayload>(sessionBlock.payload) : null
   const accentColor = useBrandColors ? (payload?.brand_color ?? '#8E8E93') : '#8E8E93'
 
-  // Push brand color up to AppShell so the screen gradient extends behind the transparent nav bar
+  // Push brand color to AppShell so status bar + nav are seamlessly tinted
   const { setBrandColor: setAppBrandColor } = useBrandColor()
   useEffect(() => {
     if (!theme.isAndroid) setAppBrandColor(accentColor !== '#8E8E93' ? accentColor : null)
@@ -270,31 +270,26 @@ export default function SessionChatScreen() {
 
   const iosNavBar = (
     <>
-      {/* Back — glass pill */}
-      <button
-        onClick={() => navigate(-1)}
-        className="flex-shrink-0 flex items-center gap-1 text-ask-text"
-        style={{ ...iosGlassPill(isLight), padding: '5px 11px 5px 8px' }}
-      >
+      {/* Back — plain nav link, same style as ScriptDetailScreen */}
+      <button onClick={() => navigate(-1)} className={theme.navBackClass}>
         {theme.navBackIcon}
-        <span className="text-[14px] font-medium">Back</span>
+        <span>Back</span>
       </button>
 
-      {/* Working indicator in center */}
-      <div className="flex-1 flex items-center justify-center">
+      {/* Working indicator + title in center */}
+      <div className="flex-1 flex items-center justify-center gap-2">
         {payload?.is_working && (
           <div className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: accentColor }} />
         )}
       </div>
 
-      {/* Stop — glass circle */}
+      {/* Stop — plain text button */}
       {sessionBlock && (
         <button
           onClick={handleStop}
-          className="flex items-center justify-center text-ask-text text-[15px] font-medium"
-          style={{ ...iosGlassPill(isLight), borderRadius: '50%', width: 28, height: 28, padding: 0 }}
+          className="text-[15px] font-medium text-ask-blue"
         >
-          ✕
+          Stop
         </button>
       )}
     </>
@@ -326,7 +321,7 @@ export default function SessionChatScreen() {
               )
             }
             return (
-              <div key={msg.messageID} className="text-ask-text text-[15px] leading-relaxed">
+              <div key={msg.messageID} className="text-ask-text text-[15px]">
                 {parts.map((p, i) => renderPart(p, i))}
               </div>
             )
@@ -361,7 +356,7 @@ export default function SessionChatScreen() {
                 </div>
               </div>
             ) : payload?.last_message ? (
-              <div className="text-[15px] text-ask-text leading-relaxed">
+              <div className="text-[15px] text-ask-text">
                 <Markdown>{payload.last_message}</Markdown>
               </div>
             ) : (
@@ -446,22 +441,32 @@ export default function SessionChatScreen() {
     : '0 6px 24px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.3)'
 
   return (
-    <div className="relative flex flex-col h-full" data-block-id={sessionBlock?.blockID} data-block-type="agent_session">
-      {/* Glass nav bar — absolute, content scrolls under it */}
-      <div
-        className="absolute top-0 left-0 right-0 flex items-center gap-3 px-4 pt-3 pb-3 z-10"
-        style={iosGlassStyle(isLight)}
-      >
-        {iosNavBar}
-      </div>
-
-      {/* Scroll area — full height, padded to clear floating bars */}
-      <div className="flex-1 overflow-y-auto no-scrollbar">
-        <div className="pt-[52px] pb-[100px]">
+    <div className="relative h-full" data-block-id={sessionBlock?.blockID} data-block-type="agent_session">
+      {/* Inner scroll — covers full phone height; content scrolls behind the chrome above */}
+      <div className="absolute inset-0 overflow-y-auto no-scrollbar">
+        {/* pt-24 = 96px: clears status bar row (48px) + nav bar row (~48px) */}
+        <div className="pt-24 pb-[100px]">
           {payload?.is_working && payload.last_message && (
             <LastMessageBar message={payload.last_message} color={accentColor} />
           )}
           {chatHistory}
+        </div>
+      </div>
+
+      {/* ONE combined top chrome — status bar row + nav bar row as a single element.
+          Single backdrop-filter = no seam between the two rows. */}
+      <div
+        className="absolute top-0 left-0 right-0 z-20"
+        style={{
+          ...iosNavChromeStyle(isLight),
+          ...(accentColor !== '#8E8E93' ? {
+            background: `linear-gradient(${accentColor}20, ${accentColor}20), ${isLight ? 'rgba(242,242,247,0.38)' : 'rgba(28,28,30,0.38)'}`,
+          } : {}),
+        }}
+      >
+        <IOSStatusBarRow />
+        <div className="flex items-center gap-3 px-4 pb-3">
+          {iosNavBar}
         </div>
       </div>
 

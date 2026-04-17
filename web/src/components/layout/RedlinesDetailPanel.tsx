@@ -254,7 +254,7 @@ export default function RedlinesDetailPanel() {
 
   return (
     <div style={{
-      width: 260,
+      width: 320,
       maxHeight: 'calc(100vh - 120px)',
       overflowY: 'auto',
       flexShrink: 0,

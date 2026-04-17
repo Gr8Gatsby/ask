@@ -4,9 +4,11 @@ interface Props {
   scriptIcon?: string
   scriptName: string
   size?: number
+  /** Override currentColor for SVG icons — useful when the surrounding theme doesn't match the panel */
+  svgColor?: string
 }
 
-export default function ScriptIcon({ scriptIconData, scriptIconSVG, scriptIcon, scriptName, size = 36 }: Props) {
+export default function ScriptIcon({ scriptIconData, scriptIconSVG, scriptIcon, scriptName, size = 36, svgColor }: Props) {
   const style = { width: size, height: size, flexShrink: 0 }
 
   if (scriptIconData) {
@@ -31,10 +33,11 @@ export default function ScriptIcon({ scriptIconData, scriptIconSVG, scriptIcon, 
       .replace(/fill="(#000000|#000|black)"/gi, 'fill="currentColor"')
 
     // text-ask-text sets currentColor to the theme text color (white in dark, black in light).
+    // svgColor overrides this when the icon lives in a panel with a fixed background (e.g. inspector).
     // [&>svg]:* forces the injected SVG to fill the container div.
     return (
       <div
-        style={style}
+        style={svgColor ? { ...style, color: svgColor } : style}
         className="rounded-xl overflow-hidden text-ask-text [&>svg]:block [&>svg]:w-full [&>svg]:h-full"
         dangerouslySetInnerHTML={{ __html: svg }}
       />

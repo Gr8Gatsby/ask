@@ -75,6 +75,30 @@ if (fs.existsSync(BLOCKS_SNAPSHOT_PATH)) {
   }, 2000)
 }
 
+// ── Block snapshot writer ─────────────────────────────────────────────────────
+
+function removeBlockFromSnapshot(blockID: string) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(BLOCKS_SNAPSHOT_PATH, 'utf-8')) as { blocks: Block[] }
+    const filtered = (raw.blocks ?? []).filter(b => b.blockID !== blockID)
+    if (filtered.length !== (raw.blocks ?? []).length) {
+      fs.writeFileSync(BLOCKS_SNAPSHOT_PATH, JSON.stringify({ blocks: filtered }, null, 2))
+      console.log(`[MockAskMac] removed block ${blockID} from snapshot`)
+    }
+  } catch {
+    // snapshot may not exist or be malformed — ignore
+  }
+}
+
+function clearBlock(blockID: string) {
+  const prev = blocks.length
+  blocks = blocks.filter(b => b.blockID !== blockID)
+  if (blocks.length < prev) {
+    broadcast('block_cleared', { blockID })
+    removeBlockFromSnapshot(blockID)
+  }
+}
+
 // ── Unix socket sender ────────────────────────────────────────────────────────
 
 function sendToSocket(socketPath: string, message: object): Promise<void> {
@@ -262,7 +286,7 @@ const server = http.createServer(async (req, res) => {
     const scriptID = block?.scriptID ?? ''
 
     if (scriptID in SOCKETS) {
-      // Extract session_id from agent_session payload
+      // Forward to live daemon, then clear if it was a stop request
       try {
         const payload = JSON.parse(block?.payload ?? '{}') as { session_id?: string }
         const sessionID = payload.session_id ?? blockID
@@ -270,18 +294,13 @@ const server = http.createServer(async (req, res) => {
       } catch {
         await respondDaemon(scriptID, blockID, value)
       }
+      // Always clear session block on stop — daemon may be dead
+      if (value === '__close_session__') clearBlock(blockID)
     } else if (blockID.startsWith('brew-')) {
       const shouldClear = simulateBrewResponse(blockID, value)
-      if (shouldClear) {
-        const prev = blocks.length
-        blocks = blocks.filter(b => b.blockID !== blockID)
-        if (blocks.length < prev) broadcast('block_cleared', { blockID })
-      }
+      if (shouldClear) clearBlock(blockID)
     } else {
-      // Generic: clear the block
-      const prev = blocks.length
-      blocks = blocks.filter(b => b.blockID !== blockID)
-      if (blocks.length < prev) broadcast('block_cleared', { blockID })
+      clearBlock(blockID)
     }
 
     res.writeHead(200, { 'Content-Type': 'application/json' })

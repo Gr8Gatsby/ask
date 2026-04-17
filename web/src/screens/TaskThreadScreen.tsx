@@ -3,7 +3,8 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { getTaskMessages, getTasks, getTaskArtifacts, getArtifactContent } from '../lib/api'
 import type { AskTask, TaskArtifact, TaskMessage } from '../lib/types'
 import Markdown from '../components/shared/Markdown'
-import { useTheme } from '../lib/PlatformContext'
+import { useTheme, usePlatform } from '../lib/PlatformContext'
+import { IOSStatusBarRow, iosNavChromeStyle } from '../components/layout/AppShell'
 
 // ---- Message part types (Anthropic API content blocks) ----
 
@@ -335,6 +336,8 @@ export default function TaskThreadScreen() {
   const { taskID } = useParams<{ taskID: string }>()
   const navigate = useNavigate()
   const theme = useTheme()
+  const { themeMode } = usePlatform()
+  const isLight = themeMode === 'light'
   const [task, setTask] = useState<AskTask | null>(null)
   const [messages, setMessages] = useState<TaskMessage[]>([])
   const [artifacts, setArtifacts] = useState<TaskArtifact[]>([])
@@ -363,66 +366,77 @@ export default function TaskThreadScreen() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  return (
-    <div className="flex flex-col h-full relative">
-      {/* Nav bar */}
-      <div className={`flex items-center gap-3 px-4 pt-3 pb-3 flex-shrink-0 ${theme.isAndroid ? 'border-b border-ask-sep' : 'border-b border-ask-sep/50'}`}>
-        <button onClick={() => navigate(-1)} className={theme.navBackClass}>
-          {theme.navBackIcon}
-          {!theme.isAndroid && <span>Feed</span>}
-        </button>
+
+  if (theme.isAndroid) return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-3 px-4 pt-3 pb-3 flex-shrink-0 border-b border-ask-sep">
+        <button onClick={() => navigate(-1)} className={theme.navBackClass}>{theme.navBackIcon}</button>
         <div className="flex-1 min-w-0">
-          {theme.isAndroid ? (
-            <>
-              <p className="text-sm font-semibold text-ask-text truncate">{task?.title ?? 'Task'}</p>
-              <p className="text-[10px] text-ask-secondary">{task?.scriptName}</p>
-            </>
-          ) : (
-            <p className={`${theme.typeTitleMedium} text-ask-text truncate`}>{task?.title ?? 'Task'}</p>
-          )}
+          <p className="text-sm font-semibold text-ask-text truncate">{task?.title ?? 'Task'}</p>
+          <p className="text-[10px] text-ask-secondary">{task?.scriptName}</p>
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto no-scrollbar py-3 flex flex-col gap-1">
+        {loading ? <div className="flex items-center justify-center h-40 text-ask-secondary text-sm">Loading…</div>
+          : error ? <div className="flex items-center justify-center h-40 text-ask-secondary text-sm">Failed to load messages</div>
+          : (<>{messages.map(msg => <MessageBubble key={msg.messageID} msg={msg} isAndroid />)}{artifacts.length > 0 && (<div className={`flex flex-col gap-2 px-4 ${messages.length > 0 ? 'mt-3 pt-3 border-t border-ask-sep/30' : ''}`}>{messages.length === 0 && <p className="text-[12px] text-ask-secondary text-center mb-1">No conversation history — task ran autonomously</p>}{artifacts.map(art => <ArtifactCard key={art.artifactID} artifact={art} onTap={() => setViewingArtifact(art)} isAndroid />)}</div>)}{messages.length === 0 && artifacts.length === 0 && <div className="flex items-center justify-center h-40 text-ask-secondary text-sm">No messages</div>}</>)}
+        <div ref={bottomRef} />
+      </div>
+      {viewingArtifact && <ArtifactViewer artifact={viewingArtifact} onDismiss={() => setViewingArtifact(null)} isAndroid />}
+    </div>
+  )
+
+  return (
+    <div className="relative h-full">
+      {/* Combined status+nav chrome */}
+      <div
+        className="absolute top-0 left-0 right-0 z-20"
+        style={iosNavChromeStyle(isLight)}
+      >
+        <IOSStatusBarRow />
+        <div className="relative flex items-center px-4 pb-3">
+          <button onClick={() => navigate(-1)} className={theme.navBackClass}>
+            {theme.navBackIcon}
+            <span>Feed</span>
+          </button>
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <p className={`${theme.typeTitleMedium} text-ask-text truncate max-w-[55%] text-center`}>{task?.title ?? 'Task'}</p>
+          </div>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto no-scrollbar py-3 flex flex-col gap-1">
-        {loading ? (
-          <div className="flex items-center justify-center h-40 text-ask-secondary text-sm">Loading…</div>
-        ) : error ? (
-          <div className="flex items-center justify-center h-40 text-ask-secondary text-sm">Failed to load messages</div>
-        ) : (
-          <>
-            {messages.map(msg => (
-              <MessageBubble key={msg.messageID} msg={msg} isAndroid={theme.isAndroid} />
-            ))}
-
-            {/* Artifact cards */}
-            {artifacts.length > 0 && (
-              <div className={`flex flex-col gap-2 px-4 ${messages.length > 0 ? 'mt-3 pt-3 border-t border-ask-sep/30' : ''}`}>
-                {messages.length === 0 && (
-                  <p className="text-[12px] text-ask-secondary text-center mb-1">
-                    No conversation history — task ran autonomously
-                  </p>
-                )}
-                {artifacts.map(art => (
-                  <ArtifactCard key={art.artifactID} artifact={art} onTap={() => setViewingArtifact(art)} isAndroid={theme.isAndroid} />
-                ))}
-              </div>
-            )}
-
-            {messages.length === 0 && artifacts.length === 0 && (
-              <div className="flex items-center justify-center h-40 text-ask-secondary text-sm">No messages</div>
-            )}
-          </>
-        )}
-        <div ref={bottomRef} />
+      <div className="absolute inset-0 overflow-y-auto no-scrollbar">
+        <div className="pt-24 pb-4 flex flex-col gap-1">
+          {loading ? (
+            <div className="flex items-center justify-center h-40 text-ask-secondary text-sm">Loading…</div>
+          ) : error ? (
+            <div className="flex items-center justify-center h-40 text-ask-secondary text-sm">Failed to load messages</div>
+          ) : (
+            <>
+              {messages.map(msg => (
+                <MessageBubble key={msg.messageID} msg={msg} isAndroid={false} />
+              ))}
+              {artifacts.length > 0 && (
+                <div className={`flex flex-col gap-2 px-4 ${messages.length > 0 ? 'mt-3 pt-3 border-t border-ask-sep/30' : ''}`}>
+                  {messages.length === 0 && (
+                    <p className="text-[12px] text-ask-secondary text-center mb-1">No conversation history — task ran autonomously</p>
+                  )}
+                  {artifacts.map(art => (
+                    <ArtifactCard key={art.artifactID} artifact={art} onTap={() => setViewingArtifact(art)} isAndroid={false} />
+                  ))}
+                </div>
+              )}
+              {messages.length === 0 && artifacts.length === 0 && (
+                <div className="flex items-center justify-center h-40 text-ask-secondary text-sm">No messages</div>
+              )}
+            </>
+          )}
+          <div ref={bottomRef} />
+        </div>
       </div>
 
-      {/* File viewer */}
       {viewingArtifact && (
-        <ArtifactViewer
-          artifact={viewingArtifact}
-          onDismiss={() => setViewingArtifact(null)}
-          isAndroid={theme.isAndroid}
-        />
+        <ArtifactViewer artifact={viewingArtifact} onDismiss={() => setViewingArtifact(null)} isAndroid={false} />
       )}
     </div>
   )

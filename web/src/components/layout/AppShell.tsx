@@ -1,5 +1,5 @@
 import { useLocation, useNavigate } from 'react-router-dom'
-import { useState, useEffect, useRef, createContext, useContext } from 'react'
+import React, { useState, useEffect, useRef, createContext, useContext } from 'react'
 import { Newspaper, GearSix, Bell, Code, FrameCorners, FolderOpen } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
 import UIInspectorPanel from './UIInspectorPanel'
@@ -216,6 +216,17 @@ export function iosGlassStyle(_isLight: boolean) {
   return { background: 'transparent' } as const
 }
 
+// Shared frosted chrome style for all iOS nav bars — tune opacity/blur here
+export function iosNavChromeStyle(isLight: boolean): React.CSSProperties {
+  const bg = isLight ? 'rgba(242,242,247,0.38)' : 'rgba(28,28,30,0.38)'
+  return {
+    backdropFilter: 'blur(10px) saturate(160%)',
+    WebkitBackdropFilter: 'blur(10px) saturate(160%)',
+    background: bg,
+    borderBottom: isLight ? '0.5px solid rgba(0,0,0,0.08)' : '0.5px solid rgba(255,255,255,0.08)',
+  }
+}
+
 // iOS 26 glass pill — for Back buttons, action buttons
 export function iosGlassPill(isLight: boolean) {
   return isLight
@@ -235,19 +246,35 @@ export function iosGlassPill(isLight: boolean) {
       }
 }
 
-function IOSStatusBar() {
+// Exported so screens can embed it inside their own combined chrome element
+export function IOSStatusBarRow() {
   const time = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
   return (
-    <div className="flex-shrink-0 relative flex items-center justify-between px-6 h-12">
+    <div className="relative flex items-center justify-between px-6 h-12 flex-shrink-0">
       <span className="text-[15px] font-semibold text-ask-text tabular-nums">{time}</span>
       {/* Dynamic Island */}
       <div className="absolute left-1/2 top-2 -translate-x-1/2 w-[120px] h-[34px] bg-black rounded-full" />
-      {/* Signal bars / wifi / battery icons */}
+      {/* Signal / wifi / battery */}
       <div className="flex items-center gap-[5px] text-ask-text">
         <span className="mat-icon" style={{ fontSize: 16, fontVariationSettings: "'FILL' 1, 'wght' 400, 'opsz' 16" }}>signal_cellular_alt</span>
         <span className="mat-icon" style={{ fontSize: 16, fontVariationSettings: "'FILL' 1, 'wght' 400, 'opsz' 16" }}>wifi</span>
         <span className="mat-icon" style={{ fontSize: 16, fontVariationSettings: "'FILL' 1, 'wght' 400, 'opsz' 16" }}>battery_full</span>
       </div>
+    </div>
+  )
+}
+
+function IOSStatusBar({ isLight, brandColor }: { isLight: boolean; brandColor?: string | null }) {
+  const base = isLight ? 'rgba(242,242,247,0.62)' : 'rgba(28,28,30,0.62)'
+  const bg = brandColor
+    ? `linear-gradient(${brandColor}30, ${brandColor}30), ${base}`
+    : base
+  return (
+    <div
+      className="absolute top-0 left-0 right-0 z-30"
+      style={{ backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', background: bg }}
+    >
+      <IOSStatusBarRow />
     </div>
   )
 }
@@ -559,6 +586,12 @@ function AppShellInner({ children }: Props) {
     : 'home'
 
   const hideIOSTabBar = location.pathname.includes('/session/')
+  // Screens that render their own combined status+nav chrome — AppShell skips the status bar overlay
+  const hidesOwnStatusBar = location.pathname.includes('/session/')
+    || location.pathname.includes('/script/')
+    || location.pathname.startsWith('/tasks')
+    || location.pathname.startsWith('/home')
+    || location.pathname.startsWith('/settings')
 
   // iPhone 16 Pro: 390px wide, titanium frame
   // Pixel 9 Pro: slightly different corner radius, dark metal frame
@@ -582,8 +615,8 @@ function AppShellInner({ children }: Props) {
     <div className="h-screen flex flex-col overflow-hidden" style={{ background: '#f5f5f7' }}>
       <ControlBar />
 
-      {/* Phone area */}
-      <div ref={phoneAreaRef} className="flex-1 flex items-start justify-center py-8 px-8 overflow-hidden" style={{ position: 'relative' }}>
+      {/* Phone area — phone sits left-of-center; left has space for redline annotations, right is clear for panels */}
+      <div ref={phoneAreaRef} className="flex-1 flex items-start justify-start py-8 overflow-hidden" style={{ position: 'relative', paddingLeft: 100 }}>
         {/* zoom affects layout (unlike transform:scale), so sizing and absolute buttons all work naturally */}
         <div className="relative flex-shrink-0" style={{ zoom: scale }}>
           {/* Side buttons */}
@@ -609,23 +642,37 @@ function AppShellInner({ children }: Props) {
                 height: 844,
                 borderRadius: innerRadius,
                 overflow: 'hidden',
+                // Brand color: flat tint image layer over solid base.
+                // Must use linear-gradient() so CSS treats it as a background-image layer that can stack.
                 background: !isAndroid && brandColor
-                  ? `linear-gradient(180deg, ${brandColor}55 0%, ${brandColor}22 180px, ${isLight ? 'rgb(242,242,247)' : 'rgb(28,28,30)'} 360px)`
+                  ? `linear-gradient(${brandColor}${isLight ? '40' : '55'}, ${brandColor}${isLight ? '40' : '55'}), ${isLight ? 'rgb(242,242,247)' : 'rgb(28,28,30)'}`
                   : (isAndroid
                       ? (isLight ? 'rgb(255 251 254)' : 'rgb(20 18 24)')
                       : (isLight ? 'rgb(242 242 247)' : 'rgb(28 28 30)')),
               }}
             >
-              {isAndroid ? <AndroidStatusBar /> : <IOSStatusBar />}
+              {isAndroid && <AndroidStatusBar />}
 
               <BrandColorContext.Provider value={{ brandColor, setBrandColor }}>
-                <div className="flex-1 overflow-y-auto no-scrollbar min-h-0">
+                {/* iOS: absolute inset-0 so content fills full phone height and can scroll
+                    behind both the status bar overlay and any screen nav bar overlay.
+                    Android: flex-1 keeps the existing flex-column layout. */}
+                <div className={isAndroid
+                  ? "flex-1 overflow-y-auto no-scrollbar min-h-0"
+                  : "absolute inset-0 overflow-y-auto no-scrollbar"
+                }>
                   {isAndroid ? (
                     <ThemeProvider theme={muiTheme}>
                       <CssBaseline enableColorScheme={false} />
                       {children}
                     </ThemeProvider>
-                  ) : children}
+                  ) : (
+                    <>
+                      {/* h-12 spacer for screens that don't render their own combined chrome */}
+                      {hidesOwnStatusBar ? null : <div className="h-12 flex-shrink-0" />}
+                      {children}
+                    </>
+                  )}
                 </div>
               </BrandColorContext.Provider>
 
@@ -633,6 +680,9 @@ function AppShellInner({ children }: Props) {
                 ? <AndroidTabBar tab={tab} />
                 : !hideIOSTabBar && <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0 }}><IOSTabBar tab={tab} isLight={isLight} /></div>
               }
+
+              {/* iOS status bar: skipped for screens that render their own combined chrome */}
+              {!isAndroid && !hidesOwnStatusBar && <IOSStatusBar isLight={isLight} brandColor={brandColor} />}
             </div>
           </div>
 
