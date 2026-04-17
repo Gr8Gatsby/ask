@@ -1,4 +1,4 @@
-import type { Block, Machine, AskTask, TaskMessage, SSEEvent } from './types'
+import type { Block, Machine, AskTask, TaskArtifact, TaskMessage, SSEEvent } from './types'
 
 const BASE = '/api'
 
@@ -30,8 +30,21 @@ export async function getTasks(): Promise<AskTask[]> {
 
 export async function getTaskMessages(taskID: string): Promise<TaskMessage[]> {
   const res = await fetch(`${BASE}/tasks/${taskID}/messages`)
-  const data = await res.json() as { messages: TaskMessage[] }
-  return data.messages
+  if (!res.ok) return []
+  const data = await res.json() as { messages?: TaskMessage[] }
+  return data.messages ?? []
+}
+
+export async function getTaskArtifacts(taskID: string): Promise<TaskArtifact[]> {
+  const res = await fetch(`${BASE}/tasks/${taskID}/artifacts`)
+  if (!res.ok) return []
+  const data = await res.json() as { artifacts?: TaskArtifact[] }
+  return data.artifacts ?? []
+}
+
+export async function getArtifactContent(artifactID: string): Promise<string> {
+  const res = await fetch(`${BASE}/artifacts/${artifactID}/content`)
+  return res.text()
 }
 
 export function subscribeToEvents(onEvent: (event: SSEEvent) => void): () => void {

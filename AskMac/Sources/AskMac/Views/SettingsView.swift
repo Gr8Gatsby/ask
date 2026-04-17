@@ -3944,32 +3944,42 @@ private struct MacFeedView: View {
     @State private var selectedEvent: HistoryEvent?
     @State private var showVerbose = true
 
-    private var filteredEvents: [HistoryEvent] {
-        switch feedFilter {
-        case .all, nil:     return history.events
-        case .kind(let k):  return history.events.filter { $0.kind == k }
-        case .source(let s):return history.events.filter { $0.source == s }
-        }
-    }
-
-    private func count(for kind: HistoryEventKind) -> Int {
-        history.events.filter { $0.kind == kind }.count
-    }
+    // Cached derived state — recomputed only when events change, not every render
+    @State private var filteredEvents: [HistoryEvent] = []
+    @State private var kindCounts: [HistoryEventKind: Int] = [:]
+    @State private var sourceStats: [SourceStat] = []
 
     private struct SourceStat: Identifiable {
         let name: String; let count: Int; let latest: Date?
+        let eventsPerMinute: Double?
         var id: String { name }
     }
 
-    private var sourceStats: [SourceStat] {
-        var counts: [String: (count: Int, latest: Date?)] = [:]
-        for event in history.events {
-            let existing = counts[event.source]
-            let latestDate = existing.flatMap { $0.latest }.map { max($0, event.timestamp) } ?? event.timestamp
-            counts[event.source] = ((existing?.count ?? 0) + 1, latestDate)
+    private func recompute(events: [HistoryEvent], filter: FeedFilter?) {
+        // Single pass: kind counts + per-source count, earliest, latest
+        var kc: [HistoryEventKind: Int] = [:]
+        var sc: [String: (count: Int, earliest: Date, latest: Date)] = [:]
+        for event in events {
+            kc[event.kind, default: 0] += 1
+            if let prev = sc[event.source] {
+                sc[event.source] = (prev.count + 1, min(prev.earliest, event.timestamp), max(prev.latest, event.timestamp))
+            } else {
+                sc[event.source] = (1, event.timestamp, event.timestamp)
+            }
         }
-        return counts.map { SourceStat(name: $0.key, count: $0.value.count, latest: $0.value.latest) }
-            .sorted { ($0.latest ?? .distantPast) > ($1.latest ?? .distantPast) }
+        kindCounts = kc
+        sourceStats = sc.map { name, val in
+            let spanMinutes = val.latest.timeIntervalSince(val.earliest) / 60.0
+            let rate: Double? = spanMinutes >= 0.5 ? Double(val.count) / spanMinutes : nil
+            return SourceStat(name: name, count: val.count, latest: val.latest, eventsPerMinute: rate)
+        }.sorted { ($0.latest ?? .distantPast) > ($1.latest ?? .distantPast) }
+
+        // Filtered events
+        filteredEvents = switch filter {
+        case .all, nil:      events
+        case .kind(let k):   events.filter { $0.kind == k }
+        case .source(let s): events.filter { $0.source == s }
+        }
     }
 
     var body: some View {
@@ -3982,6 +3992,9 @@ private struct MacFeedView: View {
         .sheet(item: $selectedEvent) { event in
             FeedEventDetailSheet(event: event)
         }
+        .task { recompute(events: history.events, filter: feedFilter) }
+        .onChange(of: history.events.count) { recompute(events: history.events, filter: feedFilter) }
+        .onChange(of: feedFilter) { recompute(events: history.events, filter: feedFilter) }
     }
 
     // MARK: Sidebar
@@ -4014,7 +4027,10 @@ private struct MacFeedView: View {
                         HStack(spacing: 10) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(stat.name).font(.subheadline)
-                                if let date = stat.latest {
+                                if let rate = stat.eventsPerMinute {
+                                    Text(String(format: "%.1f/min", rate))
+                                        .font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
+                                } else if let date = stat.latest {
                                     Text(date, style: .relative)
                                         .font(.caption2).foregroundStyle(.tertiary)
                                 }
@@ -4034,7 +4050,7 @@ private struct MacFeedView: View {
 
     @ViewBuilder
     private func kindRow(kind: HistoryEventKind, label: String, icon: String) -> some View {
-        let n = count(for: kind)
+        let n = kindCounts[kind, default: 0]
         if n > 0 {
             HStack {
                 Label(label, systemImage: icon).foregroundStyle(kind.color)

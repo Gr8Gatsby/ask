@@ -528,30 +528,33 @@ struct HomeView: View {
     // MARK: - Custom bottom bar (avoids UIKitToolbar subview warning on iOS 26)
 
     private var bottomBar: some View {
-        VStack(spacing: 0) {
-            // Alert chips — one per script that needs a response, shown above main controls.
-            if !needsResponseGroups.isEmpty {
-                globalAlertChips
-                    .padding(.bottom, 8)
-                Divider()
-                    .padding(.horizontal, -4)
-                    .padding(.bottom, 6)
-            }
+        HStack {
+            Spacer(minLength: 0)
+            VStack(spacing: 0) {
+                // Alert chips — one per script that needs a response, shown above main controls.
+                if !needsResponseGroups.isEmpty {
+                    globalAlertChips
+                        .padding(.bottom, 8)
+                    Divider()
+                        .padding(.horizontal, -4)
+                        .padding(.bottom, 6)
+                }
 
-            HStack(spacing: 14) {
-                machineMenuButton
-                tabSwitcher
-                Spacer()
-                Button { showSettings = true } label: {
-                    Image(systemName: "gearshape")
+                HStack(spacing: 14) {
+                    machineMenuButton
+                    tabSwitcher
+                    Button { showSettings = true } label: {
+                        Image(systemName: "gearshape")
+                    }
                 }
             }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+            .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 28))
+            .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(.primary.opacity(0.12), lineWidth: 1))
+            .shadow(color: .black.opacity(0.22), radius: 16, y: 6)
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 10)
-        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 28))
-        .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(.primary.opacity(0.12), lineWidth: 1))
-        .shadow(color: .black.opacity(0.22), radius: 16, y: 6)
         .padding(.horizontal, 20)
         .padding(.bottom, 16)
         .padding(.top, 4)
@@ -994,7 +997,7 @@ private struct ScriptTileView: View {
                     iconData: group.iconData,
                     sfSymbol: group.icon ?? "terminal.fill"
                 )
-                .frame(width: 30, height: 30)
+                .frame(width: 36, height: 36)
                 .colorInvert(useBrandColors && group.brandColorScheme == .dark)
 
                 VStack(alignment: .leading, spacing: 3) {
@@ -1008,7 +1011,7 @@ private struct ScriptTileView: View {
                         HStack(spacing: 5) {
                             Circle()
                                 .fill(effectiveHighlight ?? blockStatusColor(group.tileStatusColor))
-                                .frame(width: 7, height: 7)
+                                .frame(width: 8, height: 8)
                             Text(label)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -1045,10 +1048,15 @@ private struct ScriptTileView: View {
                     Image(systemName: "exclamationmark.circle.fill")
                         .foregroundStyle(effectiveHighlight ?? .orange)
                         .font(.caption)
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary.opacity(0.6))
                 }
             }
             .padding(.horizontal, 14)
-            .frame(maxWidth: .infinity, minHeight: 64, maxHeight: 64, alignment: .leading)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
             .background(effectiveBackground)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(
@@ -1056,10 +1064,11 @@ private struct ScriptTileView: View {
                     .strokeBorder(
                         group.isActionRequired
                             ? (effectiveHighlight ?? Color.orange).opacity(0.5)
-                            : Color(.separator).opacity(0.3),
-                        lineWidth: 1
+                            : Color(.separator).opacity(0.2),
+                        lineWidth: 0.5
                     )
             )
+            .shadow(color: .black.opacity(0.08), radius: 4, x: 0, y: 2)
         }
         .buttonStyle(.plain)
         .environment(\.colorScheme, effectiveColorScheme)
@@ -1155,7 +1164,7 @@ private struct ActionQueueCardView: View {
                         iconData: group.iconData,
                         sfSymbol: group.icon ?? "terminal.fill"
                     )
-                    .frame(width: 30, height: 30)
+                    .frame(width: 36, height: 36)
                     .colorInvert(useBrandColors && group.brandColorScheme == .dark)
 
                     VStack(alignment: .leading, spacing: 3) {
@@ -1168,7 +1177,7 @@ private struct ActionQueueCardView: View {
                             HStack(spacing: 5) {
                                 Circle()
                                     .fill(effectiveHighlight ?? blockStatusColor(group.tileStatusColor))
-                                    .frame(width: 7, height: 7)
+                                    .frame(width: 8, height: 8)
                                 Text(label)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)

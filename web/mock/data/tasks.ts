@@ -1,4 +1,4 @@
-import type { AskTask, TaskMessage } from '../../src/lib/types.js'
+import type { AskTask, TaskArtifact, TaskMessage } from '../../src/lib/types.js'
 
 export const FIXTURE_TASKS: AskTask[] = [
   {
@@ -57,6 +57,69 @@ export const FIXTURE_TASKS: AskTask[] = [
     artifactCount: 1,
   },
 ]
+
+export const FIXTURE_ARTIFACTS: Record<string, TaskArtifact[]> = {
+  'task-001': [
+    { artifactID: 'art-001-a', taskID: 'task-001', filename: 'SessionChatScreen.tsx', mimeType: 'text/typescript', description: 'Rebuilt chat screen', sizeBytes: 8420, updatedAt: new Date(Date.now() - 2 * 60 * 1000).toISOString() },
+    { artifactID: 'art-001-b', taskID: 'task-001', filename: 'CHANGES.md', mimeType: 'text/markdown', description: 'Changelog entry', sizeBytes: 512, updatedAt: new Date(Date.now() - 2 * 60 * 1000).toISOString() },
+  ],
+  'task-002': [
+    { artifactID: 'art-002-a', taskID: 'task-002', filename: 'daemon.py', mimeType: 'text/x-python', description: 'Fixed daemon with transient session cleanup', sizeBytes: 14200, updatedAt: new Date(Date.now() - 45 * 60 * 1000).toISOString() },
+    { artifactID: 'art-002-b', taskID: 'task-002', filename: 'CHANGELOG.md', mimeType: 'text/markdown', description: 'v0.0.2 release notes', sizeBytes: 820, updatedAt: new Date(Date.now() - 45 * 60 * 1000).toISOString() },
+  ],
+  'task-003': [
+    { artifactID: 'art-003-a', taskID: 'task-003', filename: 'design-notes.md', mimeType: 'text/markdown', description: 'Web dev UI design review', sizeBytes: 680, updatedAt: new Date(Date.now() - 20 * 60 * 1000).toISOString() },
+  ],
+  'task-004': [
+    { artifactID: 'art-004-a', taskID: 'task-004', filename: 'AppShell.tsx', mimeType: 'text/typescript', sizeBytes: 9100, updatedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString() },
+    { artifactID: 'art-004-b', taskID: 'task-004', filename: 'HomeScreen.tsx', mimeType: 'text/typescript', sizeBytes: 11300, updatedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString() },
+    { artifactID: 'art-004-c', taskID: 'task-004', filename: 'TaskFeedScreen.tsx', mimeType: 'text/typescript', sizeBytes: 6200, updatedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString() },
+    { artifactID: 'art-004-d', taskID: 'task-004', filename: 'SettingsScreen.tsx', mimeType: 'text/typescript', sizeBytes: 7800, updatedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString() },
+    { artifactID: 'art-004-e', taskID: 'task-004', filename: 'types.ts', mimeType: 'text/typescript', sizeBytes: 3100, updatedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString() },
+    { artifactID: 'art-004-f', taskID: 'task-004', filename: 'api.ts', mimeType: 'text/typescript', sizeBytes: 1800, updatedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString() },
+  ],
+}
+
+export const FIXTURE_ARTIFACT_CONTENT: Record<string, string> = {
+  'art-001-b': `# Changes — SessionChatScreen rebuild
+
+## What changed
+- Load chat history from \`getTaskMessages(task_id)\` on mount
+- Render \`current_tool\` + \`current_preview\` as a status line while working
+- \`pending_confirmation\` renders as a button bar above compose input
+- Added **Stop** and **permission mode toggle** actions
+- Nav bar shows session project name and agent name
+`,
+  'art-002-b': `# v0.0.2 — Transient session cleanup
+
+## Bug fix
+Removed transient creation for unknown processes. Sessions that started
+before the daemon now self-register when their next hook event fires.
+
+## Changes
+1. Removed transient creation — unknown processes are logged and skipped
+2. Removed transient eviction exemption from \`_refresh_sessions()\`
+3. Added cleanup in \`_handle_session_open()\` for stale transients
+`,
+  'art-003-a': `# Web Dev UI — Design Notes
+
+## Palette
+Matches iOS dark system colors (\`#1c1c1e\` bg, \`#2c2c2e\` card). Good.
+
+## Typography
+SF Pro replaced by system font stack; rendering is close but line-height
+is slightly tighter on web.
+
+## Gaps vs iOS
+- Action cards use \`bg-ask-card\` but iOS uses a blur effect
+- Session row chevron should be SF Symbol \`chevron.right\` at 12pt
+- Countdown block timer font should be monospaced digits
+
+## Recommendations
+- Add \`tabular-nums\` to the countdown timer
+- Use \`backdrop-blur\` on cards to match iOS feel
+`,
+}
 
 export const FIXTURE_TASK_MESSAGES: Record<string, TaskMessage[]> = {
   'task-001': [

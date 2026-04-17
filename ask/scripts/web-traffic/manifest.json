@@ -1,0 +1,9 @@
+{
+  "id": "web-traffic",
+  "name": "Web Traffic",
+  "version": "1.0.0",
+  "description": "Parses browser history to show websites visited daily — Safari, Chrome, Brave, Firefox, Arc",
+  "entry": "main.py",
+  "icon": "globe",
+  "icon_file": "icon.svg"
+}

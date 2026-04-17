@@ -16,7 +16,7 @@ export default function Markdown({ children, className = '' }: Props) {
       remarkPlugins={[remarkGfm]}
       className={`prose ${isDark ? 'prose-invert' : ''} prose-sm max-w-none ${className}`}
       components={{
-        p: ({ children }) => <p className="mb-2 last:mb-0 text-sm leading-relaxed text-ask-text">{children}</p>,
+        p: ({ children }) => <p className="mb-1.5 last:mb-0 text-sm leading-snug text-ask-text">{children}</p>,
         h1: ({ children }) => <h1 className="text-base font-semibold mb-2 text-ask-text">{children}</h1>,
         h2: ({ children }) => <h2 className="text-sm font-semibold mb-1 text-ask-text">{children}</h2>,
         h3: ({ children }) => <h3 className="text-sm font-semibold mb-1 text-ask-text">{children}</h3>,
