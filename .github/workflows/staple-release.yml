@@ -60,7 +60,8 @@ jobs:
         run: |
           STAPLED=""
           FAILED=""
-          for f in artifacts/AskMac-*.pkg artifacts/AskMac-*.dmg; do
+          VERSION="${{ steps.tag.outputs.version }}"
+          for f in artifacts/AskMac-*.pkg artifacts/AskMac-*-installer.dmg; do
             [[ -f "$f" ]] || continue
             name="$(basename "$f")"
             echo "==> Stapling $name…"
@@ -72,6 +73,9 @@ jobs:
               FAILED="$FAILED $name"
             fi
           done
+          # The Sparkle update DMG (AskMac-{version}.dmg) is intentionally NOT stapled.
+          # Sparkle validates via EdDSA signature — stapling would change the file hash
+          # and invalidate the appcast signature without any way to re-sign on CI.
           echo "stapled=${STAPLED# }" >> "$GITHUB_OUTPUT"
           echo "failed=${FAILED# }" >> "$GITHUB_OUTPUT"
 
@@ -129,53 +133,6 @@ jobs:
             --clobber \
             $UPLOAD_LIST
           echo "✅ Uploaded: $UPLOAD_LIST"
-
-      - name: Update appcast signature for stapled Sparkle DMG
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ steps.tag.outputs.tag }}"
-          VERSION="${{ steps.tag.outputs.version }}"
-          STAPLED="${{ steps.staple.outputs.stapled }}"
-
-          # Only update appcast if the Sparkle DMG was actually stapled
-          SPARKLE_DMG=""
-          for f in $STAPLED; do
-            [[ "$f" == *"AskMac-${VERSION}.dmg" ]] && SPARKLE_DMG="$f"
-          done
-          if [[ -z "$SPARKLE_DMG" ]]; then
-            echo "Sparkle DMG was not stapled — skipping appcast update."
-            exit 0
-          fi
-
-          echo "==> Signing stapled Sparkle DMG for appcast…"
-          # Checkout repo so we can update appcast.xml
-          git clone --depth=1 "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" repo
-          cd repo
-
-          # Download Sparkle sign_update tool
-          SPARKLE_VERSION=$(grep -r 'sparkle-project/Sparkle' AskMac/project.yml 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "2.9.1")
-          SPARKLE_URL="https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
-          echo "Downloading Sparkle ${SPARKLE_VERSION}…"
-          curl -fsSL "$SPARKLE_URL" -o /tmp/sparkle.tar.xz
-          mkdir -p sparkle && tar -xf /tmp/sparkle.tar.xz -C sparkle
-
-          SIGN_OUTPUT=$(./sparkle/bin/sign_update "../$SPARKLE_DMG")
-          echo "sign_update output: $SIGN_OUTPUT"
-          NEW_SIG=$(echo "$SIGN_OUTPUT" | sed 's/.*edSignature="\([^"]*\)".*/\1/')
-          NEW_LEN=$(echo "$SIGN_OUTPUT" | sed 's/.*length="\([^"]*\)".*/\1/')
-
-          echo "==> Patching appcast.xml (sig=${NEW_SIG:0:20}… len=${NEW_LEN})…"
-          VERSION="$VERSION" NEW_SIG="$NEW_SIG" NEW_LEN="$NEW_LEN" \
-            python3 scripts/patch-appcast-signature.py
-
-          git config user.email "actions@github.com"
-          git config user.name "GitHub Actions"
-          git add docs/appcast.xml
-          git diff --cached --quiet && echo "No appcast changes needed." && exit 0
-          git commit -m "fix(appcast): update v${VERSION} EdDSA signature after CI staple"
-          git push origin main
-          echo "✅ appcast.xml updated with stapled DMG signature."
 
       - name: Report
         run: |
