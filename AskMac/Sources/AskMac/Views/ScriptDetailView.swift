@@ -3,6 +3,7 @@ import AskMacCore
 #endif
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Card preview axes
 

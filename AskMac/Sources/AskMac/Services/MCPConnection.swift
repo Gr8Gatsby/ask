@@ -4,8 +4,6 @@ import OSLog
 import AskMacCore
 #endif
 
-private let logger = Logger(subsystem: "com.kevinhill.askmac", category: "MCPConnection")
-
 // MARK: - LiveBlock
 
 /// A block currently emitted by a script, tracked locally for Mac-side preview.
@@ -26,6 +24,7 @@ struct LiveBlock: Identifiable, Sendable {
 /// The daemon sends `notifications/message` (user_response) on the script's stdin.
 final class MCPConnection: @unchecked Sendable {
     let scriptID: String
+    private let logger = Logger(subsystem: "com.kevinhill.askmac", category: "MCPConnection")
 
     /// Called when the script process terminates (crash or clean exit).
     var onTerminate: (() -> Void)?

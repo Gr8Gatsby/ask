@@ -1,8 +1,6 @@
 import Foundation
 import OSLog
 
-private let logger = Logger(subsystem: "com.kevinhill.askmac", category: "SystemScript")
-
 /// Manages a JSON-RPC 2.0 connection to a **system** script subprocess.
 ///
 /// Unlike `MCPConnection` (where the script calls the daemon's tools),
@@ -11,6 +9,7 @@ private let logger = Logger(subsystem: "com.kevinhill.askmac", category: "System
 /// call system script tools as if they were built-in AskMac tools.
 final class SystemScriptConnection: @unchecked Sendable {
     let scriptID: String
+    private let logger = Logger(subsystem: "com.kevinhill.askmac", category: "SystemScript")
 
     /// Called on the main queue when the process exits.
     var onTerminate: (() -> Void)?
