@@ -26,6 +26,11 @@
 		44001CADDFE8D87EC9DC698D /* MessageWatcherService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 834313B9757B652D0DB8E349 /* MessageWatcherService.swift */; };
 		4FC5952095062C336D1CA67F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 468C8037AACD02ADA46B757B /* Assets.xcassets */; };
 		58854C8E2F0F81A7D7A40B80 /* BlockPreviewViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 406DAAC6415E06CCCF55B8BB /* BlockPreviewViews.swift */; };
+		BP0001HELPERSBUILDF00001 /* BlockPreviewHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = BP0001HELPERSFILEREF0001 /* BlockPreviewHelpers.swift */; };
+		BP0002INTERACTIVEBUILD001 /* BlockPreviewInteractive.swift in Sources */ = {isa = PBXBuildFile; fileRef = BP0002INTERACTIVEFILEREF1 /* BlockPreviewInteractive.swift */; };
+		BP0003STATUSBUILDF000001 /* BlockPreviewStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = BP0003STATUSFILEREF00001 /* BlockPreviewStatus.swift */; };
+		BP0004CONTENTBUILDF00001 /* BlockPreviewContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = BP0004CONTENTFILEREF0001 /* BlockPreviewContent.swift */; };
+		BP0005SESSIONBUILDF00001 /* BlockPreviewSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = BP0005SESSIONFILEREF0001 /* BlockPreviewSession.swift */; };
 		5ECA9EF4288A77DE66393903 /* ActionHistoryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83069E78F01A6ACCC68DA445 /* ActionHistoryService.swift */; };
 		68ECD65ACEAFD3360C586C86 /* FeedScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE84811356D534B4D8E86AB8 /* FeedScheduler.swift */; };
 		6F24BAB0E82A7694C50B439F /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FBA2522655384EA7091AA8C /* HistoryView.swift */; };
@@ -117,6 +122,11 @@
 		3F2A338EFC99F8D874DB40EE /* VersionComparison.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VersionComparison.swift; sourceTree = "<group>"; };
 		4067387D7D1B4F65BAB0B74F /* ResponsePoller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResponsePoller.swift; sourceTree = "<group>"; };
 		406DAAC6415E06CCCF55B8BB /* BlockPreviewViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockPreviewViews.swift; sourceTree = "<group>"; };
+		BP0001HELPERSFILEREF0001 /* BlockPreviewHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockPreviewHelpers.swift; sourceTree = "<group>"; };
+		BP0002INTERACTIVEFILEREF1 /* BlockPreviewInteractive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockPreviewInteractive.swift; sourceTree = "<group>"; };
+		BP0003STATUSFILEREF00001 /* BlockPreviewStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockPreviewStatus.swift; sourceTree = "<group>"; };
+		BP0004CONTENTFILEREF0001 /* BlockPreviewContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockPreviewContent.swift; sourceTree = "<group>"; };
+		BP0005SESSIONFILEREF0001 /* BlockPreviewSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockPreviewSession.swift; sourceTree = "<group>"; };
 		42EC5BBB34D453B2F332AF00 /* CloudKitService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitService.swift; sourceTree = "<group>"; };
 		468C8037AACD02ADA46B757B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		504764CE87B4791BDD3ABFD8 /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
@@ -256,6 +266,11 @@
 			isa = PBXGroup;
 			children = (
 				406DAAC6415E06CCCF55B8BB /* BlockPreviewViews.swift */,
+				BP0001HELPERSFILEREF0001 /* BlockPreviewHelpers.swift */,
+				BP0002INTERACTIVEFILEREF1 /* BlockPreviewInteractive.swift */,
+				BP0003STATUSFILEREF00001 /* BlockPreviewStatus.swift */,
+				BP0004CONTENTFILEREF0001 /* BlockPreviewContent.swift */,
+				BP0005SESSIONFILEREF0001 /* BlockPreviewSession.swift */,
 				78ADB28BB3AA3C89FB164C5F /* BlocksBuilderView.swift */,
 				6FBA2522655384EA7091AA8C /* HistoryView.swift */,
 				B82E4BC0B8C01489502831A9 /* MacMessagesView.swift */,
@@ -491,6 +506,11 @@
 				CB275270E3CF93DD24F84506 /* AppUpdater.swift in Sources */,
 				3654DDECAB92F2C7B7678F90 /* AskMacApp.swift in Sources */,
 				58854C8E2F0F81A7D7A40B80 /* BlockPreviewViews.swift in Sources */,
+				BP0001HELPERSBUILDF00001 /* BlockPreviewHelpers.swift in Sources */,
+				BP0002INTERACTIVEBUILD001 /* BlockPreviewInteractive.swift in Sources */,
+				BP0003STATUSBUILDF000001 /* BlockPreviewStatus.swift in Sources */,
+				BP0004CONTENTBUILDF00001 /* BlockPreviewContent.swift in Sources */,
+				BP0005SESSIONBUILDF00001 /* BlockPreviewSession.swift in Sources */,
 				2A8C999FCCA1DDA22786079F /* BlockService.swift in Sources */,
 				F6670C71B1ACAA3861CBE8B5 /* BlocksBuilderView.swift in Sources */,
 				C4A094A8937C7FDEF0021ADC /* CloudKitSchema.swift in Sources */,
