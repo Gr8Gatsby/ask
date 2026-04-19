@@ -26,18 +26,33 @@ Scripts are never edited in `~/.ask/scripts/` directly. The repo is the single s
 git -C "$(pwd)" rev-parse --show-toplevel
 ```
 
-3. For each script to deploy, rsync it:
+3. Before deploying all scripts, check for any scripts that exist in the prod vault but no longer exist in the repo source. These are being deleted — run their uninstall script first so they can clean up system state (hooks, config, etc.):
+```bash
+for dir in ~/.ask/scripts/*/; do
+  id=$(basename "$dir")
+  if [ ! -d "<repo-root>/ask/scripts/$id" ]; then
+    setup="$dir/setup.py"
+    if [ -f "$setup" ]; then
+      echo "Uninstalling $id before removal..."
+      PYTHONPATH="$HOME/.ask/scripts:$dir" python3 "$setup" --uninstall
+    fi
+  fi
+done
+```
+Skip this step when deploying a single named script.
+
+4. For each script to deploy, rsync it:
 ```bash
 rsync -av --delete "<repo-root>/ask/scripts/<script-id>/" ~/.ask/scripts/<script-id>/
 ```
 
-4. **brew-monitor only** — it's a Swift script with a compiled binary. After copying, rebuild it:
+5. **brew-monitor only** — it's a Swift script with a compiled binary. After copying, rebuild it:
 ```bash
 cd ~/.ask/scripts/brew-monitor && ./build.sh
 ```
 Skip this step for all other scripts (Python, no build needed).
 
-5. Reload AskMac so it picks up the changes:
+6. Reload AskMac so it picks up the changes:
 ```bash
 osascript -e 'tell application "AskMac" to activate'
 ```
