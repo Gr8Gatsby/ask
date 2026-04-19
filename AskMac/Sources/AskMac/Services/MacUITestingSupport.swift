@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 import Foundation
 
@@ -168,3 +169,4 @@ enum MacUITestingSupport {
         )
     }
 }
+#endif

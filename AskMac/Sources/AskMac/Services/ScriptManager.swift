@@ -167,7 +167,6 @@ final class ScriptManager: @unchecked Sendable {
     /// Live blocks currently emitted by each script, keyed by scriptID → blockID.
     private(set) var activeBlocks: [String: [String: LiveBlock]] = [:]
 
-    /// Exposed for LocalHTTPServer to embed in block JSON.
     var machineIDPublic: String { machineID }
 
     /// Reverse-lookup: given a blockID, return the scriptID that owns it.
@@ -175,8 +174,10 @@ final class ScriptManager: @unchecked Sendable {
         activeBlocks.first(where: { $0.value[blockID] != nil })?.key
     }
 
+    #if DEBUG
     /// Set by AskMacApp after startup; broadcasts block changes to the local dev UI.
     var localHTTPServer: LocalHTTPServer?
+    #endif
 
     // Internal — not exposed to UI
     private var connections: [String: MCPConnection] = [:]
@@ -478,11 +479,14 @@ final class ScriptManager: @unchecked Sendable {
         if activeBlocks[scriptID]?[blockID]?.blockType != "agent_session" {
             activeBlocks[scriptID]?.removeValue(forKey: blockID)
         }
+        #if DEBUG
         if MacUITestingSupport.isUITesting {
             MacUITestingSupport.markResponded(blockID)
         }
+        #endif
     }
 
+    #if DEBUG
     // MARK: - UI Testing
 
     /// Injects mock scripts and blocks for XCUITest runs.
@@ -491,6 +495,7 @@ final class ScriptManager: @unchecked Sendable {
         scripts = MacUITestingSupport.scripts(for: scenario)
         activeBlocks = MacUITestingSupport.activeBlocks(for: scenario)
     }
+    #endif
 
     func enableScript(id: String) {
         launchingScripts.remove(id)  // Clear stale guard from any previous failed launch
@@ -707,12 +712,14 @@ final class ScriptManager: @unchecked Sendable {
         let svgString = manifests[manifest.id]?.svgString
         let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData, scriptIconSVG: svgString, scriptType: "tile")
         let taskService = TaskService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData)
+        #if DEBUG
         taskService.onTaskUpserted = { [weak self] task in
             Task { @MainActor [weak self] in self?.localHTTPServer?.notifyTaskUpserted(task) }
         }
         taskService.onMessageAppended = { [weak self] msg in
             Task { @MainActor [weak self] in self?.localHTTPServer?.notifyMessageAppended(msg) }
         }
+        #endif
         let conn = MCPConnection(scriptID: manifest.id, entryURL: entryURL, blockService: blockService, terminalMonitor: terminalMonitor, taskService: taskService)
 
         // Expose system script tools in tools/list so scripts can discover them.
@@ -787,6 +794,7 @@ final class ScriptManager: @unchecked Sendable {
                     options: options,
                     payloadJSON: block.payloadJSON
                 )
+                #if DEBUG
                 let svg = self.scripts.first(where: { $0.id == manifest.id })?.svgString
                 let sType = self.scripts.first(where: { $0.id == manifest.id })?.scriptType ?? "tile"
                 if isNew {
@@ -794,12 +802,15 @@ final class ScriptManager: @unchecked Sendable {
                 } else {
                     self.localHTTPServer?.notifyBlockUpdated(block: block, scriptID: manifest.id, scriptName: manifest.name, scriptIconSVG: svg, scriptType: sType, machineID: self.machineID)
                 }
+                #endif
             }
         }
         conn.onBlockCleared = { [weak self] blockID in
             Task { @MainActor [weak self] in
                 self?.activeBlocks[manifest.id]?.removeValue(forKey: blockID)
+                #if DEBUG
                 self?.localHTTPServer?.notifyBlockCleared(blockID: blockID)
+                #endif
             }
         }
 
@@ -849,12 +860,14 @@ final class ScriptManager: @unchecked Sendable {
         let svgString = manifests[manifest.id]?.svgString
         let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData, scriptIconSVG: svgString, scriptType: "feed")
         let taskService = TaskService(cloudKit: cloudKit, machineID: machineID, scriptID: manifest.id, scriptName: manifest.name, scriptIcon: manifest.icon, scriptIconData: iconData)
+        #if DEBUG
         taskService.onTaskUpserted = { [weak self] task in
             Task { @MainActor [weak self] in self?.localHTTPServer?.notifyTaskUpserted(task) }
         }
         taskService.onMessageAppended = { [weak self] msg in
             Task { @MainActor [weak self] in self?.localHTTPServer?.notifyMessageAppended(msg) }
         }
+        #endif
         let conn = MCPConnection(scriptID: manifest.id, entryURL: entryURL, blockService: blockService, terminalMonitor: terminalMonitor, taskService: taskService)
 
         conn.onTerminate = { [weak self, weak conn] in
@@ -890,6 +903,7 @@ final class ScriptManager: @unchecked Sendable {
                     options: options,
                     payloadJSON: block.payloadJSON
                 )
+                #if DEBUG
                 let svg = self.scripts.first(where: { $0.id == manifest.id })?.svgString
                 let sType = self.scripts.first(where: { $0.id == manifest.id })?.scriptType ?? "tile"
                 if isNew {
@@ -897,12 +911,15 @@ final class ScriptManager: @unchecked Sendable {
                 } else {
                     self.localHTTPServer?.notifyBlockUpdated(block: block, scriptID: manifest.id, scriptName: manifest.name, scriptIconSVG: svg, scriptType: sType, machineID: self.machineID)
                 }
+                #endif
             }
         }
         conn.onBlockCleared = { [weak self] blockID in
             Task { @MainActor [weak self] in
                 self?.activeBlocks[manifest.id]?.removeValue(forKey: blockID)
+                #if DEBUG
                 self?.localHTTPServer?.notifyBlockCleared(blockID: blockID)
+                #endif
             }
         }
 

@@ -21,12 +21,6 @@ enum CKSchema {
         static let askInvokeRequest = "AskInvokeRequest"
         // Script registry — one record per script per machine, always up to date.
         static let askScript = "AskScript"
-        // Deprecated — dead code, no longer written or read.
-        // CloudKit record types cannot be deleted from production containers;
-        // these constants are kept only so purgeOldRecords can clean up stale records.
-        static let event    = "AskEvent"
-        static let response = "AskResponse"
-        static let session  = "AskSession"
     }
 
     // MARK: - AskTask
@@ -132,16 +126,6 @@ enum CKSchema {
         static let timestamp = "timestamp"
     }
 
-    enum Session {
-        static let sessionID = "sessionID"
-        static let machineID = "machineID"
-        static let title = "title"
-        static let status = "status"
-        static let startedAt = "startedAt"
-        static let lastActivityAt = "lastActivityAt"
-    }
-
-
     enum Message {
         static let messageID = "messageID"
         static let machineID = "machineID"
@@ -153,13 +137,6 @@ enum CKSchema {
         static let readAt = "readAt"
     }
 
-    enum Response {
-        static let eventID = "eventID"
-        static let machineID = "machineID"
-        static let choice = "choice"
-        static let timestamp = "timestamp"
-    }
-
     enum Machine {
         static let machineID = "machineID"
         static let name = "name"
@@ -168,16 +145,6 @@ enum CKSchema {
         static let status = "status"
     }
 
-    enum Event {
-        static let eventID = "eventID"
-        static let machineID = "machineID"
-        static let title = "title"
-        static let body = "body"
-        static let source = "source"
-        static let options = "options"
-        static let timestamp = "timestamp"
-        static let sessionID = "sessionID"
-    }
 }
 
 // MARK: - Machine

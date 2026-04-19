@@ -45,76 +45,6 @@ final class CloudKitService {
         logger.info("saveMachine — saved OK, recordName: \(saved.recordID.recordName) zone: \(saved.recordID.zoneID.zoneName)")
     }
 
-    // MARK: - Events
-
-    func saveEvent(eventID: String, machineID: String, title: String, body: String, source: String, options: [String] = [], sessionID: String? = nil) async throws {
-        let record = CKRecord(recordType: CKSchema.RecordType.event)
-        record[CKSchema.Event.eventID] = eventID
-        record[CKSchema.Event.machineID] = machineID
-        record[CKSchema.Event.title] = title
-        record[CKSchema.Event.body] = body
-        record[CKSchema.Event.source] = source
-        record[CKSchema.Event.options] = options as NSArray
-        record[CKSchema.Event.timestamp] = Date()
-        if let sessionID = sessionID, !sessionID.isEmpty {
-            record[CKSchema.Event.sessionID] = sessionID
-        }
-        let saved = try await save(record)
-        // Notification-only events (no options) are just for push — delete after saving
-        // so they don't accumulate in the iOS app's list.
-        if options.isEmpty {
-            _ = try? await database.deleteRecord(withID: saved.recordID)
-        }
-    }
-
-    /// Creates or updates a session record. Preserves startedAt if the record already exists.
-    func upsertSession(sessionID: String, machineID: String, title: String?, status: String) async throws {
-        let record: CKRecord
-        if let cached = cachedRecords[sessionID] {
-            record = cached
-        } else if let existing = try? await database.record(for: CKRecord.ID(recordName: sessionID)) {
-            record = existing
-            cachedRecords[sessionID] = existing
-        } else {
-            record = CKRecord(recordType: CKSchema.RecordType.session,
-                              recordID: CKRecord.ID(recordName: sessionID))
-            record[CKSchema.Session.startedAt] = Date()
-        }
-        record[CKSchema.Session.sessionID] = sessionID
-        record[CKSchema.Session.machineID] = machineID
-        if let title { record[CKSchema.Session.title] = title }
-        record[CKSchema.Session.status] = status
-        record[CKSchema.Session.lastActivityAt] = Date()
-        let saved = try await save(record)
-        cachedRecords[sessionID] = saved
-    }
-
-    // MARK: - Responses
-
-    /// Fetches any AskResponse records addressed to this machine, then deletes them.
-    func drainResponses(machineID: String) async throws -> [(eventID: String, choice: String)] {
-        let predicate = NSPredicate(format: "%K == %@", CKSchema.Response.machineID, machineID)
-        let query = CKQuery(recordType: CKSchema.RecordType.response, predicate: predicate)
-        let (results, _) = try await database.records(matching: query, resultsLimit: 50)
-
-        var found: [(eventID: String, choice: String)] = []
-        var toDelete: [CKRecord.ID] = []
-
-        for (recordID, result) in results {
-            guard let record = try? result.get(),
-                  let eventID = record[CKSchema.Response.eventID] as? String,
-                  let choice = record[CKSchema.Response.choice] as? String
-            else { continue }
-            found.append((eventID: eventID, choice: choice))
-            toDelete.append(recordID)
-        }
-
-        if !toDelete.isEmpty {
-            _ = try? await database.modifyRecords(saving: [], deleting: toDelete, savePolicy: .allKeys, atomically: false)
-        }
-        return found
-    }
-
     // MARK: - Messages
 
     /// Fetches messages from the iPhone (fromDevice="iphone") newer than `since`, excluding already-read ones.
@@ -148,32 +78,6 @@ final class CloudKitService {
         guard let record = try? await database.record(for: recordID) else { return }
         record[CKSchema.Message.readAt] = Date()
         _ = try? await database.save(record)
-    }
-
-    // MARK: - Startup cleanup
-
-    /// Deletes all legacy event/session/response/job records for this machine from CloudKit.
-    /// RKBlock records are intentionally excluded — scripts manage their own block lifecycle
-    /// via TTLs and explicit clear_block calls. Purging blocks on startup races with scripts
-    /// re-emitting after launch and causes a blank iOS UI.
-    /// Safe to call on every launch — runs atomically=false so partial success is fine.
-    func purgeOldRecords(machineID: String) async {
-        // Jobs are intentionally excluded — they persist for iOS history.
-        let types: [(recordType: String, field: String)] = [
-            (CKSchema.RecordType.event,    CKSchema.Event.machineID),
-            (CKSchema.RecordType.session,  CKSchema.Session.machineID),
-            (CKSchema.RecordType.response, CKSchema.Response.machineID),
-        ]
-        let predicate = NSPredicate(format: "%K == %@", "machineID", machineID)
-
-        for (recordType, _) in types {
-            let query = CKQuery(recordType: recordType, predicate: predicate)
-            guard let results = try? await database.records(matching: query, resultsLimit: 200) else { continue }
-            let ids = results.matchResults.compactMap { _, result in try? result.get() }.map(\.recordID)
-            guard !ids.isEmpty else { continue }
-            _ = try? await database.modifyRecords(saving: [], deleting: ids, savePolicy: .allKeys, atomically: false)
-            print("[CloudKitService] Purged \(ids.count) \(recordType) records")
-        }
     }
 
     // MARK: - Devices
