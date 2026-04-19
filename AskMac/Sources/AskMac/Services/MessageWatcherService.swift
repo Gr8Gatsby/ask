@@ -1,5 +1,8 @@
 import Foundation
+import OSLog
 import Observation
+
+private let logger = Logger(subsystem: "com.kevinhill.askmac", category: "MessageWatcher")
 
 /// Polls CloudKit for messages sent from the iPhone into an active session.
 /// Messages with a sessionID are routed to the owning script via MCPConnection,
@@ -53,9 +56,9 @@ final class MessageWatcherService {
                     messageID: message.messageID,
                     text: message.text
                 )
-                print("[MessageWatcher] chat_message → scriptID=\(scriptID) sessionID=\(sessionID)")
+                logger.debug("chat_message → scriptID=\(scriptID) sessionID=\(sessionID)")
             } else {
-                print("[MessageWatcher] no connection for scriptID=\(scriptID), dropping message")
+                logger.debug("no connection for scriptID=\(scriptID), dropping message")
             }
             // Write readAt regardless — confirms receipt even if script is offline
             await cloudKit.markMessageRead(messageID: message.messageID)

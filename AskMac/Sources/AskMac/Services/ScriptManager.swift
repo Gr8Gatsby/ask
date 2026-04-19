@@ -1,10 +1,13 @@
 import AppKit
+import OSLog
 import CoreServices
 #if canImport(AskMacCore)
 import AskMacCore
 #endif
 import Foundation
 import Observation
+
+private let logger = Logger(subsystem: "com.kevinhill.askmac", category: "ScriptManager")
 
 // MARK: - Manifest
 
@@ -248,9 +251,9 @@ final class ScriptManager: @unchecked Sendable {
                 let blockService = BlockService(cloudKit: cloudKit, machineID: machineID, scriptID: scriptID)
                 do {
                     try await blockService.clearAllBlocks()
-                    print("[ScriptManager] Purged stale blocks for disabled script: \(scriptID)")
+                    logger.error("Purged stale blocks for disabled script: \(scriptID)")
                 } catch {
-                    print("[ScriptManager] Failed to purge blocks for \(scriptID): \(error)")
+                    logger.error("Failed to purge blocks for \(scriptID): \(error)")
                 }
             }
         }
@@ -363,7 +366,7 @@ final class ScriptManager: @unchecked Sendable {
                 publishScript(manifest, status: "running")
                 launchWithDepCheck(manifest: manifest, scriptDir: dir)
             }
-            print("[ScriptManager] \(isNew ? "Loaded" : "Refreshed") script: \(manifest.id)")
+            logger.debug("\(isNew ? "Loaded" : "Refreshed") script: \(manifest.id)")
         }
     }
 
@@ -396,7 +399,7 @@ final class ScriptManager: @unchecked Sendable {
     func uninstallScript(id: String) {
         // System scripts cannot be deleted — users can only disable them
         guard scripts.first(where: { $0.id == id })?.isSystem != true else {
-            print("[ScriptManager] Refusing to uninstall system script: \(id)")
+            logger.debug("Refusing to uninstall system script: \(id)")
             return
         }
 
@@ -458,17 +461,17 @@ final class ScriptManager: @unchecked Sendable {
 
                 do {
                     try FileManager.default.trashItem(at: dir, resultingItemURL: nil)
-                    print("[ScriptManager] Moved script \(id) to trash: \(dir.path)")
+                    logger.debug("Moved script \(id) to trash: \(dir.path)")
                 } catch {
-                    print("[ScriptManager] Failed to move script \(id) to trash: \(error)")
+                    logger.error("Failed to move script \(id) to trash: \(error)")
                 }
             }
         } else {
             do {
                 try FileManager.default.trashItem(at: dir, resultingItemURL: nil)
-                print("[ScriptManager] Moved script \(id) to trash: \(dir.path)")
+                logger.debug("Moved script \(id) to trash: \(dir.path)")
             } catch {
-                print("[ScriptManager] Failed to move script \(id) to trash: \(error)")
+                logger.error("Failed to move script \(id) to trash: \(error)")
             }
         }
     }
@@ -562,14 +565,14 @@ final class ScriptManager: @unchecked Sendable {
     /// Manually triggers a feed script run. Called when iOS sends an AskInvokeRequest.
     func invokeScript(id: String) {
         guard let cached = manifests[id] else {
-            print("[ScriptManager] invokeScript: \(id) not found in manifests")
+            logger.error("invokeScript: \(id) not found in manifests")
             return
         }
         guard cached.manifest.isFeed else {
-            print("[ScriptManager] invokeScript: \(id) is not a feed script, ignoring")
+            logger.debug("invokeScript: \(id) is not a feed script, ignoring")
             return
         }
-        print("[ScriptManager] invokeScript: launching feed run for \(id)")
+        logger.debug("invokeScript: launching feed run for \(id)")
         launchFeedRunWithDepCheck(manifest: cached.manifest, scriptDir: cached.dir)
     }
 
@@ -691,7 +694,7 @@ final class ScriptManager: @unchecked Sendable {
         let resolvedEntry = entryURL.resolvingSymlinksInPath()
         let resolvedDir   = scriptDir.resolvingSymlinksInPath()
         guard resolvedEntry.path.hasPrefix(resolvedDir.path + "/") || resolvedEntry.path == resolvedDir.path else {
-            print("[ScriptManager] \(manifest.id): path traversal rejected for entry '\(manifest.entry)'")
+            logger.error("\(manifest.id): path traversal rejected for entry '\(manifest.entry)'")
             return
         }
 
@@ -703,7 +706,7 @@ final class ScriptManager: @unchecked Sendable {
         let iconImage = manifests[manifest.id]?.icon
 
         guard canRun else {
-            print("[ScriptManager] \(manifest.id): entry not runnable at \(entryURL.path)")
+            logger.error("\(manifest.id): entry not runnable at \(entryURL.path)")
             upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .stopped, isEnabled: true)
             return
         }
@@ -826,7 +829,7 @@ final class ScriptManager: @unchecked Sendable {
             scriptVersion: manifest.version,
             afterCrash: wasRestart
         )
-        print("[ScriptManager] \(manifest.id) started (v\(manifest.version ?? "?"), afterCrash=\(wasRestart))")
+        logger.debug("\(manifest.id) started (v\(manifest.version ?? "?"), afterCrash=\(wasRestart))")
 
         // Run setup check in the background if this script has a setup script
         if manifest.setup != nil || !(manifest.config ?? []).isEmpty {
@@ -843,7 +846,7 @@ final class ScriptManager: @unchecked Sendable {
         let resolvedEntry = entryURL.resolvingSymlinksInPath()
         let resolvedDir   = scriptDir.resolvingSymlinksInPath()
         guard resolvedEntry.path.hasPrefix(resolvedDir.path + "/") || resolvedEntry.path == resolvedDir.path else {
-            print("[ScriptManager] \(manifest.id): path traversal rejected")
+            logger.error("\(manifest.id): path traversal rejected")
             return
         }
 
@@ -851,7 +854,7 @@ final class ScriptManager: @unchecked Sendable {
             || entryURL.pathExtension == "py"
             || entryURL.pathExtension == "sh"
         guard canRun else {
-            print("[ScriptManager] \(manifest.id): entry not runnable")
+            logger.error("\(manifest.id): entry not runnable")
             return
         }
 
@@ -934,13 +937,13 @@ final class ScriptManager: @unchecked Sendable {
             try? await Task.sleep(for: .seconds(timeoutSecs))
             guard !Task.isCancelled else { return }
             guard let self, let conn, self.connections[manifest.id] === conn else { return }
-            print("[ScriptManager] \(manifest.id): feed run timed out after \(Int(timeoutSecs))s — terminating")
+            logger.error("\(manifest.id): feed run timed out after \(Int(timeoutSecs))s — terminating")
             conn.stop()
             // onTerminate will fire → handleFeedExit with non-zero exit
         }
         feedTimeoutTasks[manifest.id] = timeoutTask
 
-        print("[ScriptManager] \(manifest.id): feed run started (timeout=\(Int(timeoutSecs))s)")
+        logger.debug("\(manifest.id): feed run started (timeout=\(Int(timeoutSecs))s)")
     }
 
     private func handleFeedExit(manifest: ScriptManifest, scriptDir: URL, conn: MCPConnection?) {
@@ -960,14 +963,14 @@ final class ScriptManager: @unchecked Sendable {
         }
 
         if exitCode == 0 {
-            print("[ScriptManager] \(manifest.id): feed run completed cleanly")
+            logger.debug("\(manifest.id): feed run completed cleanly")
             upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: manifests[manifest.id]?.icon, status: .stopped, isEnabled: true)
             if let m = manifests[manifest.id]?.manifest {
                 publishScript(m, status: "idle", lastRunAt: Date(), nextRunAt: computeNextRun(for: m))
             }
         } else {
             let reason = bySignal ? "signal \(exitCode)" : "exit \(exitCode)"
-            print("[ScriptManager] \(manifest.id): feed run failed (\(reason)) — last stderr: \(stderr)")
+            logger.error("\(manifest.id): feed run failed (\(reason)) — last stderr: \(stderr)")
             upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: manifests[manifest.id]?.icon, status: .crashed, isEnabled: true)
             if let m = manifests[manifest.id]?.manifest {
                 publishScript(m, status: "crashed", lastRunAt: Date())
@@ -1024,7 +1027,7 @@ final class ScriptManager: @unchecked Sendable {
 
         if history.count >= Self.circuitBreakerLimit {
             crashHistory.removeValue(forKey: manifest.id)
-            print("[ScriptManager] \(manifest.id): circuit breaker tripped (\(history.count) crashes in \(Int(Self.circuitBreakerWindow))s)")
+            logger.error("\(manifest.id): circuit breaker tripped (\(history.count) crashes in \(Int(Self.circuitBreakerWindow))s)")
             tripCircuitBreaker(manifest: manifest)
             return
         }
@@ -1033,7 +1036,7 @@ final class ScriptManager: @unchecked Sendable {
         restartDelays[manifest.id] = min(delay * 2, 30.0)
 
         let reason = exitedBySignal ? "signal \(exitCode)" : "exit \(exitCode)"
-        print("[ScriptManager] \(manifest.id) crashed (\(reason)) — restarting in \(Int(delay))s")
+        logger.error("\(manifest.id) crashed (\(reason)) — restarting in \(Int(delay))s")
 
         // Emit alert to iOS so user sees it on iPhone
         let alertBody = errorSummary ?? "Script exited unexpectedly"
@@ -1089,7 +1092,7 @@ final class ScriptManager: @unchecked Sendable {
 
     private func launchWithDepCheck(manifest: ScriptManifest, scriptDir: URL) {
         guard !launchingScripts.contains(manifest.id) else {
-            print("[ScriptManager] \(manifest.id): launch already in-flight, skipping duplicate")
+            logger.debug("\(manifest.id): launch already in-flight, skipping duplicate")
             return
         }
         launchingScripts.insert(manifest.id)
@@ -1108,7 +1111,7 @@ final class ScriptManager: @unchecked Sendable {
 
     private func launchFeedRunWithDepCheck(manifest: ScriptManifest, scriptDir: URL) {
         guard !launchingScripts.contains(manifest.id) else {
-            print("[ScriptManager] \(manifest.id): feed launch already in-flight, skipping duplicate")
+            logger.debug("\(manifest.id): feed launch already in-flight, skipping duplicate")
             return
         }
         launchingScripts.insert(manifest.id)
@@ -1129,7 +1132,7 @@ final class ScriptManager: @unchecked Sendable {
 
     private func launchSystemWithDepCheck(manifest: ScriptManifest, scriptDir: URL) {
         guard !launchingScripts.contains(manifest.id) else {
-            print("[ScriptManager] \(manifest.id): system launch already in-flight, skipping duplicate")
+            logger.debug("\(manifest.id): system launch already in-flight, skipping duplicate")
             return
         }
         launchingScripts.insert(manifest.id)
@@ -1137,7 +1140,7 @@ final class ScriptManager: @unchecked Sendable {
             defer { self.launchingScripts.remove(manifest.id) }
             let failed = await checkDependencies(manifest)
             if !failed.isEmpty {
-                print("[ScriptManager] \(manifest.id): system script missing deps — \(failed.map(\.name).joined(separator: ", "))")
+                logger.error("\(manifest.id): system script missing deps — \(failed.map(\.name).joined(separator: ", "))")
             } else {
                 self.launchSystem(manifest: manifest, scriptDir: scriptDir)
             }
@@ -1151,7 +1154,7 @@ final class ScriptManager: @unchecked Sendable {
         let resolvedEntry = entryURL.resolvingSymlinksInPath()
         let resolvedDir   = scriptDir.resolvingSymlinksInPath()
         guard resolvedEntry.path.hasPrefix(resolvedDir.path + "/") || resolvedEntry.path == resolvedDir.path else {
-            print("[ScriptManager] \(manifest.id): path traversal rejected")
+            logger.error("\(manifest.id): path traversal rejected")
             return
         }
 
@@ -1159,7 +1162,7 @@ final class ScriptManager: @unchecked Sendable {
             || entryURL.pathExtension == "py"
             || entryURL.pathExtension == "sh"
         guard canRun else {
-            print("[ScriptManager] \(manifest.id): entry not runnable at \(entryURL.path)")
+            logger.error("\(manifest.id): entry not runnable at \(entryURL.path)")
             return
         }
 
@@ -1174,7 +1177,7 @@ final class ScriptManager: @unchecked Sendable {
                               iconImage: self.manifests[manifest.id]?.icon, status: .crashed, isEnabled: true)
             let delay = self.restartDelays[manifest.id] ?? 1.0
             self.restartDelays[manifest.id] = min(delay * 2, 30.0)
-            print("[ScriptManager] System script \(manifest.id) terminated — restarting in \(Int(delay))s")
+            logger.debug("System script \(manifest.id) terminated — restarting in \(Int(delay))s")
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(delay))
                 self?.launchSystem(manifest: manifest, scriptDir: scriptDir)
@@ -1185,7 +1188,7 @@ final class ScriptManager: @unchecked Sendable {
         conn.start()
         upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon,
                      iconImage: manifests[manifest.id]?.icon, status: .running, isEnabled: true)
-        print("[ScriptManager] System script running: \(manifest.id)")
+        logger.debug("System script running: \(manifest.id)")
     }
 
     private func checkDependencies(_ manifest: ScriptManifest) async -> [ScriptDependency] {
@@ -1257,7 +1260,7 @@ final class ScriptManager: @unchecked Sendable {
             scripts[idx].missingDeps = failed
         }
         let depNames = failed.map(\.name)
-        print("[ScriptManager] \(manifest.id): missing dependencies — \(depNames.joined(separator: ", "))")
+        logger.error("\(manifest.id): missing dependencies — \(depNames.joined(separator: ", "))")
         actionHistory.recordDependencyMissing(scriptName: manifest.name, missingDeps: depNames)
         let iconData  = iconImage.flatMap { ScriptManager.iconPNGBase64($0) }
         let svgString = manifests[manifest.id]?.svgString
@@ -1592,7 +1595,7 @@ final class ScriptManager: @unchecked Sendable {
         vaultWatcher = VaultWatcher(paths: paths) { [weak self] in
             DispatchQueue.main.async { self?.scheduleVaultReload() }
         }
-        print("[ScriptManager] Vault watcher started: \(paths.joined(separator: ", "))")
+        logger.debug("Vault watcher started: \(paths.joined(separator: ", "))")
     }
 
     @MainActor

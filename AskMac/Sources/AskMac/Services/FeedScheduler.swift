@@ -1,4 +1,7 @@
 import Foundation
+import OSLog
+
+private let logger = Logger(subsystem: "com.kevinhill.askmac", category: "FeedScheduler")
 
 // MARK: - FeedScheduler
 
@@ -24,14 +27,14 @@ final class FeedScheduler: @unchecked Sendable {
                     ?? "0 * * * *"
 
                 guard let next = CronExpression.nextFireDate(from: cronExpr) else {
-                    print("[FeedScheduler] \(manifest.id): invalid cron '\(cronExpr)' — skipping")
+                    logger.error("\(manifest.id): invalid cron '\(cronExpr)' — skipping")
                     // Wait 1 hour then retry
                     try? await Task.sleep(for: .seconds(3600))
                     continue
                 }
 
                 let delay = next.timeIntervalSinceNow
-                print("[FeedScheduler] \(manifest.id): next run at \(next) (in \(Int(delay))s)")
+                logger.debug("\(manifest.id): next run at \(next) (in \(Int(delay))s)")
                 if delay > 0 {
                     try? await Task.sleep(for: .seconds(delay))
                 }

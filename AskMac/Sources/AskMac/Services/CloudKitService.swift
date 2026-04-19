@@ -159,7 +159,7 @@ final class CloudKitService {
         guard !ids.isEmpty else { return }
         _ = try await database.modifyRecords(saving: [], deleting: ids, savePolicy: .allKeys, atomically: false)
         ids.forEach { cachedRecords.removeValue(forKey: $0.recordName) }
-        print("[CloudKitService] Cleared \(ids.count) blocks for script \(scriptID)")
+        logger.debug("Cleared \(ids.count) blocks for script \(scriptID)")
     }
 
     /// Deletes an RKBlock record by blockID.
