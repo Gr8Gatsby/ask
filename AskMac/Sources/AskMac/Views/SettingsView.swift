@@ -1291,7 +1291,7 @@ private struct ScriptsTabView: View {
                 }
             }
             .onChange(of: selectedScriptID) { _, id in
-                if id != nil { showVault = false }
+                if id != nil { showVault = false; showCatalog = false }
             }
             .onChange(of: installer.phase) { _, phase in
                 if phase == .done {
