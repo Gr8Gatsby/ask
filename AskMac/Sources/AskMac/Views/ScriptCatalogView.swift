@@ -214,10 +214,13 @@ struct LocalScriptRow: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(script.name)
-                    .font(.body)
-                    .fontWeight(.medium)
-                    .opacity(0.4)
+                HStack(spacing: 6) {
+                    Text(script.name)
+                        .font(.body)
+                        .fontWeight(.medium)
+                        .opacity(0.4)
+                    localTypeBadge
+                }
                 if let desc = script.description {
                     Text(desc)
                         .font(.caption)
@@ -240,6 +243,24 @@ struct LocalScriptRow: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
     }
+
+    private var localTypeBadge: some View {
+        let (label, color): (String, Color) = {
+            switch script.scriptType {
+            case "feed":   return ("Feed",   .purple)
+            case "system": return ("System", .gray)
+            default:       return ("Tile",   .blue)
+            }
+        }()
+        return Text(label)
+            .font(.caption2)
+            .fontWeight(.medium)
+            .foregroundStyle(color.opacity(0.5))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.08))
+            .clipShape(Capsule())
+    }
 }
 
 struct CatalogEntryRow: View {
@@ -252,6 +273,9 @@ struct CatalogEntryRow: View {
     let installedScript: ManagedScript?
     var isLocal: Bool = false
     let onInstall: () -> Void
+
+    @Environment(ScriptManager.self) private var scriptManager
+    @State private var showUninstallConfirm = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -306,13 +330,31 @@ struct CatalogEntryRow: View {
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                 } else if isInstalled {
-                    Text("Installed")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.secondary.opacity(0.1))
-                        .clipShape(Capsule())
+                    HStack(spacing: 6) {
+                        Text("Installed")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.secondary.opacity(0.1))
+                            .clipShape(Capsule())
+                        Button {
+                            showUninstallConfirm = true
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Uninstall script")
+                        .confirmationDialog("Uninstall \(entry.name)?", isPresented: $showUninstallConfirm, titleVisibility: .visible) {
+                            Button("Uninstall", role: .destructive) {
+                                scriptManager.uninstallScript(id: entry.id)
+                            }
+                        } message: {
+                            Text("The script folder will be moved to the Trash.")
+                        }
+                    }
                 } else {
                     Button("Install", action: onInstall)
                         .buttonStyle(.bordered)
