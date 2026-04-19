@@ -194,6 +194,9 @@ struct ScriptCatalogView: View {
 struct LocalScriptRow: View {
     let script: ManagedScript
 
+    @Environment(ScriptManager.self) private var scriptManager
+    @State private var showUninstallConfirm = false
+
     var body: some View {
         HStack(spacing: 12) {
             Group {
@@ -232,13 +235,31 @@ struct LocalScriptRow: View {
 
             Spacer()
 
-            Text("Local")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.secondary.opacity(0.1))
-                .clipShape(Capsule())
+            HStack(spacing: 6) {
+                Text("Local")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.secondary.opacity(0.1))
+                    .clipShape(Capsule())
+                Button {
+                    showUninstallConfirm = true
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Uninstall script")
+                .confirmationDialog("Uninstall \(script.name)?", isPresented: $showUninstallConfirm, titleVisibility: .visible) {
+                    Button("Uninstall", role: .destructive) {
+                        scriptManager.uninstallScript(id: script.id)
+                    }
+                } message: {
+                    Text("The script folder will be moved to the Trash.")
+                }
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
