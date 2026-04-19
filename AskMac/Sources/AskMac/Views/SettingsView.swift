@@ -10,14 +10,12 @@ import UniformTypeIdentifiers
 // MARK: - Top-level tab
 
 private enum MacTab: String, CaseIterable {
-    case scripts, app, feed, blocks, machine
+    case scripts, feed, machine
 
     var icon: String {
         switch self {
         case .scripts:  "terminal"
-        case .app:      "square.grid.2x2"
         case .feed:     "scroll"
-        case .blocks:   "rectangle.stack"
         case .machine:  "desktopcomputer"
         }
     }
@@ -25,9 +23,7 @@ private enum MacTab: String, CaseIterable {
     var label: String {
         switch self {
         case .scripts:  "Scripts"
-        case .app:      "App"
         case .feed:     "Feed"
-        case .blocks:   "Blocks"
         case .machine:  "Machine"
         }
     }
@@ -42,8 +38,6 @@ struct MacScriptsView: View {
     @Environment(CloudKitService.self) private var cloudKit
 
     @State private var activeTab: MacTab = .scripts
-    @State private var builderBlocks: [BuilderBlock] = []
-    @State private var builderShowJSON = true
 
     var body: some View {
         Group {
@@ -51,15 +45,9 @@ struct MacScriptsView: View {
             case .scripts:
                 ScriptsTabView()
                     .environment(scriptManager)
-            case .app:
-                MacAppMockView()
-                    .environment(scriptManager)
-                    .environment(actionHistory)
             case .feed:
                 MacFeedView()
                     .environment(actionHistory)
-            case .blocks:
-                BlocksBuilderView(blocks: $builderBlocks, showJSON: $builderShowJSON)
             case .machine:
                 MachineDetailView()
                     .environment(settings)
