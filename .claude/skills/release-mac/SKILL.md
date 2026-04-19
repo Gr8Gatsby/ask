@@ -1,9 +1,9 @@
 ---
 name: release-mac
-description: Cut the Mac (AskMac) release — create annotated tag and push to trigger the GitHub Actions release pipeline. Run after /prepare-release-mac.
+description: Cut the Mac (AskMac) release — create annotated tag and trigger the build. Standalone use only — /prepare-release-mac now does this automatically end-to-end.
 ---
 
-Cut the AskMac release by creating and pushing a version tag. This triggers the `release.yml` GitHub Actions pipeline which validates the build.
+Cut the AskMac release by creating and pushing a version tag. Use this only when running the tag step in isolation (e.g. the PR was merged manually and /prepare-release-mac didn't complete the full flow).
 
 ## Step 1 — Verify repo state
 
@@ -18,25 +18,9 @@ If there are unpushed commits, stop and tell the user to open a PR and merge fir
 
 Run: `grep 'MARKETING_VERSION' AskMac/project.yml | head -1`
 
-Extract the version string (e.g. `0.7.0`). The tag will be `v{version}`.
+Extract the version string (e.g. `0.9.0`). The tag will be `v{version}`.
 
-## Step 3 — Confirm with the user
-
-Show:
-```
-Ready to release AskMac v{version}
-
-This will:
-  1. Create annotated tag v{version}
-  2. Push the tag to origin
-  3. Trigger the GitHub Actions release pipeline (release.yml)
-
-Proceed? (yes/no)
-```
-
-Wait for explicit confirmation before continuing.
-
-## Step 4 — Get the release notes
+## Step 3 — Get the release notes
 
 Use the release notes from the current conversation if `/prepare-release-mac` was run. Otherwise read `docs/spec.md` and find the most recent Mac changelog entry.
 
@@ -49,29 +33,65 @@ AskMac v{version}
 {grouped commit list}
 ```
 
-## Step 5 — Create the annotated tag
+## Step 4 — Create the annotated tag
 
 Write the annotation body to a temp file, then create the tag:
 
 ```bash
 git tag -a "v{version}" -F /tmp/release-notes-mac.txt
+git tag -l "v{version}"
 ```
 
-Verify the tag was created: `git tag -l "v{version}"`
-
-## Step 6 — Push the tag
+## Step 5 — Push the tag
 
 ```bash
 git push origin "v{version}"
 ```
 
-## Step 7 — Report
+## Step 6 — Run the build
 
-Show the user:
+Run the build script (stream output, do not background):
+```bash
+./scripts/build-release.sh 2>&1 | tee /tmp/build-mac-{version}.log | grep -E "^==>|✅|❌|SUCCEEDED|FAILED|error:"
 ```
-✅ Tag v{version} pushed.
 
-CI validation running at: https://github.com/Gr8Gatsby/ask/actions
+On failure, read `tail -50 /tmp/build-mac-{version}.log` and report the error.
 
-Next: run /build-pkg-mac to sign, notarize, and publish the release artifacts.
+## Step 7 — Trigger staple workflow
+
+```bash
+gh workflow run staple-release.yml --field tag=v{version}
+```
+
+Then poll until complete:
+```bash
+sleep 10
+RUN_ID=$(gh run list --workflow=staple-release.yml --limit=1 --json databaseId --jq '.[0].databaseId')
+while true; do
+  STATUS=$(gh run view $RUN_ID --json status,conclusion --jq '[.status,.conclusion] | join("/")')
+  echo "Staple workflow: $STATUS"
+  [[ "$STATUS" == "completed/success" ]] && break
+  [[ "$STATUS" == "completed/failure" ]] && echo "❌ Staple workflow failed — check https://github.com/Gr8Gatsby/ask/actions" && break
+  sleep 20
+done
+```
+
+## Step 8 — Report
+
+```
+✅ AskMac v{version} released
+
+GitHub Release: https://github.com/Gr8Gatsby/ask/releases/tag/v{version}
+appcast.xml updated — Sparkle auto-update live for all users.
+
+Artifacts:
+  AskMac-{version}.pkg            (PKG installer)
+  AskMac-{version}-installer.dmg  (installer DMG)
+  AskMac-{version}.dmg            (Sparkle update DMG)
+```
+
+**macOS 26 install workaround:** Users may see "Apple could not verify..." on macOS 26. Fix:
+```bash
+sudo installer -pkg "/Volumes/Install AskMac {version}/AskMac-{version}.pkg" -target /
+# or: xattr -d com.apple.quarantine ~/Downloads/AskMac-{version}.pkg
 ```
