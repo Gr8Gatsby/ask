@@ -682,14 +682,56 @@ struct HomeView: View {
     }
 
     private var emptyState: some View {
-        ContentUnavailableView {
-            Label("No Machines", systemImage: "desktopcomputer.trianglebadge.exclamationmark")
-        } description: {
-            Text("Open Ask on your Mac to get started.\nBoth devices must be signed into the same iCloud account.")
-        } actions: {
-            Button("Settings") { showSettings = true }
-                .buttonStyle(.borderedProminent)
+        ScrollView {
+            VStack(spacing: 32) {
+                VStack(spacing: 8) {
+                    Image(systemName: "desktopcomputer")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.secondary)
+                    Text("Set Up Your Mac")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                    Text("Ask needs the Mac companion app to work.\nFollow the steps below to get connected.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.top, 24)
+
+                VStack(spacing: 0) {
+                    OnboardingStep(
+                        number: 1,
+                        title: "Download Ask for Mac",
+                        description: "Install the Mac companion from GitHub."
+                    ) {
+                        if let url = URL(string: "https://github.com/Gr8Gatsby/ask/releases/latest") {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                    Divider().padding(.leading, 52)
+                    OnboardingStep(
+                        number: 2,
+                        title: "Launch Ask on your Mac",
+                        description: "Ask will appear in your menu bar. Open it and keep it running."
+                    )
+                    Divider().padding(.leading, 52)
+                    OnboardingStep(
+                        number: 3,
+                        title: "Use the same iCloud account",
+                        description: "Both your Mac and iPhone must be signed into the same Apple ID."
+                    )
+                }
+                .background(Color(.secondarySystemGroupedBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal)
+
+                Button("Settings") { showSettings = true }
+                    .buttonStyle(.bordered)
+                    .font(.subheadline)
+            }
+            .padding(.bottom, 32)
         }
+        .background(Color(.systemGroupedBackground))
     }
 
     private var fetchFailedState: some View {
@@ -1306,6 +1348,48 @@ private struct MachinePickerSheet: View {
                 selectedMachineIDs = Set(targets.map(\.machineID))
             }
         }
+    }
+}
+
+// MARK: - Onboarding step row
+
+private struct OnboardingStep: View {
+    let number: Int
+    let title: String
+    let description: String
+    var action: (() -> Void)? = nil
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            ZStack {
+                Circle()
+                    .fill(Color.accentColor.opacity(0.15))
+                    .frame(width: 32, height: 32)
+                Text("\(number)")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.accent)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                Text(description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if let action {
+                Button(action: action) {
+                    Image(systemName: "arrow.up.right")
+                        .font(.caption)
+                        .foregroundStyle(.accent)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 }
 
