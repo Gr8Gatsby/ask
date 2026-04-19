@@ -27,7 +27,7 @@ struct MenuBarView: View {
             footer
                 .padding(12)
         }
-        .frame(width: 270)
+        .frame(width: 360)
         .onAppear {
             #if DEBUG
             if MacUITestingSupport.isUITesting {
@@ -114,7 +114,7 @@ struct MenuBarView: View {
                     .padding(.vertical, 4)
             } else if hasPins {
                 // Tile grid for pinned scripts
-                let columns = [GridItem(.flexible()), GridItem(.flexible())]
+                let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
                 LazyVGrid(columns: columns, spacing: 8) {
                     ForEach(displayedScripts) { script in
                         ScriptTile(script: script, scriptManager: scriptManager)
@@ -207,17 +207,12 @@ struct MenuBarView: View {
             } label: {
                 Label("Remove from Menu Bar", systemImage: "pin.slash")
             }
-        } else if settings.pinnedScripts.count < AppSettings.maxPins {
+        } else {
             Button {
                 settings.pinScript(script.id)
             } label: {
                 Label("Pin to Menu Bar", systemImage: "pin")
             }
-        } else {
-            Button { } label: {
-                Label("Menu Bar Full (\(AppSettings.maxPins) max)", systemImage: "pin.slash")
-            }
-            .disabled(true)
         }
     }
 }
@@ -234,7 +229,7 @@ private struct ScriptTile: View {
         VStack(spacing: 6) {
             ZStack(alignment: .topTrailing) {
                 iconView
-                    .frame(width: 32, height: 32)
+                    .frame(width: 22, height: 22)
                     .padding(.top, 4)
 
                 statusDot
@@ -275,7 +270,7 @@ private struct ScriptTile: View {
                 .opacity(script.isEnabled ? 1 : 0.4)
         } else {
             Image(systemName: script.icon ?? "terminal.fill")
-                .font(.title3)
+                .font(.body)
                 .foregroundStyle(script.isEnabled ? .primary : .tertiary)
         }
     }
