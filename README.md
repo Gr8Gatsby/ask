@@ -9,6 +9,28 @@ iPhone tap  ──response───▶  CloudKit  ──▶  Mac script stdin
 
 **The apps handle the pipes. Scripts are where the value lives.**
 
+---
+
+## Get Started
+
+### 1. Download Ask for Mac
+
+**[⬇ Download the latest release →](https://github.com/Gr8Gatsby/ask/releases/latest)**
+
+Open the `.pkg` installer and follow the prompts. Ask will appear in your menu bar.
+
+### 2. Install Ask on iPhone
+
+Ask for iPhone is available on the [App Store](https://apps.apple.com/app/ask/id6744642445) and [TestFlight](https://testflight.apple.com/join/ask).
+
+### 3. Sign in to the same iCloud account
+
+Both devices must be signed into the same iCloud account. Ask uses CloudKit — no extra accounts to create, no servers to run.
+
+Open Ask on your Mac and Ask on your iPhone. Your Mac will appear in the iOS app within seconds.
+
+---
+
 The iOS app and Mac companion exist to solve one problem: reliably getting interactive UI to your phone and getting responses back. Once that channel exists, the interesting work is entirely in the scripts you write on top of it.
 
 ---
@@ -232,8 +254,8 @@ ask/                        iOS app (Xcode project)
   ask/                      App source (SwiftUI)
   scripts/                  Example scripts — source of truth for vault deployments
     brew-monitor/           Homebrew package monitor (Swift binary)
-    claudecode-controller/  Claude Code session supervisor (Python)
-    codex-controller/       Codex CLI session supervisor (Python)
+    claude-3/               Claude Code session supervisor (Python)
+    codex-3/                Codex CLI session supervisor (Python)
     github/                 Git repo monitor (Python)
     ollama/                 Ollama chat + update manager (Python)
 
