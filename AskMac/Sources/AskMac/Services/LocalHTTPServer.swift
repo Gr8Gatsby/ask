@@ -1,3 +1,4 @@
+#if DEBUG
 import Foundation
 import Network
 
@@ -466,3 +467,4 @@ final class LocalHTTPServer {
         return String(data: data, encoding: .utf8) ?? #"{"blocks":[]}"#
     }
 }
+#endif

@@ -3,128 +3,171 @@ name: prepare-release-mac
 description: Prepare a Mac (AskMac) release — version bump, release notes, spec changelog, commit. Run before /release-mac.
 ---
 
-Prepare the next AskMac desktop release. Follow every step in order. Do not skip steps or ask the user to do things manually — do the work yourself using tools.
+Full end-to-end Mac release. One pause for release notes review — everything else runs automatically.
 
-## Step 1 — Verify repo state
+## Step 1 — Sync and verify repo state
 
-Run `git status` and `git branch --show-current`. If the working tree is not clean or the branch is not `main`, stop and tell the user to fix that first.
+```bash
+git fetch origin main && git checkout main && git merge origin/main
+```
 
-## Step 2 — Find the last Mac release
+Verify clean working tree (`git status`). If not clean, stop and tell the user.
 
-Run: `git tag --sort=-version:refname | grep '^v' | head -1`
+## Step 2 — Find the last Mac release and list commits
 
-If no tag exists, treat the beginning of history as the starting point.
+```bash
+git tag --sort=-version:refname | grep '^v' | head -1
+git log {LAST_TAG}..HEAD --oneline
+```
 
-## Step 3 — List commits since the last release
+Group commits by type prefix (feat, fix, perf, chore). Note which platforms each touches.
 
-Run: `git log {LAST_TAG}..HEAD --oneline`
+## Step 3 — Propose a version bump
 
-Group the commits by type prefix (feat, fix, perf, chore, refactor, docs). Show the user the grouped list. Note which platforms the commits touch (Mac, iOS, scripts, shared).
+Read current version: `grep 'MARKETING_VERSION' AskMac/project.yml | head -1`
 
-## Step 4 — Propose a version bump
+Apply semantic versioning (patch / minor / major). State the proposed version and justification — do not ask for confirmation, just proceed.
 
-Read the current `MARKETING_VERSION` from `AskMac/project.yml`.
+## Step 4 — Write release notes and PAUSE for user review
 
-Apply semantic versioning:
-- **patch** — only fix/perf/chore commits
-- **minor** — at least one feat commit, no breaking changes
-- **major** — breaking change indicated in commit message
+Write release notes:
 
-Propose the new version with a one-sentence justification. Ask the user to confirm or override. Wait for confirmation before continuing.
+**Prose summary (2–4 sentences)** — what changed from the user's perspective.
 
-## Step 5 — Write release notes
-
-Write release notes with two sections:
-
-**Section 1 — Prose summary (2–4 sentences)**
-Write naturally, as if describing the release to a user who hasn't read the commits. Focus on what changed from the user's perspective, not implementation details. Do not just restate commit messages.
-
-**Section 2 — Details**
-List commits grouped under these headings (omit empty groups):
-
+**Details:**
 ```
 ### What's New
 ### Bug Fixes
 ### Performance
 ### Other Changes
 ```
-
 Each line: `- {commit subject} ({short hash})`
 
-Example final format:
+Present the draft. Say: "Review the release notes above — reply **yes** to proceed or give edits."
+
+**Wait for explicit confirmation before continuing.**
+
+## Step 5 — Bump version and update spec (after user approves)
+
+Edit `AskMac/project.yml`: update `MARKETING_VERSION` to the new version.
+
+Add changelog row to `docs/spec.md` at the top of the Change Log table:
 ```
-AskMac v1.2.0
-
-This release delivers the PKG installer with per-script opt-in installation
-and integrates Sparkle for automatic background updates. Script update
-detection now surfaces a one-tap banner in the menu bar when newer versions
-are bundled with an app update.
-
-### What's New
-- feat(distribution): PKG installer with optional script components (a46052d)
-- feat(sparkle): Sparkle 2.x auto-update integration (b3f91c2)
-
-### Bug Fixes
-- fix(notifications): cold-start navigation and subscription reliability (335aadc)
-
-### Performance
-- perf(polling): reduce idle interval 30s→5s (e2c5ec4)
+| {YYYY-MM-DD} | Mac v{version}: {one-line summary} |
 ```
 
-Present the draft to the user. Ask them to review and suggest any edits. Incorporate any feedback. Confirm with the user before proceeding.
-
-## Step 6 — Bump the Mac version
-
-Edit `AskMac/project.yml`: update the `MARKETING_VERSION` value to the confirmed version.
-
-Verify the edit with a read.
-
-## Step 7 — Update the spec changelog
-
-Open `docs/spec.md` and add a new row at the top of the Change Log table:
-
-```
-| {today's date} | Mac v{version}: {one-line summary of the release} |
-```
-
-Keep it to one line. Use today's date in `YYYY-MM-DD` format.
-
-## Step 8 — Create a release branch and commit
-
-Create a branch and commit the version bump:
+## Step 6 — Branch, commit, PR, and auto-merge
 
 ```bash
 git checkout -b release/mac-{version}
-```
-
-Stage only the files changed:
-- `AskMac/project.yml`
-- `docs/spec.md`
-
-Commit with message: `chore(mac): bump version to {version}`
-
-## Step 9 — Open a PR
-
-Push the branch and open a PR targeting `main`:
-
-```bash
+git add AskMac/project.yml docs/spec.md
+git commit -m "chore(mac): bump version to {version}"
 git push -u origin release/mac-{version}
-gh pr create --title "chore(mac): release v{version}" --head release/mac-{version} --base main --body "..."
+gh pr create --title "chore(mac): release v{version}" --base main --body "{one-line summary}"
+gh pr merge --auto --merge
 ```
 
-The PR body should include:
-- A one-sentence summary of the release
-- A "Test plan" checklist:
-  - [ ] Merge PR
-  - [ ] Run `/release-mac` to tag v{version}
-  - [ ] Run `/build-pkg-mac` to build and publish artifacts
-
-Return to `main` after pushing:
+Then poll until the PR merges:
 ```bash
-git checkout main
-git reset --hard origin/main
+while true; do
+  STATE=$(gh pr view --json state --jq '.state' 2>/dev/null)
+  [[ "$STATE" == "MERGED" ]] && break
+  echo "Waiting for PR CI to pass and merge... ($STATE)"
+  sleep 15
+done
+git checkout main && git fetch origin main && git merge origin/main
 ```
 
-## Step 10 — Output release notes
+## Step 7 — Create annotated tag
 
-Print the final release notes to the conversation — they will be used as the tag annotation when the user runs `/release-mac` after merging.
+Write release notes to `/tmp/release-notes-mac.txt`, then:
+```bash
+git tag -a "v{version}" -F /tmp/release-notes-mac.txt
+git tag -l "v{version}"
+git push origin "v{version}"
+```
+
+## Step 8 — Build and publish
+
+Run the build script (stream output, do not background):
+```bash
+./scripts/build-release.sh 2>&1 | tee /tmp/build-mac-{version}.log | grep -E "^==>|✅|❌|SUCCEEDED|FAILED|error:"
+```
+
+On failure, read `tail -50 /tmp/build-mac-{version}.log` and report the error. Do not proceed to staple.
+
+## Step 9 — Trigger staple workflow
+
+```bash
+gh workflow run staple-release.yml --field tag=v{version}
+```
+
+Then poll until complete:
+```bash
+sleep 10
+RUN_ID=$(gh run list --workflow=staple-release.yml --limit=1 --json databaseId --jq '.[0].databaseId')
+while true; do
+  STATUS=$(gh run view $RUN_ID --json status,conclusion --jq '[.status,.conclusion] | join("/")')
+  echo "Staple workflow: $STATUS"
+  [[ "$STATUS" == "completed/success" ]] && break
+  [[ "$STATUS" == "completed/failure" ]] && echo "❌ Staple workflow failed — check https://github.com/Gr8Gatsby/ask/actions" && break
+  sleep 20
+done
+```
+
+## Step 10 — Report
+
+```
+✅ AskMac v{version} released
+
+GitHub Release: https://github.com/Gr8Gatsby/ask/releases/tag/v{version}
+appcast.xml updated — Sparkle auto-update live for all users.
+
+Artifacts:
+  AskMac-{version}.pkg            (PKG installer)
+  AskMac-{version}-installer.dmg  (installer DMG)
+  AskMac-{version}.dmg            (Sparkle update DMG)
+```
+
+**macOS 26 install workaround:** Users may see "Apple could not verify..." on macOS 26. Fix:
+```bash
+sudo installer -pkg "/Volumes/Install AskMac {version}/AskMac-{version}.pkg" -target /
+# or: xattr -d com.apple.quarantine ~/Downloads/AskMac-{version}.pkg
+```
+
+## Prerequisite check (run silently before Step 8, report failures only)
+
+```bash
+command -v xcodegen || echo "MISSING: brew install xcodegen"
+command -v create-dmg || echo "MISSING: brew install create-dmg"
+ls sparkle/bin/sign_update 2>/dev/null || echo "MISSING: Sparkle tools"
+security find-generic-password -a "$USER" -s APPLE_ID -w &>/dev/null || echo "MISSING: APPLE_ID"
+security find-generic-password -a "$USER" -s APPLE_ID_PASSWORD -w &>/dev/null || echo "MISSING: APPLE_ID_PASSWORD"
+security find-generic-password -a "$USER" -s APPLE_TEAM_ID -w &>/dev/null || echo "MISSING: APPLE_TEAM_ID"
+security find-identity -v -p codesigning | grep -q "Developer ID Application" || echo "MISSING: Developer ID cert"
+```
+
+**Provisioning profile cert check** — use Python (shell pipelines are unreliable here):
+```bash
+KEYCHAIN_FP=$(security find-certificate -c "Developer ID Application" -p 2>/dev/null | openssl x509 -fingerprint -sha256 -noout 2>/dev/null | cut -d= -f2)
+for f in ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles/*.provisionprofile; do
+  appid=$(security cms -D -i "$f" 2>/dev/null | grep -A1 'com.apple.application-identifier' | grep '<string>' | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
+  [[ "$appid" != *"com.kevinhill.askmac"* ]] && continue
+  uuid=$(basename "$f" .provisionprofile)
+  PROFILE_FP=$(security cms -D -i "$f" 2>/dev/null | python3 -c "
+import sys, plistlib, subprocess, tempfile, os
+data = sys.stdin.buffer.read()
+plist = plistlib.loads(data)
+for cert in plist.get('DeveloperCertificates', []):
+    with tempfile.NamedTemporaryFile(suffix='.der', delete=False) as tmp:
+        tmp.write(bytes(cert)); tmp_path = tmp.name
+    r = subprocess.run(['openssl','x509','-inform','DER','-fingerprint','-sha256','-noout','-in',tmp_path], capture_output=True, text=True)
+    os.unlink(tmp_path)
+    print(r.stdout.strip().split('=',1)[1])
+")
+  MATCH=$([[ "$PROFILE_FP" == "$KEYCHAIN_FP" ]] && echo "✓ MATCH" || echo "✗ MISMATCH")
+  echo "UUID: $uuid | $MATCH"
+done
+```
+
+Profile must show `✓ MATCH`. If `✗ MISMATCH`, regenerate the profile in the Developer Portal.

@@ -1,5 +1,8 @@
 import Foundation
+import OSLog
 import Observation
+
+private let logger = Logger(subsystem: "com.kevinhill.askmac", category: "ResponsePoller")
 
 /// Polls CloudKit for RKResponse records and routes each one to the
 /// MCPConnection that owns the corresponding script.
@@ -36,14 +39,14 @@ final class ResponsePoller {
         // Drain block responses
         if let responses = try? await cloudKit.drainRKResponses(machineID: machineID) {
             for response in responses {
-                print("[ResponsePoller] blockID=\(response.blockID) scriptID=\(response.scriptID) value=\(response.value)")
+                logger.debug("blockID=\(response.blockID) scriptID=\(response.scriptID) value=\(response.value)")
 
                 let scriptName = scriptManager.scripts.first(where: { $0.id == response.scriptID })?.name
                     ?? response.scriptID
                 actionHistory.recordBlockResponse(scriptName: scriptName, value: response.value, blockID: response.blockID)
 
                 guard let conn = scriptManager.connection(for: response.scriptID) else {
-                    print("[ResponsePoller] No connection for scriptID=\(response.scriptID)")
+                    logger.debug("No connection for scriptID=\(response.scriptID)")
                     continue
                 }
                 conn.deliverResponse(blockID: response.blockID, value: response.value)
@@ -53,7 +56,7 @@ final class ResponsePoller {
         // Drain iOS invoke requests
         if let scriptIDs = try? await cloudKit.drainInvokeRequests(machineID: machineID) {
             for scriptID in scriptIDs {
-                print("[ResponsePoller] invoke request for scriptID=\(scriptID)")
+                logger.debug("invoke request for scriptID=\(scriptID)")
                 scriptManager.invokeScript(id: scriptID)
             }
         }

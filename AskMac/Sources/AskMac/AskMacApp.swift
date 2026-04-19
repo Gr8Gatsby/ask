@@ -18,7 +18,9 @@ struct AskMacApp: App {
     @State private var responsePoller: ResponsePoller
     @State private var scriptUpdater = ScriptUpdateService()
     @State private var scriptCatalog = ScriptCatalogService()
+    #if DEBUG
     private let localHTTPServer = LocalHTTPServer(port: 4242)
+    #endif
 
     init() {
         let s = settings
@@ -35,6 +37,7 @@ struct AskMacApp: App {
         _scriptManager = State(initialValue: sm)
         _responsePoller = State(initialValue: rp)
 
+        #if DEBUG
         if MacUITestingSupport.isUITesting {
             sm.loadMockScenario(MacUITestingSupport.scenario)
         } else {
@@ -45,16 +48,11 @@ struct AskMacApp: App {
                 mw.start(scriptManager: sm)
                 sm.start()
                 rp.start(scriptManager: sm)
-                // Purge old records in the background after services are running.
-                await ck.purgeOldRecords(machineID: s.machineID)
-                // Start local HTTP server for MockAskMac dev UI
                 await MainActor.run {
                     lhs.configure(scriptManager: sm, machineName: s.machineName, cloudKit: ck, machineID: s.machineID)
                     lhs.start()
                     sm.localHTTPServer = lhs
                 }
-                // Seed HTTP server with existing CloudKit blocks so sessions
-                // that were active before this AskMac session are visible immediately.
                 let ckRecords = await ck.fetchActiveBlocks(machineID: s.machineID)
                 let ckDicts = ckRecords.compactMap { record -> [String: Any]? in
                     guard let blockID  = record[CKSchema.RKBlock.blockID]  as? String,
@@ -78,12 +76,20 @@ struct AskMacApp: App {
                     return dict
                 }
                 await MainActor.run { lhs.seedFromCloudKit(ckDicts) }
-                // Seed historical tasks from CloudKit so the web feed shows full history.
                 if let tasks = try? await ck.fetchTasks(machineID: s.machineID) {
                     await MainActor.run { lhs.seedTasksFromCloudKit(tasks) }
                 }
             }
         }
+        #else
+        Task {
+            await ck.checkAccountStatus()
+            hb.start()
+            mw.start(scriptManager: sm)
+            sm.start()
+            rp.start(scriptManager: sm)
+        }
+        #endif
     }
 
     var body: some Scene {
