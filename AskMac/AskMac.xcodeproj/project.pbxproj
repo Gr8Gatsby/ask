@@ -35,6 +35,10 @@
 		8FE46F69A0823A2188C24DB4 /* ScriptManagerFilteringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A9E4EFAF553CA1CD22DA58A /* ScriptManagerFilteringTests.swift */; };
 		9A384768FE320AC25F231F48 /* MacMessagesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B82E4BC0B8C01489502831A9 /* MacMessagesView.swift */; };
 		A302F5F593A0983FFEE135A9 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28BCC8842C2E63700381890C /* SettingsView.swift */; };
+		AA0000002VIEW0HELPERS00 /* ViewHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000001VIEW0HELPERS00 /* ViewHelpers.swift */; };
+		AA0000004SCRIPTDETAIL00 /* ScriptDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000003SCRIPTDETAIL00 /* ScriptDetailView.swift */; };
+		AA0000006SCRIPTCATALOG0 /* ScriptCatalogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000005SCRIPTCATALOG0 /* ScriptCatalogView.swift */; };
+		AA0000008MACFEEDVIEW000 /* MacFeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000007MACFEEDVIEW000 /* MacFeedView.swift */; };
 		A3A4405290AAE7B21855BEE9 /* VersionComparison.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F2A338EFC99F8D874DB40EE /* VersionComparison.swift */; };
 		AFA75A68E946CD8E2CAE7BBE /* libAskMacCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 52C75A2FE8B8444D42AF146A /* libAskMacCore.a */; };
 		B5760E42FDC4626B6A2AD8D9 /* CloudKitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42EC5BBB34D453B2F332AF00 /* CloudKitService.swift */; };
@@ -100,6 +104,10 @@
 		06C485A3E2C74E3C9F1A0002 /* TaskRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskRegistry.swift; sourceTree = "<group>"; };
 		125B8BABE336DAA2EEDBC261 /* ScriptUpdateService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptUpdateService.swift; sourceTree = "<group>"; };
 		28BCC8842C2E63700381890C /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		AA0000001VIEW0HELPERS00 /* ViewHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewHelpers.swift; sourceTree = "<group>"; };
+		AA0000003SCRIPTDETAIL00 /* ScriptDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptDetailView.swift; sourceTree = "<group>"; };
+		AA0000005SCRIPTCATALOG0 /* ScriptCatalogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptCatalogView.swift; sourceTree = "<group>"; };
+		AA0000007MACFEEDVIEW000 /* MacFeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacFeedView.swift; sourceTree = "<group>"; };
 		2E4D0C6DDB6891CB03EA9572 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
 		3A9E4EFAF553CA1CD22DA58A /* ScriptManagerFilteringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptManagerFilteringTests.swift; sourceTree = "<group>"; };
 		3D24A318DEBECC653846BFA7 /* ScriptCatalogService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptCatalogService.swift; sourceTree = "<group>"; };
@@ -253,6 +261,10 @@
 				B82E4BC0B8C01489502831A9 /* MacMessagesView.swift */,
 				2E4D0C6DDB6891CB03EA9572 /* MenuBarView.swift */,
 				28BCC8842C2E63700381890C /* SettingsView.swift */,
+				AA0000001VIEW0HELPERS00 /* ViewHelpers.swift */,
+				AA0000003SCRIPTDETAIL00 /* ScriptDetailView.swift */,
+				AA0000005SCRIPTCATALOG0 /* ScriptCatalogView.swift */,
+				AA0000007MACFEEDVIEW000 /* MacFeedView.swift */,
 				53C1EA5DC0ECBB374F1FCF5B /* TooltipSupport.swift */,
 			);
 			path = Views;
@@ -503,6 +515,10 @@
 				AA000010LOCALHTTPSERVER00 /* LocalHTTPServer.swift in Sources */,
 				F4A65B11697EF409F84B5886 /* ScriptUpdateService.swift in Sources */,
 				A302F5F593A0983FFEE135A9 /* SettingsView.swift in Sources */,
+				AA0000002VIEW0HELPERS00 /* ViewHelpers.swift in Sources */,
+				AA0000004SCRIPTDETAIL00 /* ScriptDetailView.swift in Sources */,
+				AA0000006SCRIPTCATALOG0 /* ScriptCatalogView.swift in Sources */,
+				AA0000008MACFEEDVIEW000 /* MacFeedView.swift in Sources */,
 				C2FCC42025E190C3F0BA4152 /* SystemScriptConnection.swift in Sources */,
 				BF0B435F00BDDA9C64E86B06 /* TooltipSupport.swift in Sources */,
 			);
