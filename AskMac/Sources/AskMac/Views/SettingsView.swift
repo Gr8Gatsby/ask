@@ -1323,9 +1323,13 @@ private struct ScriptsTabView: View {
                     HStack(spacing: 0) {
                         // Vault button
                         Button {
-                            showVault = true
-                            showCatalog = false
-                            selectedScriptID = nil
+                            if showVault {
+                                showVault = false
+                            } else {
+                                showVault = true
+                                showCatalog = false
+                                selectedScriptID = nil
+                            }
                         } label: {
                             Image(systemName: "lock")
                                 .font(.body)
@@ -1342,9 +1346,13 @@ private struct ScriptsTabView: View {
 
                         // Catalog button
                         Button {
-                            showCatalog = true
-                            showVault = false
-                            selectedScriptID = nil
+                            if showCatalog {
+                                showCatalog = false
+                            } else {
+                                showCatalog = true
+                                showVault = false
+                                selectedScriptID = nil
+                            }
                         } label: {
                             ZStack(alignment: .topTrailing) {
                                 Image(systemName: "books.vertical")
