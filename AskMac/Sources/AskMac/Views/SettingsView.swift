@@ -57,7 +57,7 @@ struct MacScriptsView: View {
             ToolbarItem(placement: .principal) {
                 Picker("", selection: $activeTab) {
                     ForEach(MacTab.allCases, id: \.self) { tab in
-                        Image(systemName: tab.icon).tag(tab)
+                        Label(tab.label, systemImage: tab.icon).tag(tab)
                     }
                 }
                 .pickerStyle(.segmented)
