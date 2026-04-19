@@ -1,5 +1,5 @@
 import Foundation
-import os
+import OSLog
 
 /// Manages a JSON-RPC 2.0 connection to a **system** script subprocess.
 ///
@@ -9,6 +9,7 @@ import os
 /// call system script tools as if they were built-in AskMac tools.
 final class SystemScriptConnection: @unchecked Sendable {
     let scriptID: String
+    private let logger = Logger(subsystem: "com.kevinhill.askmac", category: "SystemScript")
 
     /// Called on the main queue when the process exits.
     var onTerminate: (() -> Void)?
@@ -59,7 +60,7 @@ final class SystemScriptConnection: @unchecked Sendable {
         do {
             try p.run()
         } catch {
-            print("[SystemScript:\(scriptID)] Launch failed: \(error)")
+            logger.error("[SystemScript:\(self.scriptID)] Launch failed: \(error)")
             onTerminate?()
             return
         }
@@ -76,11 +77,11 @@ final class SystemScriptConnection: @unchecked Sendable {
             guard let self else { return }
             for await line in SystemScriptConnection.pipeLines(from: errPipe.fileHandleForReading) {
                 guard !Task.isCancelled else { break }
-                print("[SystemScript:\(self.scriptID)] \(line)")
+                logger.debug("[SystemScript:\(self.scriptID)] \(line)")
             }
         }
 
-        print("[SystemScript:\(scriptID)] Started")
+        logger.debug("[SystemScript:\(self.scriptID)] Started")
     }
 
     func stop() {
@@ -149,7 +150,7 @@ final class SystemScriptConnection: @unchecked Sendable {
         DispatchQueue.main.async { [weak self] in
             self?.onTerminate?()
         }
-        print("[SystemScript:\(scriptID)] Terminated")
+        logger.debug("[SystemScript:\(self.scriptID)] Terminated")
     }
 
     private func failAllPending(reason: String) {

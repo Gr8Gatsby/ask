@@ -1,132 +1,157 @@
 ---
 name: prepare-release-ios
-description: Prepare an iOS release — version bump, release notes, spec changelog, commit. Run before /release-ios.
+description: Prepare an iOS release end-to-end — version bump, release notes, spec changelog, commit, auto-merge PR, tag, upload to TestFlight. One pause for release notes review.
 ---
 
-Prepare the next iOS app release for TestFlight. Follow every step in order. Do not skip steps or ask the user to do things manually — do the work yourself using tools.
+Full end-to-end iOS release. One pause for release notes review — everything else runs automatically.
 
-## Step 1 — Verify repo state
+## Step 1 — Sync and verify repo state
 
-Run `git status` and `git branch --show-current`. If the working tree is not clean or the branch is not `main`, stop and tell the user to fix that first.
+```bash
+git fetch origin main && git checkout main && git merge origin/main
+```
 
-## Step 2 — Find the last iOS release
+Verify clean working tree (`git status`). If not clean, stop and tell the user.
 
-Run: `git tag --sort=-version:refname | grep '^ios-v' | head -1`
+## Step 2 — Find the last iOS release and list commits
 
-If no tag exists, treat the beginning of history as the starting point.
+```bash
+git tag --sort=-version:refname | grep '^ios-v' | head -1
+git log {LAST_TAG}..HEAD --oneline
+```
 
-## Step 3 — List commits since the last release
+Group commits by type prefix (feat, fix, perf, chore). Note which are iOS-relevant (iOS app, CloudKit, notifications, blocks UI) vs Mac-only or scripts-only.
 
-Run: `git log {LAST_TAG}..HEAD --oneline`
+## Step 3 — Propose a version bump
 
-Group commits by type prefix (feat, fix, perf, chore, refactor, docs). Note which ones are iOS-relevant (iOS app, CloudKit, notifications, blocks UI) vs Mac-only or scripts-only. Include all commits in the notes but call out iOS-specific ones clearly.
+Read current iOS version:
+```bash
+grep 'MARKETING_VERSION' ask/ask.xcodeproj/project.pbxproj | head -1
+```
 
-## Step 4 — Propose a version bump
+Apply semantic versioning (patch / minor / major). State the proposed version and justification — do not ask for confirmation, just proceed.
 
-Read the current iOS `MARKETING_VERSION`. Find it in `ask/ask.xcodeproj/project.pbxproj`:
-Run: `grep 'MARKETING_VERSION' ask/ask.xcodeproj/project.pbxproj | head -1`
+## Step 4 — Write release notes and PAUSE for user review
 
-Apply semantic versioning:
-- **patch** — only fix/perf/chore commits
-- **minor** — at least one feat commit
-- **major** — breaking change
+Write release notes:
 
-Propose the new version with a one-sentence justification. Ask the user to confirm or override. Wait for confirmation before continuing.
+**Prose summary (2–4 sentences)** — what changed from the iOS user's perspective. Focus on what they'll notice in the app. Do not mention Mac-only changes unless they directly affect the iOS experience.
 
-## Step 5 — Write release notes
-
-Write release notes with two sections:
-
-**Section 1 — Prose summary (2–4 sentences)**
-Write naturally for an iOS TestFlight tester. Focus on what they'll notice in the app — new screens, new behavior, fixes to existing flows. Do not mention Mac-side changes unless they directly affect the iOS experience.
-
-**Section 2 — Details**
-List commits grouped under these headings (omit empty groups):
-
+**Details:**
 ```
 ### What's New
 ### Bug Fixes
 ### Performance
 ### Other Changes
 ```
-
 Each line: `- {commit subject} ({short hash})`
 
-Example final format:
+Example format:
 ```
 iOS v2.1.0
 
 This release improves push notification navigation so tapping a notification
 while the app is closed now lands directly on the correct script block.
-Block freshness is also improved — navigating from a notification now
-triggers an immediate refresh so the confirmation block is visible right away.
 
 ### Bug Fixes
-- fix(notifications): cold-start navigation, block freshness, subscription reliability (335aadc)
-
-### Performance
-- perf(polling): reduce idle interval 30s→5s, poll loop in ScriptDetailView (e2c5ec4)
+- fix(notifications): cold-start navigation, block freshness (335aadc)
 ```
 
-Present the draft to the user. Ask them to review and suggest any edits. Incorporate feedback. Confirm before proceeding.
+Present the draft. Say: "Review the release notes above — reply **yes** to proceed or give edits."
 
-## Step 6 — Bump the iOS version
+**Wait for explicit confirmation before continuing.**
 
-The iOS `MARKETING_VERSION` appears in `ask/ask.xcodeproj/project.pbxproj`. There are multiple occurrences (one per build configuration). Update all of them.
+## Step 5 — Bump iOS version (after user approves)
 
-Run first to see the exact current value and context:
-`grep -n 'MARKETING_VERSION' ask/ask.xcodeproj/project.pbxproj`
+The iOS `MARKETING_VERSION` appears multiple times in `ask/ask.xcodeproj/project.pbxproj` (one per build configuration). Update all of them.
 
-Use the Edit tool with `replace_all: true` to change every instance of:
+First check exact value and context:
+```bash
+grep -n 'MARKETING_VERSION' ask/ask.xcodeproj/project.pbxproj
+```
+
+Use Edit with `replace_all: true` to change every instance of:
 `MARKETING_VERSION = {old_version};`
 to:
 `MARKETING_VERSION = {new_version};`
 
-Verify with a re-read of the affected lines.
+**Important:** Only update lines for the main Ask iOS target. Do not change entries for other targets (e.g. watch extensions with different version numbers).
 
-## Step 7 — Update the spec changelog
+Verify: `grep 'MARKETING_VERSION' ask/ask.xcodeproj/project.pbxproj`
 
-Open `docs/spec.md` and add a new row at the top of the Change Log table:
+## Step 6 — Update the spec changelog
 
+Add a new row at the top of the Change Log table in `docs/spec.md`:
 ```
-| {today's date} | iOS v{version}: {one-line summary of what's new in the iOS release} |
+| {YYYY-MM-DD} | iOS v{version}: {one-line summary} |
 ```
 
-Use today's date in `YYYY-MM-DD` format.
-
-## Step 8 — Branch, commit, and open a PR
-
-Create a branch, commit, push, and open a PR targeting `main`:
+## Step 7 — Branch, commit, PR, and auto-merge
 
 ```bash
 git checkout -b release/ios-{version}
-```
-
-Stage only:
-- `ask/ask.xcodeproj/project.pbxproj`
-- `docs/spec.md`
-
-Commit with message: `chore(ios): bump version to {version}`
-
-Push and open a PR:
-```bash
+git add ask/ask.xcodeproj/project.pbxproj docs/spec.md
+git commit -m "chore(ios): bump version to {version}"
 git push -u origin release/ios-{version}
-gh pr create --title "chore(ios): release v{version}" --head release/ios-{version} --base main --body "..."
+gh pr create --title "chore(ios): release v{version}" --base main --body "{one-line summary}"
+gh pr merge --auto --merge
 ```
 
-The PR body should include:
-- A one-sentence summary of the release
-- A "Test plan" checklist:
-  - [ ] Merge PR
-  - [ ] Run `/release-ios` to tag ios-v{version}
-  - [ ] Run `release-ios` in Terminal to archive and upload to TestFlight
-
-Return to `main` after pushing:
+Then poll until the PR merges:
 ```bash
-git checkout main
-git reset --hard origin/main
+while true; do
+  STATE=$(gh pr view --json state --jq '.state' 2>/dev/null)
+  [[ "$STATE" == "MERGED" ]] && break
+  echo "Waiting for PR CI to pass and merge... ($STATE)"
+  sleep 15
+done
+git checkout main && git fetch origin main && git merge origin/main
 ```
 
-## Step 9 — Output release notes
+## Step 8 — Create annotated tag
 
-Print the final release notes to the conversation — they will be used as the tag annotation when the user runs `/release-ios` after merging.
+Write release notes to `/tmp/release-notes-ios.txt`, then:
+```bash
+git tag -a "ios-v{version}" -F /tmp/release-notes-ios.txt
+git tag -l "ios-v{version}"
+git push origin "ios-v{version}"
+```
+
+## Step 9 — Run the upload script
+
+Load credentials from Keychain and run:
+```bash
+ASC_KEY_ID=$(security find-generic-password -a "$USER" -s ASC_KEY_ID -w) \
+ASC_ISSUER_ID=$(security find-generic-password -a "$USER" -s ASC_ISSUER_ID -w) \
+/Users/kevin/Documents/code/ask/scripts/release-ios.sh {version} 2>&1
+```
+
+Stream the output — do not run in the background. The script archives, signs, and uploads to App Store Connect. It takes ~5 minutes.
+
+**Common upload failure: error 90717 (alpha channel in app icon)**
+If Apple rejects with "Invalid large app icon… can't be transparent or contain an alpha channel":
+1. Strip alpha: `python3 -c "from PIL import Image; img = Image.open('ask/ask/Assets.xcassets/AppIcon.appiconset/Ask-iOS-icon.png').convert('RGB'); img.save('ask/ask/Assets.xcassets/AppIcon.appiconset/Ask-iOS-icon.png', 'PNG')"`
+2. Open a PR, merge it, pull main, then re-run the upload script (no new tag needed — same version)
+
+## Step 10 — Report
+
+```
+✅ iOS v{version} uploaded to TestFlight
+
+Tag: ios-v{version}
+Apple processes the build in ~10–30 min.
+Monitor: https://appstoreconnect.apple.com
+
+Note: Apple may send a compliance email to greatgatsby@gmail.com asking about
+encryption. Answer "Yes, but only standard OS encryption (HTTPS/TLS)" — select
+the exempt category. The build won't appear in TestFlight until this is answered.
+```
+
+## Prerequisites checklist (run silently before Step 9, report failures only)
+
+```bash
+security find-generic-password -a "$USER" -s ASC_KEY_ID -w &>/dev/null || echo "MISSING: ASC_KEY_ID"
+security find-generic-password -a "$USER" -s ASC_ISSUER_ID -w &>/dev/null || echo "MISSING: ASC_ISSUER_ID"
+test -f ~/.appstoreconnect/private_keys/AuthKey_Q2A223X6SQ.p8 || echo "MISSING: AuthKey_Q2A223X6SQ.p8"
+security find-identity -v -p codesigning | grep -q "Apple Distribution" || echo "MISSING: Apple Distribution cert"
+```

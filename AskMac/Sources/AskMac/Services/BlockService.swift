@@ -1,4 +1,7 @@
 import Foundation
+import OSLog
+
+private let logger = Logger(subsystem: "com.kevinhill.askmac", category: "BlockService")
 
 /// Routes emit_block / clear_block tool calls from an MCPConnection to CloudKit.
 /// All CloudKit writes are retried up to 3 times with exponential back-off so that
@@ -97,11 +100,11 @@ final class BlockService: @unchecked Sendable {
             } catch {
                 lastError = error
                 if attempt < maxAttempts {
-                    print("[BlockService:\(scriptID)] \(label) attempt \(attempt)/\(maxAttempts) failed: \(error) — retrying in \(delay / 1_000_000_000)s")
+                    logger.error("[BlockService:\(self.scriptID)] \(label) attempt \(attempt)/\(maxAttempts) failed: \(error) — retrying in \(delay / 1_000_000_000)s")
                     try? await Task.sleep(nanoseconds: delay)
                     delay *= 2
                 } else {
-                    print("[BlockService:\(scriptID)] \(label) failed after \(maxAttempts) attempts: \(error)")
+                    logger.error("[BlockService:\(self.scriptID)] \(label) failed after \(maxAttempts) attempts: \(error)")
                 }
             }
         }

@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 #if canImport(AskMacCore)
 import AskMacCore
 #endif
@@ -23,6 +24,7 @@ struct LiveBlock: Identifiable, Sendable {
 /// The daemon sends `notifications/message` (user_response) on the script's stdin.
 final class MCPConnection: @unchecked Sendable {
     let scriptID: String
+    private let logger = Logger(subsystem: "com.kevinhill.askmac", category: "MCPConnection")
 
     /// Called when the script process terminates (crash or clean exit).
     var onTerminate: (() -> Void)?
@@ -118,7 +120,7 @@ final class MCPConnection: @unchecked Sendable {
         do {
             try p.run()
         } catch {
-            print("[MCPConnection:\(scriptID)] Launch failed: \(error)")
+            logger.error("[MCPConnection:\(self.scriptID)] Launch failed: \(error)")
             onTerminate?()
             return
         }
@@ -138,7 +140,7 @@ final class MCPConnection: @unchecked Sendable {
                 self.stderrLines.append(line)
                 if self.stderrLines.count > 50 { self.stderrLines.removeFirst() }
                 self.onStderrLine?(line)
-                print("[MCPConnection:\(self.scriptID)] \(line)")
+                logger.debug("[MCPConnection:\(self.scriptID)] \(line)")
             }
         }
     }
@@ -203,7 +205,7 @@ final class MCPConnection: @unchecked Sendable {
             if !hasWarnedMalformedJSON {
                 hasWarnedMalformedJSON = true
                 let truncated = line.count > 500 ? String(line.prefix(500)) + "…" : line
-                print("[MCPConnection:\(scriptID)] Non-JSON line dropped: \(truncated)")
+                logger.debug("[MCPConnection:\(self.scriptID)] Non-JSON line dropped: \(truncated)")
                 Task {
                     let payload: [String: Any] = [
                         "title": "\(scriptID): output error",
@@ -241,7 +243,7 @@ final class MCPConnection: @unchecked Sendable {
             }
 
         case "notifications/initialized":
-            print("[MCPConnection:\(scriptID)] Ready")
+            logger.debug("[MCPConnection:\(self.scriptID)] Ready")
 
         case "tools/list":
             reply(id: id, result: ["tools": toolsList])
@@ -311,7 +313,7 @@ final class MCPConnection: @unchecked Sendable {
                         showsInInbox: showsInInbox
                     )
                 } catch {
-                    print("[MCPConnection:\(scriptID)] emit_block CloudKit error: \(error)")
+                    logger.error("[MCPConnection:\(self.scriptID)] emit_block CloudKit error: \(error)")
                 }
             }
 
@@ -327,7 +329,7 @@ final class MCPConnection: @unchecked Sendable {
                 do {
                     try await blockService.clearBlock(blockID: blockID)
                 } catch {
-                    print("[MCPConnection:\(scriptID)] clear_block CloudKit error: \(error)")
+                    logger.error("[MCPConnection:\(self.scriptID)] clear_block CloudKit error: \(error)")
                 }
             }
 

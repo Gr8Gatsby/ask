@@ -58,9 +58,11 @@ struct MenuBarView: View {
         }
         .frame(width: 270)
         .onAppear {
+            #if DEBUG
             if MacUITestingSupport.isUITesting {
                 openWindow(id: "scripts")
             }
+            #endif
         }
     }
 

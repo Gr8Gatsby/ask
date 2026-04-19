@@ -1,5 +1,8 @@
 import Foundation
+import OSLog
 import SwiftUI
+
+private let logger = Logger(subsystem: "com.kevinhill.askmac", category: "ScriptUpdateService")
 
 // MARK: - Model
 
@@ -82,7 +85,7 @@ final class ScriptUpdateService {
                 }
                 try fm.copyItem(at: src, to: dst)
             } catch {
-                print("ScriptUpdateService: failed to update \(update.id): \(error)")
+                logger.error("ScriptUpdateService: failed to update \(update.id): \(error)")
             }
         }
 
