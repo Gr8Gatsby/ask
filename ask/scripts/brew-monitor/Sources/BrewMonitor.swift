@@ -194,10 +194,12 @@ actor BrewMonitor {
         try await mcp.openTask(taskID, title: "Homebrew upgrade · \(nowStr)", status: succeeded ? "completed" : "failed")
         fputs("[brew-monitor] upgrade task written (\(taskID)) succeeded=\(succeeded)\n", stderr)
 
-        // Update tile to reflect completed state
+        // Show result on iPhone
         if succeeded {
+            await emitStatus(label: "\(count) \(noun) upgraded", color: "green", ttl: 5 * 60)
             await emitTile(label: "Upgraded \(count) \(noun)", statusColor: "green")
         } else {
+            await emitStatus(label: "Upgrade finished with errors", color: "red", ttl: 10 * 60)
             await emitTile(label: "Upgrade failed", statusColor: "red")
         }
 
