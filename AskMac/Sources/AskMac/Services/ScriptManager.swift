@@ -167,14 +167,17 @@ final class ScriptManager: @unchecked Sendable {
     private let settings: AppSettings
 
     private(set) var scripts: [ManagedScript] = []
+
+    let blockStateManager = BlockStateManager()
+
     /// Live blocks currently emitted by each script, keyed by scriptID → blockID.
-    private(set) var activeBlocks: [String: [String: LiveBlock]] = [:]
+    var activeBlocks: [String: [String: LiveBlock]] { blockStateManager.blocks }
 
     var machineIDPublic: String { machineID }
 
     /// Reverse-lookup: given a blockID, return the scriptID that owns it.
     func scriptID(forBlockID blockID: String) -> String? {
-        activeBlocks.first(where: { $0.value[blockID] != nil })?.key
+        blockStateManager.scriptID(forBlockID: blockID)
     }
 
     #if DEBUG
@@ -344,7 +347,7 @@ final class ScriptManager: @unchecked Sendable {
                 if let conn = connections[manifest.id] {
                     conn.stop()
                     connections.removeValue(forKey: manifest.id)
-                    activeBlocks.removeValue(forKey: manifest.id)
+                    blockStateManager.clearAll(forScript: manifest.id)
                 }
                 // Set up the cron schedule if not already scheduled
                 if feedScheduler.task(for: manifest.id) == nil {
@@ -361,7 +364,7 @@ final class ScriptManager: @unchecked Sendable {
                 if !isNew, let conn = connections[manifest.id] {
                     conn.stop()
                     connections.removeValue(forKey: manifest.id)
-                    activeBlocks.removeValue(forKey: manifest.id)
+                    blockStateManager.clearAll(forScript: manifest.id)
                 }
                 publishScript(manifest, status: "running")
                 launchWithDepCheck(manifest: manifest, scriptDir: dir)
@@ -387,7 +390,7 @@ final class ScriptManager: @unchecked Sendable {
         connections[id]?.stop()
         connections.removeValue(forKey: id)
         restartDelays.removeValue(forKey: id)
-        activeBlocks.removeValue(forKey: id)
+        blockStateManager.clearAll(forScript: id)
         feedScheduler.cancel(scriptID: id)
         if let m = manifests[id]?.manifest { publishScript(m, status: "disabled") }
         Task {
@@ -418,7 +421,7 @@ final class ScriptManager: @unchecked Sendable {
         launchingScripts.remove(id)
         crashHistory.removeValue(forKey: id)
         restartDelays.removeValue(forKey: id)
-        activeBlocks.removeValue(forKey: id)
+        blockStateManager.clearAll(forScript: id)
 
         // Remove from disabled-scripts list (cleanup, the script is gone)
         settings.setScriptEnabled(id, enabled: true)
@@ -479,8 +482,8 @@ final class ScriptManager: @unchecked Sendable {
     /// Deliver a user response to a block directly from the Mac UI.
     func respondToBlock(scriptID: String, blockID: String, value: String) {
         connections[scriptID]?.deliverResponse(blockID: blockID, value: value)
-        if activeBlocks[scriptID]?[blockID]?.blockType != "agent_session" {
-            activeBlocks[scriptID]?.removeValue(forKey: blockID)
+        if blockStateManager.blocks[scriptID]?[blockID]?.blockType != "agent_session" {
+            blockStateManager.clear(blockID: blockID, fromScript: scriptID)
         }
         #if DEBUG
         if MacUITestingSupport.isUITesting {
@@ -496,7 +499,10 @@ final class ScriptManager: @unchecked Sendable {
     /// Call before any service is started (i.e. from AskMacApp.init when --uitesting).
     func loadMockScenario(_ scenario: String) {
         scripts = MacUITestingSupport.scripts(for: scenario)
-        activeBlocks = MacUITestingSupport.activeBlocks(for: scenario)
+        let mockBlocks = MacUITestingSupport.activeBlocks(for: scenario)
+        for (scriptID, blocksDict) in mockBlocks {
+            for block in blocksDict.values { _ = blockStateManager.upsert(block, forScript: scriptID) }
+        }
     }
     #endif
 
@@ -684,7 +690,7 @@ final class ScriptManager: @unchecked Sendable {
         if let orphan = connections[manifest.id] {
             orphan.stop()
             connections.removeValue(forKey: manifest.id)
-            activeBlocks.removeValue(forKey: manifest.id)
+            blockStateManager.clearAll(forScript: manifest.id)
         }
 
         let entryURL = scriptDir.appendingPathComponent(manifest.entry)
@@ -778,12 +784,11 @@ final class ScriptManager: @unchecked Sendable {
         }
 
         // Track live blocks for Mac-side preview
-        activeBlocks.removeValue(forKey: manifest.id)
+        blockStateManager.clearAll(forScript: manifest.id)
         conn.onBlockEmitted = { [weak self] block in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                let isNew = self.activeBlocks[manifest.id]?[block.id] == nil
-                self.activeBlocks[manifest.id, default: [:]][block.id] = block
+                let isNew = self.blockStateManager.upsert(block, forScript: manifest.id)
                 if let idx = self.scripts.firstIndex(where: { $0.id == manifest.id }) {
                     self.scripts[idx].lastEmitTime = Date()
                 }
@@ -810,7 +815,7 @@ final class ScriptManager: @unchecked Sendable {
         }
         conn.onBlockCleared = { [weak self] blockID in
             Task { @MainActor [weak self] in
-                self?.activeBlocks[manifest.id]?.removeValue(forKey: blockID)
+                self?.blockStateManager.clear(blockID: blockID, fromScript: manifest.id)
                 #if DEBUG
                 self?.localHTTPServer?.notifyBlockCleared(blockID: blockID)
                 #endif
@@ -888,12 +893,11 @@ final class ScriptManager: @unchecked Sendable {
             }
         }
 
-        activeBlocks.removeValue(forKey: manifest.id)
+        blockStateManager.clearAll(forScript: manifest.id)
         conn.onBlockEmitted = { [weak self] block in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                let isNew = self.activeBlocks[manifest.id]?[block.id] == nil
-                self.activeBlocks[manifest.id, default: [:]][block.id] = block
+                let isNew = self.blockStateManager.upsert(block, forScript: manifest.id)
                 if let idx = self.scripts.firstIndex(where: { $0.id == manifest.id }) {
                     self.scripts[idx].lastEmitTime = Date()
                 }
@@ -919,7 +923,7 @@ final class ScriptManager: @unchecked Sendable {
         }
         conn.onBlockCleared = { [weak self] blockID in
             Task { @MainActor [weak self] in
-                self?.activeBlocks[manifest.id]?.removeValue(forKey: blockID)
+                self?.blockStateManager.clear(blockID: blockID, fromScript: manifest.id)
                 #if DEBUG
                 self?.localHTTPServer?.notifyBlockCleared(blockID: blockID)
                 #endif
@@ -959,7 +963,7 @@ final class ScriptManager: @unchecked Sendable {
         // Only clear the connections entry if it's still this connection (not a replacement)
         if connections[manifest.id] === conn {
             connections.removeValue(forKey: manifest.id)
-            activeBlocks.removeValue(forKey: manifest.id)
+            blockStateManager.clearAll(forScript: manifest.id)
         }
 
         if exitCode == 0 {
@@ -1003,7 +1007,7 @@ final class ScriptManager: @unchecked Sendable {
         upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage, status: .crashed, isEnabled: true)
         publishScript(manifest, status: "crashed")
         connections.removeValue(forKey: manifest.id)
-        activeBlocks.removeValue(forKey: manifest.id)
+        blockStateManager.clearAll(forScript: manifest.id)
 
         // Surface the last error line in the Mac UI
         if let error = errorSummary, let idx = scripts.firstIndex(where: { $0.id == manifest.id }) {

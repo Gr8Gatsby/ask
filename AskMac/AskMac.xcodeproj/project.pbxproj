@@ -14,6 +14,7 @@
 		06C485A3E2C74E3C9F1A0003 /* TaskRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06C485A3E2C74E3C9F1A0002 /* TaskRegistry.swift */; };
 		0D696DD556936DCEC1997BEB /* TerminalMonitorServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F05D2937205C7D5DED51EEA /* TerminalMonitorServiceTests.swift */; };
 		2A8C999FCCA1DDA22786079F /* BlockService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 944903959A55B26822A4701D /* BlockService.swift */; };
+		2A8C999FCCA1DDA22786079E /* BlockStateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 944903959A55B26822A4701E /* BlockStateManager.swift */; };
 		2DDF70E89F94833C7837389B /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504764CE87B4791BDD3ABFD8 /* KeychainService.swift */; };
 		318C46CF42445B388B5E6739 /* libAskMacCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 52C75A2FE8B8444D42AF146A /* libAskMacCore.a */; };
 		CC000006CATALOG00ENTRY000 /* CatalogEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001CATALOG00ENTRY000 /* CatalogEntry.swift */; };
@@ -140,6 +141,7 @@
 		83069E78F01A6ACCC68DA445 /* ActionHistoryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionHistoryService.swift; sourceTree = "<group>"; };
 		834313B9757B652D0DB8E349 /* MessageWatcherService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageWatcherService.swift; sourceTree = "<group>"; };
 		944903959A55B26822A4701D /* BlockService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockService.swift; sourceTree = "<group>"; };
+		944903959A55B26822A4701E /* BlockStateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockStateManager.swift; sourceTree = "<group>"; };
 		B65A981DB44C661C02FF9312 /* HeartbeatService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeartbeatService.swift; sourceTree = "<group>"; };
 		B82E4BC0B8C01489502831A9 /* MacMessagesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMessagesView.swift; sourceTree = "<group>"; };
 		CA1CC49C770BDCD1EB75B351 /* ScriptManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptManager.swift; sourceTree = "<group>"; };
@@ -203,6 +205,7 @@
 			children = (
 				83069E78F01A6ACCC68DA445 /* ActionHistoryService.swift */,
 				944903959A55B26822A4701D /* BlockService.swift */,
+				944903959A55B26822A4701E /* BlockStateManager.swift */,
 				42EC5BBB34D453B2F332AF00 /* CloudKitService.swift */,
 				FE84811356D534B4D8E86AB8 /* FeedScheduler.swift */,
 				B65A981DB44C661C02FF9312 /* HeartbeatService.swift */,
@@ -512,6 +515,7 @@
 				BP0004CONTENTBUILDF00001 /* BlockPreviewContent.swift in Sources */,
 				BP0005SESSIONBUILDF00001 /* BlockPreviewSession.swift in Sources */,
 				2A8C999FCCA1DDA22786079F /* BlockService.swift in Sources */,
+				2A8C999FCCA1DDA22786079E /* BlockStateManager.swift in Sources */,
 				F6670C71B1ACAA3861CBE8B5 /* BlocksBuilderView.swift in Sources */,
 				C4A094A8937C7FDEF0021ADC /* CloudKitSchema.swift in Sources */,
 				B5760E42FDC4626B6A2AD8D9 /* CloudKitService.swift in Sources */,
