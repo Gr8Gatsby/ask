@@ -60,3 +60,10 @@ web/.vite/
 
 # Design reference screenshots
 screenshots/
+
+# Stray images at repo root — images belong in subdirectories
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.webp

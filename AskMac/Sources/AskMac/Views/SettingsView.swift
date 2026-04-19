@@ -1643,7 +1643,7 @@ private struct ScriptSidebarRow: View {
                 Button(role: .destructive) {
                     showUninstallConfirm = true
                 } label: {
-                    Label("Move to Trash", systemImage: "trash")
+                    Label("Uninstall", systemImage: "trash")
                 }
             }
         }

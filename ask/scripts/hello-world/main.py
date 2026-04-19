@@ -11,8 +11,9 @@ import asyncio
 # CRITICAL: unbuffered stdout so JSON-RPC messages reach the daemon immediately.
 sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)
 
-CHECK_INTERVAL = 60 * 60   # re-greet every hour
-TEST_INTERVAL  = 10
+CHECK_INTERVAL  = 60 * 60   # re-greet after dismiss (1 hour)
+RESET_DELAY     = 30        # seconds to show "Hello back at ya!" before resetting
+TEST_INTERVAL   = 10
 
 # ---------------------------------------------------------------------------
 # MCPClient — JSON-RPC 2.0 over stdio
@@ -112,43 +113,27 @@ class MCPClient:
 BLOCK_STATUS  = 'hello-world-status'
 BLOCK_CONFIRM = 'hello-world-confirm'
 
-async def run(mcp: MCPClient, test_mode: bool):
-    interval = TEST_INTERVAL if test_mode else CHECK_INTERVAL
-    runs = 0
 
-    while True:
-        try:
-            await greet(mcp)
-        except Exception as e:
-            print(f'[hello-world] error: {e}', file=sys.stderr)
-
-        runs += 1
-        if test_mode and runs >= 1:
-            print('[hello-world] test mode complete', file=sys.stderr)
-            await asyncio.sleep(60)
-            return
-
-        await asyncio.sleep(interval)
-
-
-async def greet(mcp: MCPClient):
+async def greet(mcp: MCPClient) -> bool:
+    """Show the greeting and wait for user response.
+    Returns True if user said it back (reset after short delay), False if dismissed."""
     print('[hello-world] greeting…', file=sys.stderr)
+    responded = asyncio.Event()
+    said_it_back = False
 
-    # Show a confirmation so the user can acknowledge
     async def on_response(value: str):
+        nonlocal said_it_back
         await mcp.clear_block(BLOCK_CONFIRM)
         if value == 'Say it back':
+            said_it_back = True
             await mcp.emit_block(BLOCK_STATUS, 'status', {
                 'label': 'Hello back at ya! 👋',
                 'icon':  'heart.fill',
                 'color': 'green',
-            }, ttl=3600)
+            }, ttl=RESET_DELAY)
         else:
-            await mcp.emit_block(BLOCK_STATUS, 'status', {
-                'label': 'Hello, World!',
-                'icon':  'hand.wave',
-                'color': 'blue',
-            }, ttl=3600)
+            await mcp.clear_block(BLOCK_STATUS)
+        responded.set()
 
     mcp.set_callback(BLOCK_CONFIRM, on_response)
     await mcp.emit_block(BLOCK_CONFIRM, 'confirmation', {
@@ -156,6 +141,35 @@ async def greet(mcp: MCPClient):
         'body':    'Greetings from your Ask script.\nWhat would you like to do?',
         'options': ['Say it back', 'Dismiss'],
     }, ttl=86400)
+
+    await responded.wait()
+    return said_it_back
+
+
+async def run(mcp: MCPClient, test_mode: bool):
+    interval = TEST_INTERVAL if test_mode else CHECK_INTERVAL
+    runs = 0
+
+    while True:
+        try:
+            said_it_back = await greet(mcp)
+        except Exception as e:
+            print(f'[hello-world] error: {e}', file=sys.stderr)
+            await asyncio.sleep(interval)
+            continue
+
+        runs += 1
+        if test_mode and runs >= 1:
+            print('[hello-world] test mode complete', file=sys.stderr)
+            await asyncio.sleep(60)
+            return
+
+        if said_it_back:
+            # Let "Hello back at ya!" show briefly, then reset to the greeting
+            await asyncio.sleep(RESET_DELAY)
+            await mcp.clear_block(BLOCK_STATUS)
+        else:
+            await asyncio.sleep(interval)
 
 
 # ---------------------------------------------------------------------------

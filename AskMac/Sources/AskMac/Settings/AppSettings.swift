@@ -18,7 +18,7 @@ final class AppSettings {
         static let pinnedScripts = "pinnedScripts"
     }
 
-    static let maxPins = 5
+    static let maxPins = 20
 
     private let defaults: UserDefaults
 

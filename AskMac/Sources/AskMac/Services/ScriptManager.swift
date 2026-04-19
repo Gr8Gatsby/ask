@@ -506,6 +506,25 @@ final class ScriptManager: @unchecked Sendable {
     }
     #endif
 
+    func restartScript(id: String) {
+        guard scripts.contains(where: { $0.id == id && $0.isEnabled }) else { return }
+        connections[id]?.stop()
+        connections.removeValue(forKey: id)
+        crashHistory.removeValue(forKey: id)
+        restartDelays.removeValue(forKey: id)
+        launchingScripts.remove(id)
+        if let cached = manifests[id] {
+            if cached.manifest.isFeed {
+                feedScheduler.schedule(manifest: cached.manifest, scriptDir: cached.dir, settings: settings) { [weak self] m, d in
+                    self?.launchFeedRunWithDepCheck(manifest: m, scriptDir: d)
+                }
+                launchFeedRunWithDepCheck(manifest: cached.manifest, scriptDir: cached.dir)
+            } else {
+                launchWithDepCheck(manifest: cached.manifest, scriptDir: cached.dir)
+            }
+        }
+    }
+
     func enableScript(id: String) {
         launchingScripts.remove(id)  // Clear stale guard from any previous failed launch
         let name = scripts.first(where: { $0.id == id })?.name ?? id
