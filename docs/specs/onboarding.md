@@ -295,3 +295,4 @@ Scripts declare required permissions in `manifest.json`. AskMac enforces this at
 | 2026-04-19 | Added Act 0 (install & system permissions), script permission contract, manifest vocabulary, runtime enforcement |
 | 2026-04-19 | Updated Welcome copy and CTA; catalog split into "Works on your Mac" + "All Scripts" sections |
 | 2026-04-19 | Act 3: menu bar icon bounce + popover animation; post-response "Add or make more scripts!" nudge |
+| 2026-04-19 | Act 2 catalog: "Works on your Mac" section using requires checks from manifest; permissions field added to CatalogEntry; release-scripts skill updated to include permissions + requires in catalog.json |

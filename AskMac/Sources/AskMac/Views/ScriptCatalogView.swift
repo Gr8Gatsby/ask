@@ -37,7 +37,11 @@ struct ScriptCatalogView: View {
     @State private var searchText = ""
     @State private var downloadingID: String?
     @State private var downloadErrors: [String: String] = [:]
-    @State private var showInstalled = false
+    @State private var showLocalScripts = false
+
+    private static let worksOnMacLimit = 5
+
+    private var isSearching: Bool { !searchText.trimmingCharacters(in: .whitespaces).isEmpty }
 
     private var filteredEntries: [CatalogEntry] {
         let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
@@ -47,6 +51,28 @@ struct ScriptCatalogView: View {
             $0.description.lowercased().contains(q) ||
             $0.id.lowercased().contains(q)
         }
+    }
+
+    /// Scripts compatible with this Mac, not yet installed, capped at the display limit.
+    private var worksOnMacEntries: [CatalogEntry] {
+        guard !isSearching, !catalog.compatibleScriptIDs.isEmpty else { return [] }
+        return catalog.allEntries
+            .filter { entry in
+                catalog.compatibleScriptIDs.contains(entry.id) &&
+                !scriptManager.scripts.contains(where: { $0.id == entry.id }) &&
+                catalog.availableUpdates[entry.id] == nil
+            }
+            .sorted { $0.name < $1.name }
+            .prefix(Self.worksOnMacLimit)
+            .map { $0 }
+    }
+
+    /// All catalog entries not shown in "Works on your Mac", alphabetical.
+    private var allScriptsEntries: [CatalogEntry] {
+        let worksIDs = Set(worksOnMacEntries.map(\.id))
+        return filteredEntries
+            .filter { !worksIDs.contains($0.id) }
+            .sorted { $0.name < $1.name }
     }
 
     var body: some View {
@@ -93,67 +119,43 @@ struct ScriptCatalogView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0, pinnedViews: []) {
-                        // Available: scripts with updates or not yet installed
-                        let available = filteredEntries.filter { entry in
-                            catalog.availableUpdates[entry.id] != nil ||
-                            !scriptManager.scripts.contains(where: { $0.id == entry.id })
-                        }
-                        let installed = filteredEntries.filter { entry in
-                            catalog.availableUpdates[entry.id] == nil &&
-                            scriptManager.scripts.contains(where: { $0.id == entry.id })
+
+                        // MARK: Works on your Mac
+                        if !worksOnMacEntries.isEmpty {
+                            sectionHeader(
+                                "Works on your Mac",
+                                loading: catalog.isCheckingCompatibility
+                            )
+                            ForEach(worksOnMacEntries) { entry in
+                                entryRow(entry)
+                                Divider().padding(.leading, 52)
+                            }
                         }
 
-                        ForEach(available) { entry in
-                            let installedScript = scriptManager.scripts.first(where: { $0.id == entry.id })
-                            CatalogEntryRow(
-                                entry: entry,
-                                installer: installer,
-                                isInstalled: installedScript != nil,
-                                hasUpdate: catalog.availableUpdates[entry.id] != nil,
-                                isDownloading: downloadingID == entry.id,
-                                downloadError: downloadErrors[entry.id],
-                                installedScript: installedScript
-                            ) {
-                                startInstall(entry: entry)
-                            }
+                        // MARK: All Scripts
+                        sectionHeader("All Scripts")
+                        ForEach(allScriptsEntries) { entry in
+                            entryRow(entry)
                             Divider().padding(.leading, 52)
                         }
 
-                        // Local scripts: in vault but not in the catalog at all
+                        // MARK: Local scripts (in vault but not in catalog)
                         let localScripts = scriptManager.scripts.filter { s in
                             !catalog.allEntries.contains(where: { $0.id == s.id })
                         }
-
-                        let totalInstalled = installed.count + localScripts.count
-                        if totalInstalled > 0 {
-                            DisclosureGroup(isExpanded: $showInstalled) {
-                                ForEach(installed) { entry in
-                                    let installedScript = scriptManager.scripts.first(where: { $0.id == entry.id })
-                                    CatalogEntryRow(
-                                        entry: entry,
-                                        installer: installer,
-                                        isInstalled: true,
-                                        hasUpdate: false,
-                                        isDownloading: false,
-                                        downloadError: nil,
-                                        installedScript: installedScript,
-                                        isLocal: false
-                                    ) {
-                                        startInstall(entry: entry)
-                                    }
-                                    Divider().padding(.leading, 52)
-                                }
+                        if !localScripts.isEmpty {
+                            DisclosureGroup(isExpanded: $showLocalScripts) {
                                 ForEach(localScripts) { script in
                                     LocalScriptRow(script: script)
                                     Divider().padding(.leading, 52)
                                 }
                             } label: {
                                 HStack {
-                                    Text("Installed")
+                                    Text("Local Scripts")
                                         .font(.caption)
                                         .fontWeight(.semibold)
                                         .foregroundStyle(.secondary)
-                                    Text("(\(totalInstalled))")
+                                    Text("(\(localScripts.count))")
                                         .font(.caption2)
                                         .foregroundStyle(.tertiary)
                                     Spacer()
@@ -173,13 +175,13 @@ struct ScriptCatalogView: View {
                 Button {
                     catalog.fetch(installedScripts: scriptManager.scripts, force: true)
                 } label: {
-                    if catalog.isFetching {
+                    if catalog.isFetching || catalog.isCheckingCompatibility {
                         ProgressView().controlSize(.small)
                     } else {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
                 }
-                .disabled(catalog.isFetching)
+                .disabled(catalog.isFetching || catalog.isCheckingCompatibility)
                 .help("Refresh catalog")
             }
         }
@@ -190,6 +192,41 @@ struct ScriptCatalogView: View {
                 vaultURL: settings.vaultPath ?? FileManager.default.homeDirectoryForCurrentUser
                     .appendingPathComponent(".ask/scripts")
             )
+        }
+    }
+
+    // MARK: - Helpers
+
+    @ViewBuilder
+    private func sectionHeader(_ title: String, loading: Bool = false) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+            if loading {
+                ProgressView().controlSize(.mini)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 4)
+    }
+
+    @ViewBuilder
+    private func entryRow(_ entry: CatalogEntry) -> some View {
+        let installedScript = scriptManager.scripts.first(where: { $0.id == entry.id })
+        CatalogEntryRow(
+            entry: entry,
+            installer: installer,
+            isInstalled: installedScript != nil,
+            hasUpdate: catalog.availableUpdates[entry.id] != nil,
+            isDownloading: downloadingID == entry.id,
+            downloadError: downloadErrors[entry.id],
+            installedScript: installedScript
+        ) {
+            startInstall(entry: entry)
         }
     }
 
