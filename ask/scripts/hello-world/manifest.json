@@ -1,7 +1,7 @@
 {
   "id": "hello-world",
   "name": "Hello World",
-  "version": "2.0",
+  "version": "2.2",
   "description": "A simple Hello World demo script",
   "entry": "main.sh",
   "icon": "hand.wave",

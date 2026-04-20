@@ -4,9 +4,7 @@
 
 CONFIRM_ID="hello-world-confirm"
 STATUS_ID="hello-world-status"
-CHECK_INTERVAL=3600
 RESET_DELAY=30
-TEST_INTERVAL=10
 
 ID=0
 
@@ -59,15 +57,13 @@ reader_loop() {
         fi
     done
 }
-reader_loop &
+reader_loop <&0 &
 READER_PID=$!
 
 TEST_MODE=false
 [[ "${1:-}" == "test" || "${1:-}" == "--test" ]] && TEST_MODE=true
 $TEST_MODE && printf '[hello-world] running in test mode\n' >&2
 
-interval=$CHECK_INTERVAL
-$TEST_MODE && interval=$TEST_INTERVAL
 runs=0
 
 while true; do
@@ -94,6 +90,4 @@ while true; do
         sleep 60
         exit 0
     fi
-
-    sleep "$interval"
 done

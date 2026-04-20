@@ -272,9 +272,9 @@ Scripts declare required permissions in `manifest.json`. AskMac enforces this at
 | Situation | Behavior |
 |---|---|
 | No internet on first launch | Catalog shows error + retry button; Welcome screen still visible |
-| Python not installed | Hello World install shows "Requires Python 3" with a link to python.org |
+| No dependencies | Hello World is a zero-dependency bash script — no additional checks needed |
 | User closes welcome window before installing | Welcome window gone — catalog accessible via menu bar → "Add Scripts…" |
-| User dismisses Hello World without saying it back | Normal — script waits 1 hour then re-greets |
+| User dismisses Hello World without saying it back | Normal — script re-greets immediately after response |
 
 ---
 
@@ -296,3 +296,6 @@ Scripts declare required permissions in `manifest.json`. AskMac enforces this at
 | 2026-04-19 | Updated Welcome copy and CTA; catalog split into "Works on your Mac" + "All Scripts" sections |
 | 2026-04-19 | Act 3: menu bar icon bounce + popover animation; post-response "Add or make more scripts!" nudge |
 | 2026-04-19 | Act 2 catalog: "Works on your Mac" section using requires checks from manifest; permissions field added to CatalogEntry; release-scripts skill updated to include permissions + requires in catalog.json |
+| 2026-04-19 | PermissionRow layout: button moved inside VStack to prevent subtitle truncation; notification row deep-links to AskMac's notification settings page |
+| 2026-04-19 | Dev build isolation: replaced #if DEBUG with runtime isDevBuild checks; dev vault moved to ~/.ask/dev-vault to avoid TCC prompts on ~/Documents access |
+| 2026-04-19 | Bash scripts (hello-world, brew-monitor, github, ollama): fix reader_loop stdin inheritance (`<&0`) for non-interactive bash; hello-world re-greets immediately after each response (removed sleep); versions bumped |
