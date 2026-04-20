@@ -1925,6 +1925,18 @@ private struct MachineDetailView: View {
                         .font(.caption)
                 }
             }
+            #if DEBUG
+            Section("Developer") {
+                Text("Resets first-run state so onboarding runs again on next launch. Removes hello-world from the vault.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Reset First Run", role: .destructive) {
+                    scriptManager.uninstallScript(id: "hello-world")
+                    settings.hasSeenOnboarding = false
+                    settings.nudgeDismissed = false
+                }
+            }
+            #endif
         }
         .formStyle(.grouped)
         .navigationTitle("Cloud")
