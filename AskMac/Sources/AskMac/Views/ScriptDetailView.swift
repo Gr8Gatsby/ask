@@ -295,6 +295,16 @@ struct ScriptDetailView: View {
             }
             .padding(16)
 
+            // Permissions section
+            if !script.permissions.isEmpty {
+                Divider()
+                    .opacity(0.3)
+                permissionsSection
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .padding(.bottom, script.requires.isEmpty && !script.hasSetup ? 44 : 0)
+            }
+
             // Dependencies section
             if !script.requires.isEmpty {
                 Divider()
@@ -1153,6 +1163,8 @@ struct ScriptDetailView: View {
         case .crashed:              .red
         case .missingDependencies:  .orange
         case .needsSetup:           .orange
+        case .pendingConsent:       .orange
+        case .permissionDenied:     .orange
         case .starting:             .yellow
         case .stopped:              .secondary
         }
@@ -1381,6 +1393,69 @@ struct ScriptDetailView: View {
             }
             .buttonStyle(.plain)
             .disabled((configValues[item.key] ?? "").isEmpty)
+        }
+    }
+
+    // MARK: Permissions
+
+    private var permissionsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Permissions")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(brandForegroundTertiary)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+                Spacer()
+                if script.status == .permissionDenied {
+                    Button("Review") {
+                        scriptManager.reviewPermissions(scriptID: script.id)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                    .tint(.orange)
+                } else if script.status == .pendingConsent {
+                    Text("Awaiting approval")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            let granted = settings.permissionsGranted(for: script.id)
+            VStack(spacing: 4) {
+                ForEach(script.permissions, id: \.self) { token in
+                    let info = ScriptPermissionInfo.info(for: token)
+                    let isGranted = granted.contains(token)
+                    HStack(spacing: 8) {
+                        Image(systemName: isGranted ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(isGranted ? Color.green : Color.orange)
+                        Text(info.title)
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundStyle(brandForegroundPrimary)
+                        Spacer(minLength: 0)
+                        if isGranted {
+                            Button("Revoke") {
+                                settings.resetScriptPermissions(for: script.id)
+                                scriptManager.reviewPermissions(scriptID: script.id)
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+
+            if script.status == .permissionDenied {
+                Text("This script is not running because you denied its permissions.")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .padding(.top, 2)
+            }
         }
     }
 
