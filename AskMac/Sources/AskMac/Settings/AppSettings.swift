@@ -147,9 +147,14 @@ final class AppSettings {
 
         self.feedScheduleOverrides = (defaults.dictionary(forKey: Key.feedScheduleOverrides) as? [String: String]) ?? [:]
 
-        // Default to true so app bundle scripts load out of the box
+        // Debug builds default to false so bundled scripts don't interfere with onboarding testing.
+        // Release builds default to true so scripts load out of the box.
         if defaults.object(forKey: Key.usesBundledScripts) == nil {
+            #if DEBUG
+            defaults.set(false, forKey: Key.usesBundledScripts)
+            #else
             defaults.set(true, forKey: Key.usesBundledScripts)
+            #endif
         }
         self.usesBundledScripts = defaults.bool(forKey: Key.usesBundledScripts)
 
