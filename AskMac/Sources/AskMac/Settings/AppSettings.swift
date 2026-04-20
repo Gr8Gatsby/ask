@@ -16,6 +16,7 @@ final class AppSettings {
         static let brandColorOverrides = "brandColorOverrides"
         static let svgOverrides = "svgOverrides"
         static let pinnedScripts = "pinnedScripts"
+        static let hasSeenOnboarding = "hasSeenOnboarding"
     }
 
     static let maxPins = 20
@@ -64,6 +65,10 @@ final class AppSettings {
     /// Ordered list of pinned script IDs shown in the menu bar panel (max 5).
     var pinnedScripts: [String] {
         didSet { defaults.set(pinnedScripts, forKey: Key.pinnedScripts) }
+    }
+
+    var hasSeenOnboarding: Bool {
+        didSet { defaults.set(hasSeenOnboarding, forKey: Key.hasSeenOnboarding) }
     }
 
     var isConfigured: Bool {
@@ -115,10 +120,26 @@ final class AppSettings {
         if let path = defaults.string(forKey: Key.vaultPath) {
             self.vaultPath = URL(fileURLWithPath: path)
         } else {
-            let defaultVault = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".ask/scripts")
-            self.vaultPath = defaultVault
-            defaults.set(defaultVault.path, forKey: Key.vaultPath)
+            let defaultURL: URL = {
+                #if DEBUG
+                // In debug builds default to the repo's ask/scripts so dev and prod
+                // vaults stay separate and onboarding can be tested cleanly.
+                let sourceFile = URL(fileURLWithPath: #file)
+                let repoRoot = sourceFile
+                    .deletingLastPathComponent() // Settings
+                    .deletingLastPathComponent() // AskMac (module)
+                    .deletingLastPathComponent() // Sources
+                    .deletingLastPathComponent() // AskMac (project)
+                let devVault = repoRoot.appendingPathComponent("ask/scripts")
+                if FileManager.default.fileExists(atPath: devVault.path) {
+                    return devVault
+                }
+                #endif
+                return FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent(".ask/scripts")
+            }()
+            self.vaultPath = defaultURL
+            defaults.set(defaultURL.path, forKey: Key.vaultPath)
         }
 
         let storedDisabled = defaults.stringArray(forKey: Key.disabledScripts) ?? []
@@ -138,6 +159,7 @@ final class AppSettings {
         self.brandColorOverrides = (defaults.dictionary(forKey: Key.brandColorOverrides) as? [String: String]) ?? [:]
         self.svgOverrides = (defaults.dictionary(forKey: Key.svgOverrides) as? [String: String]) ?? [:]
         self.pinnedScripts = defaults.stringArray(forKey: Key.pinnedScripts) ?? []
+        self.hasSeenOnboarding = defaults.bool(forKey: Key.hasSeenOnboarding)
     }
 
     func isDepCheckSkipped(scriptID: String, depID: String) -> Bool {

@@ -107,9 +107,22 @@ struct AskMacApp: App {
                     scriptCatalog.fetch(installedScripts: scriptManager.scripts)
                 }
         } label: {
-            MenuBarLabel(hasActiveScripts: scriptManager.scripts.contains { $0.status == .running })
+            MenuBarLabel(
+                hasActiveScripts: scriptManager.scripts.contains { $0.status == .running },
+                settings: settings
+            )
         }
         .menuBarExtraStyle(.window)
+
+        Window("Welcome to Ask", id: "onboarding") {
+            OnboardingView()
+                .environment(settings)
+                .environment(scriptManager)
+                .environment(scriptCatalog)
+        }
+        .defaultSize(width: 480, height: 420)
+        .defaultPosition(.center)
+        .windowResizability(.contentSize)
 
         Window("Ask", id: "scripts") {
             MacScriptsView()
@@ -145,6 +158,9 @@ struct AskMacApp: App {
 
 struct MenuBarLabel: View {
     let hasActiveScripts: Bool
+    let settings: AppSettings
+
+    @Environment(\.openWindow) private var openWindow
 
     private var isDevBuild: Bool {
         let exe = CommandLine.arguments.first ?? ""
@@ -154,5 +170,9 @@ struct MenuBarLabel: View {
     var body: some View {
         Image(systemName: isDevBuild ? "icloud" : "icloud.fill")
             .symbolEffect(.pulse, isActive: hasActiveScripts)
+            .task {
+                guard !settings.hasSeenOnboarding else { return }
+                openWindow(id: "onboarding")
+            }
     }
 }
