@@ -1,0 +1,296 @@
+#if canImport(AskMacCore)
+import AskMacCore
+#endif
+import ServiceManagement
+import SwiftUI
+import UserNotifications
+
+// MARK: - OnboardingView
+
+struct OnboardingView: View {
+    @Environment(AppSettings.self) private var settings
+    @Environment(ScriptManager.self) private var scriptManager
+    @Environment(ScriptCatalogService.self) private var scriptCatalog
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var step: Step = .permissions
+    @State private var notificationStatus: UNAuthorizationStatus = .notDetermined
+    @State private var loginItemEnabled = false
+    @State private var isInstalling = false
+    @State private var installError: String?
+    @State private var installer = ScriptInstaller()
+
+    enum Step { case permissions, welcome }
+
+    var body: some View {
+        Group {
+            switch step {
+            case .permissions:
+                PermissionsStep(
+                    notificationStatus: notificationStatus,
+                    loginItemEnabled: loginItemEnabled,
+                    onRequestNotifications: requestNotifications,
+                    onToggleLoginItem: toggleLoginItem,
+                    onContinue: { withAnimation { step = .welcome } }
+                )
+            case .welcome:
+                WelcomeStep(
+                    isInstalling: isInstalling,
+                    installError: installError,
+                    onInstall: installHelloWorld
+                )
+            }
+        }
+        .frame(width: 480)
+        .task { await refreshPermissionsStatus() }
+    }
+
+    // MARK: - Permissions
+
+    private func refreshPermissionsStatus() async {
+        let ns = await UNUserNotificationCenter.current().notificationSettings()
+        notificationStatus = ns.authorizationStatus
+        loginItemEnabled = SMAppService.mainApp.status == .enabled
+    }
+
+    private func requestNotifications() {
+        if notificationStatus == .denied {
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.notifications")!)
+            return
+        }
+        Task {
+            _ = try? await UNUserNotificationCenter.current()
+                .requestAuthorization(options: [.alert, .sound, .badge])
+            await refreshPermissionsStatus()
+        }
+    }
+
+    private func toggleLoginItem() {
+        let service = SMAppService.mainApp
+        if service.status == .enabled {
+            try? service.unregister()
+        } else {
+            try? service.register()
+        }
+        loginItemEnabled = SMAppService.mainApp.status == .enabled
+    }
+
+    // MARK: - Install
+
+    private func installHelloWorld() {
+        if scriptManager.scripts.contains(where: { $0.id == "hello-world" }) {
+            completeOnboarding()
+            return
+        }
+
+        isInstalling = true
+        installError = nil
+
+        Task {
+            do {
+                try await performInstall()
+                isInstalling = false
+                completeOnboarding()
+            } catch {
+                isInstalling = false
+                installError = error.localizedDescription
+            }
+        }
+    }
+
+    @MainActor
+    private func performInstall() async throws {
+        if scriptCatalog.allEntries.isEmpty {
+            scriptCatalog.fetch(installedScripts: scriptManager.scripts, force: true)
+        }
+
+        var fetchWaits = 0
+        while scriptCatalog.isFetching, fetchWaits < 150 {
+            try await Task.sleep(for: .milliseconds(200))
+            fetchWaits += 1
+        }
+
+        guard let entry = scriptCatalog.allEntries.first(where: { $0.id == "hello-world" }) else {
+            throw InstallError.notFound
+        }
+
+        let zipURL = try await scriptCatalog.downloadZip(for: entry)
+
+        installer.load(zipURL: zipURL, existingScripts: scriptManager.scripts)
+
+        var parseWaits = 0
+        while installer.phase == .parsing, parseWaits < 300 {
+            try await Task.sleep(for: .milliseconds(100))
+            parseWaits += 1
+        }
+
+        guard installer.phase == .ready, let vault = settings.vaultPath else {
+            throw InstallError.failed
+        }
+
+        installer.showSheet = false
+        installer.install(to: vault, scriptManager: scriptManager)
+
+        var installWaits = 0
+        while installer.phase != .idle, installWaits < 600 {
+            try await Task.sleep(for: .milliseconds(100))
+            installWaits += 1
+        }
+    }
+
+    private func completeOnboarding() {
+        settings.hasSeenOnboarding = true
+        openWindow(id: "scripts")
+        dismiss()
+    }
+
+    private enum InstallError: LocalizedError {
+        case notFound, failed
+        var errorDescription: String? {
+            switch self {
+            case .notFound: return "Hello World not found in catalog. Check your internet connection and try again."
+            case .failed:   return "Installation failed. Please try again."
+            }
+        }
+    }
+}
+
+// MARK: - Permissions Step
+
+private struct PermissionsStep: View {
+    let notificationStatus: UNAuthorizationStatus
+    let loginItemEnabled: Bool
+    let onRequestNotifications: () -> Void
+    let onToggleLoginItem: () -> Void
+    let onContinue: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 32) {
+            Text("Before we start")
+                .font(.title2)
+                .fontWeight(.semibold)
+
+            VStack(spacing: 20) {
+                PermissionRow(
+                    icon: "bell.fill",
+                    iconColor: .orange,
+                    title: "Notifications",
+                    subtitle: "Get alerted when scripts complete or need your attention.",
+                    actionLabel: notificationStatus == .authorized ? "Allowed ✓" : notificationStatus == .denied ? "Open Settings" : "Allow Notifications",
+                    isGranted: notificationStatus == .authorized,
+                    action: onRequestNotifications
+                )
+
+                Divider()
+
+                PermissionRow(
+                    icon: "arrow.up.circle.fill",
+                    iconColor: .blue,
+                    title: "Launch at Login",
+                    subtitle: "Start automatically when you log in so your Mac is always ready.",
+                    actionLabel: loginItemEnabled ? "Enabled ✓" : "Enable",
+                    isGranted: loginItemEnabled,
+                    action: onToggleLoginItem
+                )
+            }
+
+            HStack {
+                Spacer()
+                Button("Continue", action: onContinue)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+            }
+        }
+        .padding(32)
+    }
+}
+
+private struct PermissionRow: View {
+    let icon: String
+    let iconColor: Color
+    let title: String
+    let subtitle: String
+    let actionLabel: String
+    let isGranted: Bool
+    let action: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundStyle(iconColor)
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).fontWeight(.medium)
+                Text(subtitle)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button(actionLabel, action: action)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isGranted)
+        }
+    }
+}
+
+// MARK: - Welcome Step
+
+private struct WelcomeStep: View {
+    let isInstalling: Bool
+    let installError: String?
+    let onInstall: () -> Void
+
+    var body: some View {
+        VStack(spacing: 40) {
+            VStack(spacing: 12) {
+                Image(systemName: "icloud.fill")
+                    .font(.system(size: 52))
+                    .foregroundStyle(.blue)
+
+                Text("Remote control your Mac\nwith your iPhone")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                    .multilineTextAlignment(.center)
+
+                Text("Create custom scripts with AI to do almost anything.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            VStack(spacing: 8) {
+                Button(action: onInstall) {
+                    if isInstalling {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Installing…")
+                        }
+                        .frame(minWidth: 180)
+                    } else {
+                        Text("Install Hello World!")
+                            .frame(minWidth: 180)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(isInstalling)
+
+                if let error = installError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 320)
+                }
+            }
+        }
+        .padding(40)
+        .frame(minHeight: 280)
+    }
+}

@@ -169,18 +169,31 @@ struct MenuBarView: View {
                 .disabled(!updater.canCheckForUpdates)
             }
 
-            Button {
-                openWindow(id: "scripts")
-                dismiss()
-                activateAskWindow()
-            } label: {
-                Text("Open Ask")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .frame(maxWidth: .infinity)
+            HStack(spacing: 8) {
+                Button {
+                    openWindow(id: "catalog")
+                    dismiss()
+                } label: {
+                    Label("Add Scripts…", systemImage: "plus.circle")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+
+                Button {
+                    openWindow(id: "scripts")
+                    dismiss()
+                    activateAskWindow()
+                } label: {
+                    Text("Open Ask")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
         }
     }
 
