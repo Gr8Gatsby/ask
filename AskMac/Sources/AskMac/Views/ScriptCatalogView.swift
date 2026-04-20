@@ -4,6 +4,28 @@ import AskMacCore
 import AppKit
 import SwiftUI
 
+// MARK: - Standalone catalog window wrapper
+
+struct AddScriptsView: View {
+    @Environment(AppSettings.self) private var settings
+    @Environment(ScriptManager.self) private var scriptManager
+
+    @State private var installer = ScriptInstaller()
+
+    var body: some View {
+        ScriptCatalogView(installer: installer)
+            .sheet(isPresented: $installer.showSheet) {
+                ScriptInstallSheet(
+                    installer: installer,
+                    scriptManager: scriptManager,
+                    vaultURL: settings.vaultPath
+                        ?? FileManager.default.homeDirectoryForCurrentUser
+                            .appendingPathComponent(".ask/scripts")
+                )
+            }
+    }
+}
+
 // MARK: - Script catalog browser
 
 struct ScriptCatalogView: View {
@@ -331,6 +353,12 @@ struct CatalogEntryRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .opacity(isInstalled && !hasUpdate ? 0.4 : 1)
+                if let perms = entry.permissions, !perms.isEmpty {
+                    Text("Needs: \(perms.joined(separator: ", "))")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .opacity(isInstalled && !hasUpdate ? 0.4 : 1)
+                }
                 if let err = downloadError {
                     Text(err)
                         .font(.caption2)

@@ -9,14 +9,18 @@ public struct CatalogEntry: Identifiable, Decodable {
     public let type: String?
     public let changelog: String?
     public let downloadURL: URL
+    /// Permissions declared in the script's manifest (e.g. ["shell", "network"]).
+    /// Optional — nil when the catalog was generated without this field.
+    public let permissions: [String]?
 
     public enum CodingKeys: String, CodingKey {
-        case id, name, version, description, icon, type, changelog
+        case id, name, version, description, icon, type, changelog, permissions
         case downloadURL = "download_url"
     }
 
     public init(id: String, name: String, version: String, description: String,
-                icon: String?, type: String?, changelog: String?, downloadURL: URL) {
+                icon: String?, type: String?, changelog: String?, downloadURL: URL,
+                permissions: [String]? = nil) {
         self.id = id
         self.name = name
         self.version = version
@@ -25,6 +29,7 @@ public struct CatalogEntry: Identifiable, Decodable {
         self.type = type
         self.changelog = changelog
         self.downloadURL = downloadURL
+        self.permissions = permissions
     }
 }
 

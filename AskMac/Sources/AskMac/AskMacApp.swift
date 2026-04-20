@@ -137,6 +137,15 @@ struct AskMacApp: App {
         .defaultSize(width: 720, height: 520)
         .defaultPosition(.center)
 
+        Window("Add Scripts", id: "catalog") {
+            AddScriptsView()
+                .environment(settings)
+                .environment(scriptManager)
+                .environment(scriptCatalog)
+        }
+        .defaultSize(width: 560, height: 560)
+        .defaultPosition(.center)
+
         Window("Action History", id: "history") {
             HistoryView()
                 .environment(actionHistory)
