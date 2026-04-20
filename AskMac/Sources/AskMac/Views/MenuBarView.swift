@@ -55,6 +55,27 @@ struct MenuBarView: View {
         }
     }
 
+    // MARK: - Health state
+
+    private enum HealthState {
+        case healthy
+        case issues
+        case unconfigured
+    }
+
+    private var healthState: HealthState {
+        guard settings.isConfigured else { return .unconfigured }
+        let hasIssues = scriptManager.scripts.contains(where: {
+            !$0.isSystem && scriptHasIssue($0)
+        })
+        return hasIssues ? .issues : .healthy
+    }
+
+    private func scriptHasIssue(_ script: ManagedScript) -> Bool {
+        script.status == .crashed || script.status == .missingDependencies ||
+        script.status == .permissionDenied || script.status == .pendingConsent
+    }
+
     // MARK: - Header
 
     private var header: some View {
@@ -65,9 +86,54 @@ struct MenuBarView: View {
             Text(settings.machineName.isEmpty ? "Ask" : settings.machineName)
                 .font(.headline)
             Spacer()
-            Circle()
-                .fill(statusColor)
-                .frame(width: 8, height: 8)
+            statusPill
+        }
+    }
+
+    @ViewBuilder
+    private var statusPill: some View {
+        switch healthState {
+        case .healthy:
+            let count = scriptManager.scripts.filter { !$0.isSystem }.count
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.caption)
+                Text(count == 1 ? "1 script" : "\(count) scripts")
+                    .font(.caption)
+                    .fontWeight(.medium)
+            }
+            .foregroundStyle(.green)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Color.green.opacity(0.12))
+            .clipShape(Capsule())
+        case .issues:
+            let count = scriptManager.scripts.filter { !$0.isSystem && scriptHasIssue($0) }.count
+            HStack(spacing: 4) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                Text(count == 1 ? "1 issue" : "\(count) issues")
+                    .font(.caption)
+                    .fontWeight(.medium)
+            }
+            .foregroundStyle(.orange)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Color.orange.opacity(0.12))
+            .clipShape(Capsule())
+        case .unconfigured:
+            HStack(spacing: 4) {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.caption)
+                Text("Not configured")
+                    .font(.caption)
+                    .fontWeight(.medium)
+            }
+            .foregroundStyle(.orange)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Color.orange.opacity(0.12))
+            .clipShape(Capsule())
         }
     }
 
@@ -79,16 +145,6 @@ struct MenuBarView: View {
         if name.contains("mac studio") { return "macstudio" }
         if name.contains("imac") { return "desktopcomputer" }
         return "desktopcomputer"
-    }
-
-    private var statusColor: Color {
-        if !settings.isConfigured { return .orange }
-        if scriptManager.scripts.contains(where: {
-            $0.status == .crashed || $0.status == .missingDependencies ||
-            $0.status == .permissionDenied || $0.status == .pendingConsent
-        }) { return .orange }
-        if scriptManager.scripts.contains(where: { $0.status == .running }) { return .green }
-        return .secondary
     }
 
     // MARK: - Scripts
@@ -136,25 +192,6 @@ struct MenuBarView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             }
 
-            // Section header
-            HStack {
-                Text(hasPins ? "Pinned" : "Scripts")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .textCase(.uppercase)
-                    .tracking(0.3)
-                Spacer()
-                Button {
-                    scriptManager.reload()
-                } label: {
-                    Label("Restart All", systemImage: "arrow.clockwise")
-                        .font(.caption)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help("Rescan vault and restart all scripts")
-            }
-
             if displayedScripts.isEmpty {
                 Text("No scripts configured")
                     .font(.caption)
@@ -166,15 +203,23 @@ struct MenuBarView: View {
                 LazyVGrid(columns: columns, spacing: 8) {
                     ForEach(displayedScripts) { script in
                         ScriptTile(script: script, scriptManager: scriptManager)
-                            .contextMenu { pinMenuItem(for: script) }
+                            .contextMenu { scriptContextMenu(for: script) }
+                    }
+                }
+            } else if healthState == .healthy {
+                // Compact chip list — clean, no clutter when everything is fine
+                VStack(spacing: 0) {
+                    ForEach(displayedScripts) { script in
+                        ScriptChip(script: script, scriptManager: scriptManager)
+                            .contextMenu { scriptContextMenu(for: script) }
                     }
                 }
             } else {
-                // List view for all scripts
+                // Detailed list — shows status icons and toggles when attention is needed
                 VStack(spacing: 0) {
                     ForEach(displayedScripts) { script in
                         ScriptRow(script: script, scriptManager: scriptManager)
-                            .contextMenu { pinMenuItem(for: script) }
+                            .contextMenu { scriptContextMenu(for: script) }
                     }
                 }
             }
@@ -305,11 +350,16 @@ struct MenuBarView: View {
     }
 
     @ViewBuilder
-    private func pinMenuItem(for script: ManagedScript) -> some View {
+    private func scriptContextMenu(for script: ManagedScript) -> some View {
         Button {
             scriptManager.restartScript(id: script.id)
         } label: {
             Label("Restart", systemImage: "arrow.clockwise")
+        }
+        Button {
+            scriptManager.reload()
+        } label: {
+            Label("Restart All", systemImage: "arrow.clockwise.circle")
         }
         Divider()
         if settings.isPinned(script.id) {
@@ -325,6 +375,80 @@ struct MenuBarView: View {
                 Label("Pin to Menu Bar", systemImage: "pin")
             }
         }
+        Divider()
+        Toggle("Enabled", isOn: Binding(
+            get: { script.isEnabled },
+            set: { enabled in
+                if enabled { scriptManager.enableScript(id: script.id) }
+                else { scriptManager.disableScript(id: script.id) }
+            }
+        ))
+    }
+}
+
+// MARK: - Script chip (compact healthy-state list row)
+
+private struct ScriptChip: View {
+    let script: ManagedScript
+    let scriptManager: ScriptManager
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(spacing: 10) {
+            iconView
+                .frame(width: 18, height: 18)
+
+            Text(script.name)
+                .font(.subheadline)
+                .foregroundStyle(script.isEnabled ? .primary : .secondary)
+
+            Spacer()
+
+            let isActive = scriptManager.activeBlocks[script.id]?.isEmpty == false
+            Circle()
+                .fill(isActive ? Color.green : Color(.tertiaryLabelColor))
+                .frame(width: 6, height: 6)
+        }
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private var iconView: some View {
+        if let img = effectiveIcon {
+            Image(nsImage: img)
+                .resizable()
+                .scaledToFit()
+                .grayscale(script.isEnabled ? 0 : 1)
+                .opacity(script.isEnabled ? 1 : 0.5)
+        } else {
+            Image(systemName: script.icon ?? "terminal.fill")
+                .font(.callout)
+                .foregroundStyle(script.isEnabled ? .primary : .tertiary)
+        }
+    }
+
+    private var effectiveIcon: NSImage? {
+        guard colorScheme == .dark, let svg = script.svgString else { return script.iconImage }
+        return svgToWhiteMenuBar(svg) ?? script.iconImage
+    }
+
+    private func svgToWhiteMenuBar(_ svg: String) -> NSImage? {
+        var s = svg
+        s = s.replacingOccurrences(of: "currentColor", with: "white", options: .caseInsensitive)
+        let darkColors = ["#000000", "#000", "black", "#111111", "#111",
+                          "#1a1a1a", "#222222", "#222", "#333333", "#333"]
+        for color in darkColors {
+            for attr in ["fill", "stroke"] {
+                s = s.replacingOccurrences(of: "\(attr)=\"\(color)\"", with: "\(attr)=\"white\"", options: .caseInsensitive)
+                s = s.replacingOccurrences(of: "\(attr)='\(color)'",  with: "\(attr)='white'",  options: .caseInsensitive)
+                s = s.replacingOccurrences(of: "\(attr):\(color)",    with: "\(attr):white",    options: .caseInsensitive)
+                s = s.replacingOccurrences(of: "\(attr): \(color)",   with: "\(attr): white",   options: .caseInsensitive)
+            }
+        }
+        guard let data = s.data(using: .utf8) else { return nil }
+        return NSImage(data: data)
     }
 }
 
