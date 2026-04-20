@@ -75,10 +75,12 @@ public final class ScriptCatalogService {
         }
 
         isFetching = false
-        Task { await checkCompatibility() }
     }
 
-    private func checkCompatibility() async {
+    /// Run prerequisite checks for all catalog entries and populate compatibleScriptIDs.
+    /// Call this only when the user opens the catalog — not on background fetches —
+    /// to avoid triggering macOS privacy prompts at launch.
+    public func checkCompatibility() async {
         guard !allEntries.isEmpty else { return }
         isCheckingCompatibility = true
 

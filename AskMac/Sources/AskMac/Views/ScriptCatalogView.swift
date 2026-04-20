@@ -193,6 +193,11 @@ struct ScriptCatalogView: View {
                     .appendingPathComponent(".ask/scripts")
             )
         }
+        .task {
+            if catalog.compatibleScriptIDs.isEmpty {
+                await catalog.checkCompatibility()
+            }
+        }
     }
 
     // MARK: - Helpers
