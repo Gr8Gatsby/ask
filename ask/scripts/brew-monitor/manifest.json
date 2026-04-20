@@ -1,23 +1,18 @@
 {
   "id": "brew-monitor",
   "name": "Homebrew",
-  "version": "2.12",
-  "type": "feed",
-  "schedule": "0 9 * * *",
+  "version": "3.1",
   "description": "Checks for outdated Homebrew packages and lets you upgrade from iPhone",
-  "entry": "brew-monitor-bin",
+  "entry": "main.sh",
   "icon": "shippingbox",
   "icon_file": "icon.svg",
-  "tools": [
+  "permissions": ["shell"],
+  "requires": [
     {
-      "name": "upgrade_all",
-      "description": "Upgrade all outdated Homebrew packages. Streams progress per-package to iPhone.",
-      "params": []
-    },
-    {
-      "name": "sync",
-      "description": "Manually trigger an immediate check for outdated packages outside the scheduled run.",
-      "params": []
+      "id": "brew",
+      "name": "Homebrew",
+      "check": "brew --version",
+      "install_url": "https://brew.sh"
     }
   ]
 }

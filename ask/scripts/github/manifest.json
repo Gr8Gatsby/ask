@@ -1,52 +1,10 @@
 {
   "id": "github",
   "name": "Git Repos",
-  "version": "2.3",
-  "description": "Monitor local git repos and push changes from iPhone",
-  "entry": "main.py",
+  "version": "3.1",
+  "description": "Monitor local git repos and push/pull changes from iPhone",
+  "entry": "main.sh",
   "icon": "arrow.triangle.branch",
   "icon_file": "icon.svg",
-  "tools": [
-    {
-      "name": "refresh",
-      "description": "Re-scan local repositories and update status for all tracked repos.",
-      "params": []
-    },
-    {
-      "name": "commit",
-      "description": "Commit staged changes in a repository. Generates an AI commit message via Ollama or accepts a manual one.",
-      "params": [
-        { "name": "repo_path", "type": "string", "required": true },
-        { "name": "message", "type": "string", "required": false }
-      ]
-    },
-    {
-      "name": "push",
-      "description": "Push committed changes to the remote tracking branch.",
-      "params": [
-        { "name": "repo_path", "type": "string", "required": true }
-      ]
-    },
-    {
-      "name": "pull",
-      "description": "Pull latest changes from the remote tracking branch.",
-      "params": [
-        { "name": "repo_path", "type": "string", "required": true }
-      ]
-    },
-    {
-      "name": "fetch",
-      "description": "Fetch remote refs without merging.",
-      "params": [
-        { "name": "repo_path", "type": "string", "required": true }
-      ]
-    },
-    {
-      "name": "discard",
-      "description": "Discard all uncommitted changes in a repository after confirmation.",
-      "params": [
-        { "name": "repo_path", "type": "string", "required": true }
-      ]
-    }
-  ]
+  "permissions": ["home_directory", "shell"]
 }

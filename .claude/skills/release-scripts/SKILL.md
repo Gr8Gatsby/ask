@@ -44,7 +44,7 @@ For each directory in `ask/scripts/` that contains a `manifest.json`:
 ls ask/scripts/
 ```
 
-Read each `ask/scripts/<id>/manifest.json` and extract: `id`, `name`, `version`, `description`, `icon`, `icon_file`, `type`.
+Read each `ask/scripts/<id>/manifest.json` and extract: `id`, `name`, `version`, `description`, `icon`, `icon_file`, `type`, `permissions`, `requires`.
 
 Skip any directory without a `manifest.json`.
 
@@ -64,11 +64,23 @@ Construct `catalog.json` with this structure:
       "icon": "<icon or null>",
       "type": "<type: tile|feed|system>",
       "changelog": "<changelog text from Step 2>",
-      "download_url": "https://github.com/Gr8Gatsby/ask/releases/download/scripts-latest/<id>.zip"
+      "download_url": "https://github.com/Gr8Gatsby/ask/releases/download/scripts-latest/<id>.zip",
+      "permissions": ["<permission>", ...],
+      "requires": [
+        {
+          "id": "<dep-id>",
+          "name": "<dep-name>",
+          "check": "<shell command that exits 0 when dep is present>",
+          "install_url": "<url or null>"
+        }
+      ]
     }
   ]
 }
 ```
+
+Omit `permissions` if the manifest has none (empty array or missing field).
+Omit `requires` if the manifest has none.
 
 Write to a temp location: `/tmp/ask-scripts-release/catalog.json`
 

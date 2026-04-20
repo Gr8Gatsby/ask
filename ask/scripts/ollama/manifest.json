@@ -1,43 +1,17 @@
 {
   "id": "ollama",
   "name": "Ollama",
-  "version": "1.3",
-  "description": "Chat with locally installed Ollama models and manage Ollama updates",
-  "entry": "main.py",
+  "version": "2.2",
+  "description": "Monitors Ollama status and surfaces available updates",
+  "entry": "main.sh",
   "icon": "cpu",
   "icon_file": "icon.svg",
-  "tools": [
-    {
-      "name": "select_model",
-      "description": "Switch the active Ollama model. Presents a picker of all installed models.",
-      "params": [
-        { "name": "model_name", "type": "string", "required": true }
-      ]
-    },
-    {
-      "name": "chat",
-      "description": "Send a message to the active Ollama model and stream the response back to iPhone.",
-      "params": [
-        { "name": "message", "type": "string", "required": true }
-      ]
-    },
-    {
-      "name": "refresh",
-      "description": "Re-scan installed Ollama models and update the model picker.",
-      "params": []
-    },
-    {
-      "name": "clear_history",
-      "description": "Clear the current chat session history.",
-      "params": []
-    }
-  ],
+  "permissions": ["shell", "network"],
   "requires": [
     {
       "id": "ollama",
       "name": "Ollama",
       "check": "ollama --version",
-      "install": "brew install ollama",
       "install_url": "https://ollama.com"
     }
   ]

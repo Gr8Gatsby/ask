@@ -15,7 +15,12 @@ public final class ScriptCatalogService {
     /// Keyed by script ID.
     public private(set) var availableUpdates: [String: CatalogEntry] = [:]
 
+    /// Script IDs whose manifest `requires` checks all passed on this machine.
+    /// Scripts with no `requires` are always included. Populated after each fetch.
+    public private(set) var compatibleScriptIDs: Set<String> = []
+
     public private(set) var isFetching = false
+    public private(set) var isCheckingCompatibility = false
     public private(set) var lastFetchError: String?
     public private(set) var lastFetchDate: Date?
 
@@ -70,6 +75,38 @@ public final class ScriptCatalogService {
         }
 
         isFetching = false
+    }
+
+    /// Run prerequisite checks for all catalog entries and populate compatibleScriptIDs.
+    /// Call this only when the user opens the catalog — not on background fetches —
+    /// to avoid triggering macOS privacy prompts at launch.
+    public func checkCompatibility() async {
+        guard !allEntries.isEmpty else { return }
+        isCheckingCompatibility = true
+
+        let entries = allEntries
+        let compatible = await Task.detached(priority: .utility) { () -> Set<String> in
+            var result: Set<String> = []
+            for entry in entries {
+                let reqs = entry.requires ?? []
+                var passes = true
+                for req in reqs {
+                    let proc = Process()
+                    proc.executableURL = URL(fileURLWithPath: "/bin/sh")
+                    proc.arguments = ["-c", req.check]
+                    proc.standardOutput = Pipe()
+                    proc.standardError = Pipe()
+                    try? proc.run()
+                    proc.waitUntilExit()
+                    if proc.terminationStatus != 0 { passes = false; break }
+                }
+                if passes { result.insert(entry.id) }
+            }
+            return result
+        }.value
+
+        compatibleScriptIDs = compatible
+        isCheckingCompatibility = false
     }
 
     public func recomputeUpdates(installedScripts: [any InstalledScript]) {
