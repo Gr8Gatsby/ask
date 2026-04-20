@@ -130,7 +130,7 @@ final class AppSettings {
                     .deletingLastPathComponent() // AskMac (module)
                     .deletingLastPathComponent() // Sources
                     .deletingLastPathComponent() // AskMac (project)
-                let devVault = repoRoot.appendingPathComponent("ask/scripts")
+                let devVault = repoRoot.appendingPathComponent("ask/dev-vault")
                 if FileManager.default.fileExists(atPath: devVault.path) {
                     return devVault
                 }
