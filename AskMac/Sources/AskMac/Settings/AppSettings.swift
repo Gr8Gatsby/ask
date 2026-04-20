@@ -21,6 +21,7 @@ final class AppSettings {
         static let permissionsMigrationDone = "permissionsMigrationDone"
         static let showPermissionMigrationBanner = "showPermissionMigrationBanner"
         static let nudgeDismissed = "nudgeDismissed"
+        static let hasSeenOnboarding = "hasSeenOnboarding"
     }
 
     static let maxPins = 20
@@ -96,6 +97,10 @@ final class AppSettings {
         didSet { defaults.set(nudgeDismissed, forKey: Key.nudgeDismissed) }
     }
 
+    var hasSeenOnboarding: Bool {
+        didSet { defaults.set(hasSeenOnboarding, forKey: Key.hasSeenOnboarding) }
+    }
+
     var isConfigured: Bool {
         !machineName.isEmpty
     }
@@ -145,10 +150,23 @@ final class AppSettings {
         if let path = defaults.string(forKey: Key.vaultPath) {
             self.vaultPath = URL(fileURLWithPath: path)
         } else {
-            let defaultVault = FileManager.default.homeDirectoryForCurrentUser
+            let fallback = FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent(".ask/scripts")
-            self.vaultPath = defaultVault
-            defaults.set(defaultVault.path, forKey: Key.vaultPath)
+            self.vaultPath = fallback
+            defaults.set(fallback.path, forKey: Key.vaultPath)
+        }
+
+        // In dev builds, override vault to ~/.ask/dev-vault in memory only.
+        // Using ~/.ask/ avoids TCC prompts that fire when accessing ~/Documents/.
+        // Debug and prod share the same UserDefaults domain (same bundle ID), so we
+        // must not write this override to disk.
+        let exe = CommandLine.arguments.first ?? ""
+        if exe.contains("DerivedData") || exe.contains("/.build/") {
+            let devVault = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".ask/dev-vault")
+            if FileManager.default.fileExists(atPath: devVault.path) {
+                self.vaultPath = devVault
+            }
         }
 
         let storedDisabled = defaults.stringArray(forKey: Key.disabledScripts) ?? []
@@ -156,9 +174,12 @@ final class AppSettings {
 
         self.feedScheduleOverrides = (defaults.dictionary(forKey: Key.feedScheduleOverrides) as? [String: String]) ?? [:]
 
-        // Default to true so app bundle scripts load out of the box
+        // Dev builds default to false so bundled scripts don't interfere with onboarding testing.
+        // Release builds default to true so scripts load out of the box.
         if defaults.object(forKey: Key.usesBundledScripts) == nil {
-            defaults.set(true, forKey: Key.usesBundledScripts)
+            let exe = CommandLine.arguments.first ?? ""
+            let isDevBuild = exe.contains("DerivedData") || exe.contains("/.build/")
+            defaults.set(!isDevBuild, forKey: Key.usesBundledScripts)
         }
         self.usesBundledScripts = defaults.bool(forKey: Key.usesBundledScripts)
 
@@ -174,6 +195,11 @@ final class AppSettings {
         self.permissionsMigrationDone = defaults.bool(forKey: Key.permissionsMigrationDone)
         self.showPermissionMigrationBanner = defaults.bool(forKey: Key.showPermissionMigrationBanner)
         self.nudgeDismissed = defaults.bool(forKey: Key.nudgeDismissed)
+
+        // Dev builds always start with onboarding unseen so it can be tested repeatedly.
+        let isDevExe = (CommandLine.arguments.first ?? "").contains("DerivedData")
+            || (CommandLine.arguments.first ?? "").contains("/.build/")
+        self.hasSeenOnboarding = isDevExe ? false : defaults.bool(forKey: Key.hasSeenOnboarding)
     }
 
     func isDepCheckSkipped(scriptID: String, depID: String) -> Bool {

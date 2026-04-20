@@ -35,16 +35,35 @@ The Ask Mac companion app (`~/.ask/scripts/`) runs scripts as persistent daemons
 
 ---
 
+## Choosing a language
+
+Pick the simplest language that fits the script's needs:
+
+| Language | When to use | Deps required |
+|---|---|---|
+| **bash** | Simple state, sequential logic, shell commands, curl HTTP | None — zero deps |
+| **Python** | Complex async, multiple concurrent operations, heavy JSON parsing | Python 3 (not pre-installed on modern macOS) |
+| **Swift (binary)** | Performance-critical or needs compiled binary | None at runtime — build in CI |
+
+**Default to bash** for scripts that primarily run shell commands or make simple HTTP calls. A script that just runs `brew outdated` and emits a block does not need Python. Reach for Python or Swift only when the async complexity genuinely requires it (e.g. concurrent event loops, Unix socket servers, streaming subprocess output).
+
+Hello World (`ask/scripts/hello-world/main.sh`) is the reference bash implementation.
+
 ## Required file layout
 
 ```
 ~/.ask/scripts/{script-id}/
 ├── manifest.json          # required — daemon reads this
-├── main.py                # entry point (Python preferred unless asked for Swift)
+├── main.sh                # bash entry point (preferred for simple scripts)
 └── icon.svg               # optional — custom icon rendered on iOS
 ```
 
-For Swift scripts add:
+For Python scripts:
+```
+├── main.py                # entry point
+```
+
+For Swift scripts:
 ```
 ├── Sources/
 │   ├── main.swift
@@ -66,7 +85,8 @@ For Swift scripts add:
   "description": "One-line description",
   "entry": "main.py",
   "icon": "sparkles",
-  "icon_file": "icon.svg"
+  "icon_file": "icon.svg",
+  "permissions": []
 }
 ```
 
@@ -74,6 +94,39 @@ For Swift scripts add:
 - `entry` — relative path to the executable (Python file or compiled binary).
 - `icon` — SF Symbol name, shown if no SVG is available.
 - `icon_file` — path to an SVG file; rendered natively on iOS (preferred over PNG).
+- `permissions` — list of permission tokens the script needs. **Must be declared or AskMac will log a violation and alert the user at runtime.** Only declare what the script actually uses.
+
+### Permission tokens
+
+| Token | What it covers |
+|---|---|
+| `shell` | Running subprocesses / shell commands |
+| `home_directory` | Reading files under `~/` |
+| `applescript` | Executing `osascript` to query apps |
+| `network` | Outbound HTTP beyond CloudKit/MCP |
+
+`notifications` is granted to all scripts automatically — do not declare it.
+
+### Permission best practices
+
+- **Declare the minimum set.** If your script only shells out to `brew`, declare `shell` — not `home_directory`.
+- **Write fallbacks for every permission.** A user can revoke a permission at any time in System Settings. Your script must handle the failure gracefully rather than crashing:
+
+```python
+try:
+    result = subprocess.run(['brew', 'outdated'], ...)
+except Exception as e:
+    # Permission may have been revoked — surface a degraded state block
+    await mcp.emit_block(BLOCK_STATUS, 'status', {
+        'label': 'brew access unavailable',
+        'detail': 'Check Ask permissions in System Settings',
+        'icon': 'exclamationmark.triangle',
+        'color': 'orange',
+    })
+    return
+```
+
+- **Never assume a permission persists across runs.** Check for errors on every subprocess/file call, not just at startup.
 
 ---
 
@@ -99,6 +152,187 @@ All blocks are emitted via `emit_block`. iOS polls every 5 s. Re-emit the same `
 - Re-emitting the same ID overwrites the block
 - Always call `clear_block` when a block is no longer relevant
 - Register response callbacks **before** calling `emit_block` (avoids race with fast CloudKit + user)
+
+---
+
+## Bash script template
+
+```bash
+#!/bin/bash
+# {script-name} — Ask daemon script (zero dependencies)
+# Communicates with AskMac via JSON-RPC 2.0 over stdio.
+
+CHECK_INTERVAL=14400   # 4 hours
+TEST_INTERVAL=10
+BLOCK_STATUS="{script-name}-status"
+BLOCK_CONFIRM="{script-name}-confirm"
+
+ID=0
+send()    { printf '%s\n' "$1"; }
+next_id() { ID=$((ID+1)); echo "$ID"; }
+task_id() { uuidgen | tr '[:upper:]' '[:lower:]'; }
+now_str() { date "+%Y-%m-%d %H:%M"; }
+
+# Escape a value for use inside a JSON string (no surrounding quotes)
+json_str() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\t'/\\t}"
+    printf '%s' "$s"
+}
+
+# --- Block helpers ---
+
+emit_block() {
+    local block_id="$1" block_type="$2" payload="$3" ttl="${4:-}"
+    local args='{"blockId":"'"$block_id"'","blockType":"'"$block_type"'","payload":'"$payload"'}'
+    [[ -n "$ttl" ]] && args='{"blockId":"'"$block_id"'","blockType":"'"$block_type"'","payload":'"$payload"',"ttl":'"$ttl"'}'
+    send '{"jsonrpc":"2.0","id":'"$(next_id)"',"method":"tools/call","params":{"name":"emit_block","arguments":'"$args"'}}'
+}
+
+clear_block() {
+    send '{"jsonrpc":"2.0","id":'"$(next_id)"',"method":"tools/call","params":{"name":"clear_block","arguments":{"blockId":"'"$1"'"}}}'
+}
+
+# --- A2A helpers ---
+# Every meaningful operation should open a task, append messages, attach an
+# artifact if there is output, and close the task. This drives the feed on iOS.
+
+open_task() {
+    # status: working | completed | failed
+    local task_id="$1" title="$2" status="${3:-working}"
+    send '{"jsonrpc":"2.0","id":'"$(next_id)"',"method":"tools/call","params":{"name":"open_task","arguments":{"taskId":"'"$task_id"'","title":"'"$(json_str "$title")"'","status":"'"$status"'"}}}'
+}
+
+append_message() {
+    local task_id="$1" role="$2" text="$3"   # role: user | assistant
+    send '{"jsonrpc":"2.0","id":'"$(next_id)"',"method":"tools/call","params":{"name":"append_message","arguments":{"taskId":"'"$task_id"'","role":"'"$role"'","parts":[{"type":"text","text":"'"$(json_str "$text")"'"}]}}}'
+}
+
+put_artifact() {
+    local task_id="$1" artifact_id="$2" filename="$3" mime="$4" desc="$5" filepath="$6"
+    send '{"jsonrpc":"2.0","id":'"$(next_id)"',"method":"tools/call","params":{"name":"put_artifact","arguments":{"taskId":"'"$task_id"'","artifactId":"'"$artifact_id"'","filename":"'"$filename"'","mimeType":"'"$mime"'","description":"'"$(json_str "$desc")"'","filePath":"'"$filepath"'"}}}'
+}
+
+# --- MCP handshake ---
+
+send '{"jsonrpc":"2.0","id":'"$(next_id)"',"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"{script-name}","version":"1.0"}}}'
+IFS= read -r _   # consume initialize response
+send '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+printf '[{script-name}] MCP initialized\n' >&2
+
+# FIFO for async user responses
+FIFO=$(mktemp -u)
+mkfifo "$FIFO"
+cleanup() { rm -f "$FIFO"; kill "$READER_PID" 2>/dev/null || true; }
+trap cleanup EXIT
+
+reader_loop() {
+    while IFS= read -r line; do
+        if [[ "$line" == *'"user_response"'* ]]; then
+            printf '%s' "$line" | grep -o '"value":"[^"]*"' | head -1 \
+                | sed 's/"value":"//;s/"$//' > "$FIFO"
+        fi
+    done
+}
+reader_loop &
+READER_PID=$!
+
+TEST_MODE=false
+[[ "${1:-}" == "test" || "${1:-}" == "--test" ]] && TEST_MODE=true
+interval=$CHECK_INTERVAL
+$TEST_MODE && interval=$TEST_INTERVAL
+runs=0
+
+check() {
+    local tid; tid=$(task_id)
+    local now; now=$(now_str)
+
+    # --- do work here ---
+    local result
+    result=$(some_command 2>/dev/null)
+    local rc=$?
+    # --------------------
+
+    # Write output to a temp file for the artifact
+    local tmp; tmp=$(mktemp /tmp/{script-name}-XXXXXX.md)
+    local filename; filename="{script-name}-$(date +%Y%m%d-%H%M).md"
+    printf '# {Script Name} — %s\n\n```\n%s\n```\n' "$now" "$result" > "$tmp"
+
+    open_task "$tid" "{Script Name} · $now"
+    append_message "$tid" "user" "Run {script-name} check."
+
+    if [[ $rc -ne 0 || -z "$result" ]]; then
+        # All clear
+        append_message "$tid" "assistant" "All clear — nothing to report."
+        put_artifact "$tid" "{script-name}-$(task_id)" "$filename" "text/plain" \
+            "{Script Name} check — all clear" "$tmp"
+        open_task "$tid" "{Script Name} · $now" "completed"
+        rm -f "$tmp"
+
+        emit_block "$BLOCK_STATUS" "status" \
+            '{"label":"All clear","icon":"checkmark.circle","color":"green"}' \
+            "$CHECK_INTERVAL"
+        return
+    fi
+
+    # Action needed
+    local body; body=$(printf '%s' "$result" | tr '\n' '|' | sed 's/|/\\n/g;s/\\n$//')
+    append_message "$tid" "assistant" "Found issues: $result"
+    put_artifact "$tid" "{script-name}-$(task_id)" "$filename" "text/plain" \
+        "{Script Name} check — issues found" "$tmp"
+    open_task "$tid" "{Script Name} · $now" "completed"
+    rm -f "$tmp"
+
+    emit_block "$BLOCK_CONFIRM" "confirmation" \
+        '{"title":"Action needed","body":"'"$body"'","options":["Fix Now","Later"]}' \
+        86400
+    local response; response=$(cat "$FIFO")
+    clear_block "$BLOCK_CONFIRM"
+
+    if [[ "$response" == "Fix Now" ]]; then
+        local fix_tid; fix_tid=$(task_id)
+        open_task "$fix_tid" "{Script Name} fix · $now"
+        append_message "$fix_tid" "user" "Fix the issues found."
+
+        local fix_output fix_rc
+        fix_output=$(do_fix 2>&1)
+        fix_rc=$?
+
+        append_message "$fix_tid" "assistant" \
+            "$( [[ $fix_rc -eq 0 ]] && echo 'Fix complete.' || echo "Fix failed: $fix_output" )"
+        open_task "$fix_tid" "{Script Name} fix · $now" \
+            "$( [[ $fix_rc -eq 0 ]] && echo 'completed' || echo 'failed' )"
+    fi
+}
+
+while true; do
+    check
+
+    runs=$((runs+1))
+    if $TEST_MODE && [[ $runs -ge 1 ]]; then
+        printf '[{script-name}] test mode complete\n' >&2
+        sleep 60; exit 0
+    fi
+    sleep "$interval"
+done
+```
+
+**Bash-specific rules:**
+- Always use `printf '%s\n'` not `echo` for JSON output — `echo` interprets escape sequences differently across systems
+- The FIFO pattern is required for async user responses — do not try to read stdin directly in the main loop
+- Shell commands used by the script must be declared in `permissions` in the manifest if they access the filesystem or network
+- Fallback if a command is missing: check with `command -v brew >/dev/null 2>&1 || { emit degraded status block; sleep "$interval"; continue; }`
+
+**A2A rules:**
+- **Every meaningful operation must open a task.** Checks, upgrades, scans, git operations — all get tasks. This is what drives the feed on iOS.
+- **Always append at least two messages:** `user` (what was requested) and `assistant` (what happened).
+- **Attach an artifact** whenever there is command output worth keeping — use `mktemp` for the file, write markdown to it, pass the path to `put_artifact`, then `rm -f` it.
+- **Close every task** by calling `open_task` again with `status` set to `completed` or `failed`. A task left in `working` state appears as stuck in the feed.
+- **task_id** must be unique per operation — use `uuidgen`. Re-using IDs across runs overwrites feed history.
+- **json_str** must wrap any user-supplied text (file paths, command output, package names) before interpolating into JSON to prevent broken payloads.
 
 ---
 
