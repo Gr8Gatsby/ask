@@ -55,6 +55,10 @@ struct OnboardingView: View {
     }
 
     private func requestNotifications() {
+        if notificationStatus == .denied {
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.notifications")!)
+            return
+        }
         Task {
             _ = try? await UNUserNotificationCenter.current()
                 .requestAuthorization(options: [.alert, .sound, .badge])
@@ -173,7 +177,7 @@ private struct PermissionsStep: View {
                     iconColor: .orange,
                     title: "Notifications",
                     subtitle: "Get alerted when scripts complete or need your attention.",
-                    actionLabel: notificationStatus == .authorized ? "Allowed ✓" : "Allow Notifications",
+                    actionLabel: notificationStatus == .authorized ? "Allowed ✓" : notificationStatus == .denied ? "Open Settings" : "Allow Notifications",
                     isGranted: notificationStatus == .authorized,
                     action: onRequestNotifications
                 )
