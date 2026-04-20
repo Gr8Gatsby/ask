@@ -1404,9 +1404,12 @@ struct ScriptDetailView: View {
                     .controlSize(.mini)
                     .tint(.orange)
                 } else if script.status == .pendingConsent {
-                    Text("Awaiting approval")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
+                    Button("Approve…") {
+                        scriptManager.reviewPermissions(scriptID: script.id)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                    .tint(.orange)
                 }
             }
 
