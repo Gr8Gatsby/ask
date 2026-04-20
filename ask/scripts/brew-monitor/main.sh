@@ -82,7 +82,7 @@ reader_loop() {
         fi
     done
 }
-reader_loop &
+reader_loop <&0 &
 READER_PID=$!
 
 TEST_MODE=false

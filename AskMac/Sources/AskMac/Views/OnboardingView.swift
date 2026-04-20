@@ -56,7 +56,7 @@ struct OnboardingView: View {
 
     private func requestNotifications() {
         if notificationStatus == .denied {
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.notifications")!)
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.notifications?id=com.kevinhill.askmac")!)
             return
         }
         Task {
@@ -177,7 +177,8 @@ private struct PermissionsStep: View {
                     iconColor: .orange,
                     title: "Notifications",
                     subtitle: "Get alerted when scripts complete or need your attention.",
-                    actionLabel: notificationStatus == .authorized ? "Allowed ✓" : notificationStatus == .denied ? "Open Settings" : "Allow Notifications",
+                    hint: nil,
+                    actionLabel: notificationStatus == .authorized ? "Allowed ✓" : notificationStatus == .denied ? "Open Settings" : "Allow",
                     isGranted: notificationStatus == .authorized,
                     action: onRequestNotifications
                 )
@@ -211,9 +212,17 @@ private struct PermissionRow: View {
     let iconColor: Color
     let title: String
     let subtitle: String
+    let hint: String?
     let actionLabel: String
     let isGranted: Bool
     let action: () -> Void
+
+    init(icon: String, iconColor: Color, title: String, subtitle: String,
+         hint: String? = nil, actionLabel: String, isGranted: Bool, action: @escaping () -> Void) {
+        self.icon = icon; self.iconColor = iconColor; self.title = title
+        self.subtitle = subtitle; self.hint = hint; self.actionLabel = actionLabel
+        self.isGranted = isGranted; self.action = action
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
@@ -221,20 +230,29 @@ private struct PermissionRow: View {
                 .font(.title2)
                 .foregroundStyle(iconColor)
                 .frame(width: 28)
+                .padding(.top, 2)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(title).fontWeight(.medium)
+                HStack(alignment: .firstTextBaseline) {
+                    Text(title).fontWeight(.medium)
+                    Spacer()
+                    Button(actionLabel, action: action)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(isGranted)
+                }
                 Text(subtitle)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let hint {
+                    Text(hint)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 2)
+                }
             }
-
-            Spacer()
-
-            Button(actionLabel, action: action)
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(isGranted)
         }
     }
 }

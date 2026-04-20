@@ -120,26 +120,23 @@ final class AppSettings {
         if let path = defaults.string(forKey: Key.vaultPath) {
             self.vaultPath = URL(fileURLWithPath: path)
         } else {
-            let defaultURL: URL = {
-                #if DEBUG
-                // In debug builds default to the repo's ask/scripts so dev and prod
-                // vaults stay separate and onboarding can be tested cleanly.
-                let sourceFile = URL(fileURLWithPath: #file)
-                let repoRoot = sourceFile
-                    .deletingLastPathComponent() // Settings
-                    .deletingLastPathComponent() // AskMac (module)
-                    .deletingLastPathComponent() // Sources
-                    .deletingLastPathComponent() // AskMac (project)
-                let devVault = repoRoot.appendingPathComponent("ask/dev-vault")
-                if FileManager.default.fileExists(atPath: devVault.path) {
-                    return devVault
-                }
-                #endif
-                return FileManager.default.homeDirectoryForCurrentUser
-                    .appendingPathComponent(".ask/scripts")
-            }()
-            self.vaultPath = defaultURL
-            defaults.set(defaultURL.path, forKey: Key.vaultPath)
+            let fallback = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".ask/scripts")
+            self.vaultPath = fallback
+            defaults.set(fallback.path, forKey: Key.vaultPath)
+        }
+
+        // In dev builds, override vault to ~/.ask/dev-vault in memory only.
+        // Using ~/.ask/ avoids TCC prompts that fire when accessing ~/Documents/.
+        // Debug and prod share the same UserDefaults domain (same bundle ID), so we
+        // must not write this override to disk.
+        let exe = CommandLine.arguments.first ?? ""
+        if exe.contains("DerivedData") || exe.contains("/.build/") {
+            let devVault = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".ask/dev-vault")
+            if FileManager.default.fileExists(atPath: devVault.path) {
+                self.vaultPath = devVault
+            }
         }
 
         let storedDisabled = defaults.stringArray(forKey: Key.disabledScripts) ?? []
@@ -147,14 +144,12 @@ final class AppSettings {
 
         self.feedScheduleOverrides = (defaults.dictionary(forKey: Key.feedScheduleOverrides) as? [String: String]) ?? [:]
 
-        // Debug builds default to false so bundled scripts don't interfere with onboarding testing.
+        // Dev builds default to false so bundled scripts don't interfere with onboarding testing.
         // Release builds default to true so scripts load out of the box.
         if defaults.object(forKey: Key.usesBundledScripts) == nil {
-            #if DEBUG
-            defaults.set(false, forKey: Key.usesBundledScripts)
-            #else
-            defaults.set(true, forKey: Key.usesBundledScripts)
-            #endif
+            let exe = CommandLine.arguments.first ?? ""
+            let isDevBuild = exe.contains("DerivedData") || exe.contains("/.build/")
+            defaults.set(!isDevBuild, forKey: Key.usesBundledScripts)
         }
         self.usesBundledScripts = defaults.bool(forKey: Key.usesBundledScripts)
 
@@ -164,7 +159,10 @@ final class AppSettings {
         self.brandColorOverrides = (defaults.dictionary(forKey: Key.brandColorOverrides) as? [String: String]) ?? [:]
         self.svgOverrides = (defaults.dictionary(forKey: Key.svgOverrides) as? [String: String]) ?? [:]
         self.pinnedScripts = defaults.stringArray(forKey: Key.pinnedScripts) ?? []
-        self.hasSeenOnboarding = defaults.bool(forKey: Key.hasSeenOnboarding)
+        // Dev builds always start with onboarding unseen so it can be tested repeatedly.
+        let isDevExe = (CommandLine.arguments.first ?? "").contains("DerivedData")
+            || (CommandLine.arguments.first ?? "").contains("/.build/")
+        self.hasSeenOnboarding = isDevExe ? false : defaults.bool(forKey: Key.hasSeenOnboarding)
     }
 
     func isDepCheckSkipped(scriptID: String, depID: String) -> Bool {
