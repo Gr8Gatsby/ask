@@ -28,6 +28,16 @@ struct MenuBarView: View {
                 .padding(12)
         }
         .frame(width: 360)
+        .sheet(item: Binding(
+            get: { scriptManager.scriptPendingConsent },
+            set: { _ in }
+        )) { consent in
+            PermissionConsentView(
+                consent: consent,
+                onAllow: { scriptManager.approvePermissions(scriptID: consent.scriptID) },
+                onDeny:  { scriptManager.denyPermissions(scriptID: consent.scriptID) }
+            )
+        }
         .onAppear {
             #if DEBUG
             if MacUITestingSupport.isUITesting {
@@ -65,7 +75,10 @@ struct MenuBarView: View {
 
     private var statusColor: Color {
         if !settings.isConfigured { return .orange }
-        if scriptManager.scripts.contains(where: { $0.status == .crashed || $0.status == .missingDependencies }) { return .orange }
+        if scriptManager.scripts.contains(where: {
+            $0.status == .crashed || $0.status == .missingDependencies ||
+            $0.status == .permissionDenied || $0.status == .pendingConsent
+        }) { return .orange }
         if scriptManager.scripts.contains(where: { $0.status == .running }) { return .green }
         return .secondary
     }
@@ -88,6 +101,33 @@ struct MenuBarView: View {
 
     private var scriptsSection: some View {
         VStack(alignment: .leading, spacing: 6) {
+            // Migration banner — shown once after permissions enforcement is enabled
+            if settings.showPermissionMigrationBanner {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.shield")
+                        .font(.caption)
+                        .foregroundStyle(.blue)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Script permissions updated")
+                            .font(.caption).fontWeight(.medium)
+                        Text("Existing scripts were granted their declared permissions.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button {
+                        settings.showPermissionMigrationBanner = false
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(8)
+                .background(Color.blue.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
             // Section header
             HStack {
                 Text(hasPins ? "Pinned" : "Scripts")
@@ -292,7 +332,7 @@ private struct ScriptTile: View {
     private var statusDot: some View {
         if script.status == .crashed {
             Circle().fill(Color.red).frame(width: 8, height: 8)
-        } else if script.status == .missingDependencies {
+        } else if script.status == .missingDependencies || script.status == .permissionDenied || script.status == .pendingConsent {
             Circle().fill(Color.orange).frame(width: 8, height: 8)
         } else if script.isEnabled {
             let isActive = scriptManager.activeBlocks[script.id]?.isEmpty == false
@@ -383,6 +423,14 @@ private struct ScriptRow: View {
                 .foregroundStyle(.red)
         } else if script.status == .missingDependencies {
             Image(systemName: "wrench.and.screwdriver")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        } else if script.status == .permissionDenied {
+            Image(systemName: "lock.slash")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        } else if script.status == .pendingConsent {
+            Image(systemName: "lock.badge.clock")
                 .font(.caption)
                 .foregroundStyle(.orange)
         } else if script.lastEmitTime != nil {

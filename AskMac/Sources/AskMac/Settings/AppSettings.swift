@@ -16,6 +16,10 @@ final class AppSettings {
         static let brandColorOverrides = "brandColorOverrides"
         static let svgOverrides = "svgOverrides"
         static let pinnedScripts = "pinnedScripts"
+        static let grantedPermissions = "grantedPermissions"
+        static let deniedScriptIDs = "deniedScriptIDs"
+        static let permissionsMigrationDone = "permissionsMigrationDone"
+        static let showPermissionMigrationBanner = "showPermissionMigrationBanner"
         static let hasSeenOnboarding = "hasSeenOnboarding"
     }
 
@@ -65,6 +69,26 @@ final class AppSettings {
     /// Ordered list of pinned script IDs shown in the menu bar panel (max 5).
     var pinnedScripts: [String] {
         didSet { defaults.set(pinnedScripts, forKey: Key.pinnedScripts) }
+    }
+
+    /// Per-script granted permission tokens. Keys are script IDs, values are arrays of token strings.
+    var grantedPermissions: [String: [String]] {
+        didSet { defaults.set(grantedPermissions, forKey: Key.grantedPermissions) }
+    }
+
+    /// Script IDs where the user explicitly denied permissions.
+    var deniedScriptIDs: Set<String> {
+        didSet { defaults.set(Array(deniedScriptIDs), forKey: Key.deniedScriptIDs) }
+    }
+
+    /// True after the one-time migration that auto-grants permissions for existing scripts.
+    var permissionsMigrationDone: Bool {
+        didSet { defaults.set(permissionsMigrationDone, forKey: Key.permissionsMigrationDone) }
+    }
+
+    /// True until the user dismisses the one-time migration notice in the popover.
+    var showPermissionMigrationBanner: Bool {
+        didSet { defaults.set(showPermissionMigrationBanner, forKey: Key.showPermissionMigrationBanner) }
     }
 
     var hasSeenOnboarding: Bool {
@@ -159,6 +183,12 @@ final class AppSettings {
         self.brandColorOverrides = (defaults.dictionary(forKey: Key.brandColorOverrides) as? [String: String]) ?? [:]
         self.svgOverrides = (defaults.dictionary(forKey: Key.svgOverrides) as? [String: String]) ?? [:]
         self.pinnedScripts = defaults.stringArray(forKey: Key.pinnedScripts) ?? []
+
+        self.grantedPermissions = (defaults.dictionary(forKey: Key.grantedPermissions) as? [String: [String]]) ?? [:]
+        self.deniedScriptIDs = Set(defaults.stringArray(forKey: Key.deniedScriptIDs) ?? [])
+        self.permissionsMigrationDone = defaults.bool(forKey: Key.permissionsMigrationDone)
+        self.showPermissionMigrationBanner = defaults.bool(forKey: Key.showPermissionMigrationBanner)
+
         // Dev builds always start with onboarding unseen so it can be tested repeatedly.
         let isDevExe = (CommandLine.arguments.first ?? "").contains("DerivedData")
             || (CommandLine.arguments.first ?? "").contains("/.build/")
@@ -214,5 +244,27 @@ final class AppSettings {
             feedScheduleOverrides.removeValue(forKey: scriptID)
         }
         defaults.set(feedScheduleOverrides, forKey: Key.feedScheduleOverrides)
+    }
+
+    // MARK: - Script permissions
+
+    func permissionsGranted(for scriptID: String) -> Set<String> {
+        Set(grantedPermissions[scriptID] ?? [])
+    }
+
+    func grantPermissions(_ permissions: [String], for scriptID: String) {
+        var existing = Set(grantedPermissions[scriptID] ?? [])
+        existing.formUnion(permissions)
+        grantedPermissions[scriptID] = Array(existing)
+        deniedScriptIDs.remove(scriptID)
+    }
+
+    func denyScript(_ scriptID: String) {
+        deniedScriptIDs.insert(scriptID)
+    }
+
+    func resetScriptPermissions(for scriptID: String) {
+        grantedPermissions.removeValue(forKey: scriptID)
+        deniedScriptIDs.remove(scriptID)
     }
 }

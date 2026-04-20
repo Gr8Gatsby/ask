@@ -1668,6 +1668,8 @@ private struct ScriptSidebarRow: View {
         case .crashed:              .red
         case .missingDependencies:  .orange
         case .needsSetup:           .orange
+        case .pendingConsent:       .orange
+        case .permissionDenied:     .orange
         case .starting:             .yellow
         case .stopped:              Color(.tertiaryLabelColor)
         }

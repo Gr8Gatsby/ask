@@ -87,12 +87,13 @@ struct ScriptManifest: Codable {
     let setup: String?              // relative path to setup script (e.g. "setup.py")
     let config: [ScriptConfigItem]? // configuration values the script needs
     let timeoutSeconds: Int?        // feed script max runtime in seconds (default 300)
+    let permissions: [String]?      // capability tokens the script declares
 
     var isFeed: Bool   { type == "feed" }
     var isSystem: Bool { type == "system" }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, version, description, entry, icon, type, schedule, requires, tools, setup, config
+        case id, name, version, description, entry, icon, type, schedule, requires, tools, setup, config, permissions
         case iconFile       = "icon_file"
         case timeoutSeconds = "timeout_seconds"
     }
@@ -129,6 +130,7 @@ struct ManagedScript: Identifiable, InstalledScript {
     var setupCheckRunning: Bool = false        // true while --check is in flight
     var stderrLog: [String] = []              // last 50 lines of stderr from most recent run
     var isBundled: Bool = false               // true if the script lives in the app bundle
+    var permissions: [String] = []           // capability tokens declared in manifest
 
     var hasSetup: Bool { setupScript != nil || !configItems.isEmpty }
     var needsSetup: Bool {
@@ -141,7 +143,7 @@ struct ManagedScript: Identifiable, InstalledScript {
     }
 
     enum ScriptStatus {
-        case starting, running, crashed, stopped, missingDependencies, needsSetup
+        case starting, running, crashed, stopped, missingDependencies, needsSetup, pendingConsent, permissionDenied
 
         var label: String {
             switch self {
@@ -151,9 +153,22 @@ struct ManagedScript: Identifiable, InstalledScript {
             case .stopped:              "Stopped"
             case .missingDependencies:  "Missing dependencies"
             case .needsSetup:           "Needs setup"
+            case .pendingConsent:       "Awaiting approval"
+            case .permissionDenied:     "Permission denied"
             }
         }
     }
+}
+
+// MARK: - Permission consent
+
+struct PendingConsent: Identifiable {
+    var id: String { scriptID }
+    let scriptID: String
+    let scriptName: String
+    let icon: String?
+    let permissions: [String]
+    let scriptDir: URL
 }
 
 // MARK: - Manager
@@ -203,6 +218,10 @@ final class ScriptManager: @unchecked Sendable {
     // Install lock: reload() defers while an install is in progress
     private var installLockCount = 0
     private var pendingReload = false
+
+    // Permission consent — shown one at a time, others queued
+    var scriptPendingConsent: PendingConsent?
+    private var consentQueue: [PendingConsent] = []
 
     // In-flight dep-check guard: prevents double-launch when reload() fires twice
     // rapidly (e.g. endInstall + stale file-watcher debounce both calling reload()).
@@ -380,6 +399,11 @@ final class ScriptManager: @unchecked Sendable {
     // MARK: - Private
 
     func disableScript(id: String) {
+        if scriptPendingConsent?.scriptID == id {
+            advanceConsentQueue()
+        } else {
+            consentQueue.removeAll { $0.scriptID == id }
+        }
         let name = scripts.first(where: { $0.id == id })?.name ?? id
         settings.setScriptEnabled(id, enabled: false)
         if let idx = scripts.firstIndex(where: { $0.id == id }) {
@@ -526,6 +550,8 @@ final class ScriptManager: @unchecked Sendable {
     }
 
     func enableScript(id: String) {
+        // Clear any prior denial so the consent sheet re-appears on next launch attempt
+        settings.deniedScriptIDs.remove(id)
         launchingScripts.remove(id)  // Clear stale guard from any previous failed launch
         let name = scripts.first(where: { $0.id == id })?.name ?? id
         settings.setScriptEnabled(id, enabled: true)
@@ -662,6 +688,24 @@ final class ScriptManager: @unchecked Sendable {
                     allDirs.append((dir, manifestURL))
                 }
             }
+        }
+
+        // One-time migration: auto-grant all permissions for scripts that were already installed.
+        // This preserves the existing running state of scripts that pre-date permission enforcement.
+        if !settings.permissionsMigrationDone {
+            var migrated = false
+            for (dir, _) in allDirs {
+                guard let data = try? Data(contentsOf: dir.appendingPathComponent("manifest.json")),
+                      let manifest = try? JSONDecoder().decode(ScriptManifest.self, from: data)
+                else { continue }
+                let enforceable = (manifest.permissions ?? []).filter { $0 != "notifications" }
+                if !enforceable.isEmpty {
+                    settings.grantPermissions(enforceable, for: manifest.id)
+                    migrated = true
+                }
+            }
+            settings.permissionsMigrationDone = true
+            if migrated { settings.showPermissionMigrationBanner = true }
         }
 
         for (dir, _) in allDirs {
@@ -1121,6 +1165,8 @@ final class ScriptManager: @unchecked Sendable {
         launchingScripts.insert(manifest.id)
         Task { @MainActor in
             defer { self.launchingScripts.remove(manifest.id) }
+            guard !self.settings.disabledScripts.contains(manifest.id) else { return }
+            if self.checkAndHandlePermissions(manifest: manifest, scriptDir: scriptDir) { return }
             let failed = await checkDependencies(manifest)
             guard !self.settings.disabledScripts.contains(manifest.id) else { return }
             if !failed.isEmpty {
@@ -1140,6 +1186,8 @@ final class ScriptManager: @unchecked Sendable {
         launchingScripts.insert(manifest.id)
         Task { @MainActor in
             defer { self.launchingScripts.remove(manifest.id) }
+            guard !self.settings.disabledScripts.contains(manifest.id) else { return }
+            if self.checkAndHandlePermissions(manifest: manifest, scriptDir: scriptDir) { return }
             let failed = await checkDependencies(manifest)
             guard !self.settings.disabledScripts.contains(manifest.id) else { return }
             if !failed.isEmpty {
@@ -1149,6 +1197,82 @@ final class ScriptManager: @unchecked Sendable {
                 self.launchFeedRun(manifest: manifest, scriptDir: scriptDir)
             }
         }
+    }
+
+    /// Returns true if the script is blocked on permissions (denied or needs consent), false if clear to proceed.
+    @discardableResult
+    private func checkAndHandlePermissions(manifest: ScriptManifest, scriptDir: URL) -> Bool {
+        let enforceable = (manifest.permissions ?? []).filter { $0 != "notifications" }
+        guard !enforceable.isEmpty else { return false }
+
+        if settings.deniedScriptIDs.contains(manifest.id) {
+            handlePermissionDenied(manifest: manifest)
+            return true
+        }
+        let granted = settings.permissionsGranted(for: manifest.id)
+        if !enforceable.allSatisfy({ granted.contains($0) }) {
+            pendConsent(manifest: manifest, permissions: enforceable, scriptDir: scriptDir)
+            return true
+        }
+        return false
+    }
+
+    private func pendConsent(manifest: ScriptManifest, permissions: [String], scriptDir: URL) {
+        let iconImage = manifests[manifest.id]?.icon
+        upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage,
+                     status: .pendingConsent, isEnabled: true)
+        let consent = PendingConsent(scriptID: manifest.id, scriptName: manifest.name,
+                                     icon: manifest.icon, permissions: permissions, scriptDir: scriptDir)
+        if scriptPendingConsent == nil {
+            scriptPendingConsent = consent
+        } else {
+            consentQueue.append(consent)
+        }
+    }
+
+    private func handlePermissionDenied(manifest: ScriptManifest) {
+        let iconImage = manifests[manifest.id]?.icon
+        upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon, iconImage: iconImage,
+                     status: .permissionDenied, isEnabled: true)
+        logger.error("\(manifest.id): permission denied by user")
+    }
+
+    private func advanceConsentQueue() {
+        scriptPendingConsent = consentQueue.isEmpty ? nil : consentQueue.removeFirst()
+    }
+
+    func approvePermissions(scriptID: String) {
+        guard let consent = scriptPendingConsent, consent.scriptID == scriptID else {
+            advanceConsentQueue()
+            return
+        }
+        settings.grantPermissions(consent.permissions, for: scriptID)
+        advanceConsentQueue()
+        if let entry = manifests[scriptID] {
+            launchingScripts.remove(scriptID)
+            if entry.manifest.isFeed {
+                launchFeedRunWithDepCheck(manifest: entry.manifest, scriptDir: entry.dir)
+            } else {
+                launchWithDepCheck(manifest: entry.manifest, scriptDir: entry.dir)
+            }
+        }
+    }
+
+    func denyPermissions(scriptID: String) {
+        advanceConsentQueue()
+        settings.denyScript(scriptID)
+        if let entry = manifests[scriptID] {
+            handlePermissionDenied(manifest: entry.manifest)
+        }
+    }
+
+    func reviewPermissions(scriptID: String) {
+        guard let entry = manifests[scriptID] else { return }
+        let perms = (entry.manifest.permissions ?? []).filter { $0 != "notifications" }
+        guard !perms.isEmpty else { return }
+        settings.resetScriptPermissions(for: scriptID)
+        launchingScripts.remove(scriptID)
+        pendConsent(manifest: entry.manifest, permissions: perms, scriptDir: entry.dir)
     }
 
     // MARK: - System script lifecycle
@@ -1408,7 +1532,8 @@ final class ScriptManager: @unchecked Sendable {
                 manifestPath: dir.map { $0.appendingPathComponent("manifest.json") },
                 setupScript: manifest?.setup,
                 configItems: manifest?.config ?? [],
-                isBundled: isBundled
+                isBundled: isBundled,
+                permissions: manifest?.permissions ?? []
             ))
         }
     }
