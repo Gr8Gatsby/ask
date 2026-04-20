@@ -2208,6 +2208,17 @@ struct SettingsSheetView: View {
                             .foregroundStyle(cloudKit.accountStatus == .available ? .green : .orange)
                             .font(.caption)
                     }
+                    LabeledContent("iCloud Account") {
+                        if let fp = cloudKit.userRecordFingerprint {
+                            Text(fp)
+                                .foregroundStyle(.secondary)
+                                .font(.system(.caption, design: .monospaced))
+                        } else {
+                            Text(cloudKit.accountStatus == .available ? "Fetching…" : "—")
+                                .foregroundStyle(.tertiary)
+                                .font(.caption)
+                        }
+                    }
                     LabeledContent("Container") {
                         Text(CKSchema.containerID)
                             .foregroundStyle(.secondary)
@@ -2222,6 +2233,22 @@ struct SettingsSheetView: View {
                     }
                     if let err = cloudKit.lastError {
                         LabeledContent("Last Error") {
+                            Text(err.localizedDescription)
+                                .foregroundStyle(.red)
+                                .font(.caption2)
+                                .multilineTextAlignment(.trailing)
+                        }
+                    }
+                    LabeledContent("Machines Found") {
+                        if let count = cloudKit.lastFetchCount {
+                            Text("\(count)")
+                                .foregroundStyle(count == 0 ? .orange : .secondary)
+                        } else {
+                            Text("—").foregroundStyle(.tertiary)
+                        }
+                    }
+                    if let err = cloudKit.lastFetchError {
+                        LabeledContent("Fetch Error") {
                             Text(err.localizedDescription)
                                 .foregroundStyle(.red)
                                 .font(.caption2)

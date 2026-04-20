@@ -14,6 +14,8 @@ final class CloudKitService {
     private var cachedRecords: [String: CKRecord] = [:]
 
     private(set) var accountStatus: CKAccountStatus = .couldNotDetermine
+    /// Last 6 chars of the CloudKit user record ID — same value on every device on the same Apple ID.
+    private(set) var userRecordFingerprint: String?
 
     init() {
         self.container = CKContainer(identifier: CKSchema.containerID)
@@ -27,10 +29,17 @@ final class CloudKitService {
         do {
             accountStatus = try await container.accountStatus()
             logger.info("iCloud account status: \(self.accountStatus.rawValue)")
+            if accountStatus == .available { await fetchUserFingerprint() }
         } catch {
             accountStatus = .couldNotDetermine
             logger.error("iCloud account status check failed: \(error)")
         }
+    }
+
+    private func fetchUserFingerprint() async {
+        guard let recordID = try? await container.userRecordID() else { return }
+        userRecordFingerprint = "…" + String(recordID.recordName.suffix(6))
+        logger.info("CloudKit user record fingerprint: \(self.userRecordFingerprint ?? "nil")")
     }
 
     // MARK: - Machine

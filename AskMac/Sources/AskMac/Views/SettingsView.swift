@@ -1890,6 +1890,17 @@ private struct MachineDetailView: View {
                 .controlSize(.small)
             }
             Section("Diagnostics") {
+                LabeledContent("iCloud Account") {
+                    if let fp = cloudKit.userRecordFingerprint {
+                        Text(fp)
+                            .foregroundStyle(.secondary)
+                            .font(.system(.caption, design: .monospaced))
+                    } else {
+                        Text(cloudKit.accountStatus == .available ? "Fetching…" : "—")
+                            .foregroundStyle(.tertiary)
+                            .font(.caption)
+                    }
+                }
                 LabeledContent("Machine ID") {
                     Text(settings.machineID)
                         .foregroundStyle(.secondary)
