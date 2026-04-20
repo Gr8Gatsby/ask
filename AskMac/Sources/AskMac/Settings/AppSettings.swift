@@ -20,6 +20,7 @@ final class AppSettings {
         static let deniedScriptIDs = "deniedScriptIDs"
         static let permissionsMigrationDone = "permissionsMigrationDone"
         static let showPermissionMigrationBanner = "showPermissionMigrationBanner"
+        static let nudgeDismissed = "nudgeDismissed"
         static let hasSeenOnboarding = "hasSeenOnboarding"
     }
 
@@ -89,6 +90,11 @@ final class AppSettings {
     /// True until the user dismisses the one-time migration notice in the popover.
     var showPermissionMigrationBanner: Bool {
         didSet { defaults.set(showPermissionMigrationBanner, forKey: Key.showPermissionMigrationBanner) }
+    }
+
+    /// True once the user dismisses the post-onboarding "Add more scripts" nudge.
+    var nudgeDismissed: Bool {
+        didSet { defaults.set(nudgeDismissed, forKey: Key.nudgeDismissed) }
     }
 
     var hasSeenOnboarding: Bool {
@@ -188,6 +194,7 @@ final class AppSettings {
         self.deniedScriptIDs = Set(defaults.stringArray(forKey: Key.deniedScriptIDs) ?? [])
         self.permissionsMigrationDone = defaults.bool(forKey: Key.permissionsMigrationDone)
         self.showPermissionMigrationBanner = defaults.bool(forKey: Key.showPermissionMigrationBanner)
+        self.nudgeDismissed = defaults.bool(forKey: Key.nudgeDismissed)
 
         // Dev builds always start with onboarding unseen so it can be tested repeatedly.
         let isDevExe = (CommandLine.arguments.first ?? "").contains("DerivedData")

@@ -22,6 +22,14 @@ struct MenuBarView: View {
                 .padding(.top, 10)
                 .padding(.bottom, 8)
 
+            if shouldShowNudge {
+                Divider()
+
+                nudgeSection
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+            }
+
             Divider()
 
             footer
@@ -190,6 +198,56 @@ struct MenuBarView: View {
                 .padding(.top, 2)
             }
         }
+    }
+
+    // MARK: - Nudge
+
+    private var shouldShowNudge: Bool {
+        guard !settings.nudgeDismissed else { return false }
+        let nonSystem = scriptManager.scripts.filter { !$0.isSystem }
+        return nonSystem.count == 1 && nonSystem.first?.id == "hello-world"
+    }
+
+    private var nudgeSection: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "sparkles")
+                .font(.body)
+                .foregroundStyle(.purple)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Add or make more scripts!")
+                    .font(.caption).fontWeight(.medium)
+                HStack(spacing: 6) {
+                    Button("Add Scripts") {
+                        openWindow(id: "scripts")
+                        dismiss()
+                        activateAskWindow()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+
+                    Button("Make One") {}
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                        .disabled(true)
+                }
+                .padding(.top, 2)
+            }
+
+            Spacer()
+
+            Button {
+                settings.nudgeDismissed = true
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(10)
+        .background(Color.purple.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     // MARK: - Footer
