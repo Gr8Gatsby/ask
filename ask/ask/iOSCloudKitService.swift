@@ -9,6 +9,12 @@ final class iOSCloudKitService {
     private let database: CKDatabase
 
     private(set) var accountStatus: CKAccountStatus = .couldNotDetermine
+    private(set) var lastCheckTime: Date?
+    private(set) var lastError: Error?
+    /// Last 6 chars of the CloudKit user record ID — same value on every device on the same Apple ID.
+    private(set) var userRecordFingerprint: String?
+    private(set) var lastFetchCount: Int?
+    private(set) var lastFetchError: Error?
 
     init() {
         self.container = CKContainer(identifier: CKSchema.containerID)
@@ -19,26 +25,45 @@ final class iOSCloudKitService {
 
     func checkAccountStatus() async {
         if UITestingSupport.isUITesting { accountStatus = .available; return }
+        lastCheckTime = Date()
         do {
             accountStatus = try await container.accountStatus()
+            if accountStatus == .available {
+                lastError = nil
+                await fetchUserFingerprint()
+            }
         } catch {
             accountStatus = .couldNotDetermine
+            lastError = error
         }
+    }
+
+    private func fetchUserFingerprint() async {
+        guard let recordID = try? await container.userRecordID() else { return }
+        userRecordFingerprint = "…" + String(recordID.recordName.suffix(6))
     }
 
     // MARK: - Machines
 
     func fetchMachines() async throws -> [AskMachine] {
         if UITestingSupport.isUITesting { return UITestingSupport.machines }
-        let query = CKQuery(
-            recordType: CKSchema.RecordType.machine,
-            predicate: NSPredicate(value: true)
-        )
-        let (results, _) = try await database.records(matching: query, resultsLimit: 50)
-        return results.compactMap { _, result in
-            guard let record = try? result.get() else { return nil }
-            return AskMachine(record: record)
-        }.sorted { $0.name < $1.name }
+        do {
+            let query = CKQuery(
+                recordType: CKSchema.RecordType.machine,
+                predicate: NSPredicate(value: true)
+            )
+            let (results, _) = try await database.records(matching: query, resultsLimit: 50)
+            let machines = results.compactMap { _, result in
+                guard let record = try? result.get() else { return nil as AskMachine? }
+                return AskMachine(record: record)
+            }.sorted { $0.name < $1.name }
+            lastFetchCount = machines.count
+            lastFetchError = nil
+            return machines
+        } catch {
+            lastFetchError = error
+            throw error
+        }
     }
 
     func fetchMachine(machineID: String) async throws -> AskMachine? {

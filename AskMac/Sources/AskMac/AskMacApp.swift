@@ -181,6 +181,14 @@ struct MenuBarLabel: View {
             .symbolEffect(.pulse, isActive: hasActiveScripts)
             .task {
                 guard !settings.hasSeenOnboarding else { return }
+                // If hello-world is already in the vault, onboarding is already done.
+                // Guards against: dev builds (always reset flag), cleared UserDefaults,
+                // and onboarding windows that were dismissed before completing.
+                if let vault = settings.vaultPath,
+                   FileManager.default.fileExists(atPath: vault.appendingPathComponent("hello-world/manifest.json").path) {
+                    settings.hasSeenOnboarding = true
+                    return
+                }
                 openWindow(id: "onboarding")
             }
     }

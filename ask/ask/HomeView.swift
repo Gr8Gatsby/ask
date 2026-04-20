@@ -286,7 +286,8 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if cloudKit.accountStatus == .noAccount || cloudKit.accountStatus == .restricted {
+                if cloudKit.accountStatus == .noAccount || cloudKit.accountStatus == .restricted
+                    || (cloudKit.accountStatus == .temporarilyUnavailable) {
                     iCloudSignInState
                 } else if !hasLoaded {
                     // Empty view — the loading overlay is shown via .overlay below
@@ -667,10 +668,32 @@ struct HomeView: View {
     // MARK: - Empty / error states
 
     private var iCloudSignInState: some View {
-        ContentUnavailableView {
-            Label("Sign in to iCloud", systemImage: "icloud")
+        let isRestricted = cloudKit.accountStatus == .restricted
+        return ContentUnavailableView {
+            Label(isRestricted ? "iCloud Restricted" : "iCloud Unavailable", systemImage: isRestricted ? "lock.icloud" : "icloud.slash")
         } description: {
-            Text("Sign into your Apple iCloud account to automatically discover devices.\n\nGo to Settings → [your name] → iCloud.")
+            VStack(spacing: 10) {
+                if isRestricted {
+                    Text("iCloud access is restricted on this device, likely by Screen Time or a device management profile.")
+                } else {
+                    Text("Make sure you're signed in to iCloud **and** that iCloud Drive is enabled.")
+                        .multilineTextAlignment(.center)
+                    Text("Settings → [your name] → iCloud → iCloud Drive")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                if let t = cloudKit.lastCheckTime {
+                    Text("Last checked \(t, style: .relative)")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                if let err = cloudKit.lastError {
+                    Text(err.localizedDescription)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                }
+            }
         } actions: {
             Button("Open Settings") {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
@@ -678,6 +701,16 @@ struct HomeView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
+            Button("Try Again") {
+                Task { await cloudKit.checkAccountStatus() }
+            }
+            .buttonStyle(.bordered)
+        }
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                await cloudKit.checkAccountStatus()
+            }
         }
     }
 
@@ -2170,6 +2203,61 @@ struct SettingsSheetView: View {
 
                 Section("Developer") {
                     Toggle("Show Debug Info on Cards", isOn: $showDebugInfo)
+                    LabeledContent("iCloud Status") {
+                        Text(cloudKit.accountStatus.displayName)
+                            .foregroundStyle(cloudKit.accountStatus == .available ? .green : .orange)
+                            .font(.caption)
+                    }
+                    LabeledContent("iCloud Account") {
+                        if let fp = cloudKit.userRecordFingerprint {
+                            Text(fp)
+                                .foregroundStyle(.secondary)
+                                .font(.system(.caption, design: .monospaced))
+                        } else {
+                            Text(cloudKit.accountStatus == .available ? "Fetching…" : "—")
+                                .foregroundStyle(.tertiary)
+                                .font(.caption)
+                        }
+                    }
+                    LabeledContent("Container") {
+                        Text(CKSchema.containerID)
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                    }
+                    if let t = cloudKit.lastCheckTime {
+                        LabeledContent("Last Checked") {
+                            Text(t, style: .relative)
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        }
+                    }
+                    if let err = cloudKit.lastError {
+                        LabeledContent("Last Error") {
+                            Text(err.localizedDescription)
+                                .foregroundStyle(.red)
+                                .font(.caption2)
+                                .multilineTextAlignment(.trailing)
+                        }
+                    }
+                    LabeledContent("Machines Found") {
+                        if let count = cloudKit.lastFetchCount {
+                            Text("\(count)")
+                                .foregroundStyle(count == 0 ? .orange : .secondary)
+                        } else {
+                            Text("—").foregroundStyle(.tertiary)
+                        }
+                    }
+                    if let err = cloudKit.lastFetchError {
+                        LabeledContent("Fetch Error") {
+                            Text(err.localizedDescription)
+                                .foregroundStyle(.red)
+                                .font(.caption2)
+                                .multilineTextAlignment(.trailing)
+                        }
+                    }
+                    Button("Re-check iCloud") {
+                        Task { await cloudKit.checkAccountStatus() }
+                    }
                     LabeledContent("CloudKit Environment") {
                         #if DEBUG
                         Text("Development")

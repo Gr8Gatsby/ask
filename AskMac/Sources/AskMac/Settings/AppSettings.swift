@@ -195,11 +195,7 @@ final class AppSettings {
         self.permissionsMigrationDone = defaults.bool(forKey: Key.permissionsMigrationDone)
         self.showPermissionMigrationBanner = defaults.bool(forKey: Key.showPermissionMigrationBanner)
         self.nudgeDismissed = defaults.bool(forKey: Key.nudgeDismissed)
-
-        // Dev builds always start with onboarding unseen so it can be tested repeatedly.
-        let isDevExe = (CommandLine.arguments.first ?? "").contains("DerivedData")
-            || (CommandLine.arguments.first ?? "").contains("/.build/")
-        self.hasSeenOnboarding = isDevExe ? false : defaults.bool(forKey: Key.hasSeenOnboarding)
+        self.hasSeenOnboarding = defaults.bool(forKey: Key.hasSeenOnboarding)
     }
 
     func isDepCheckSkipped(scriptID: String, depID: String) -> Bool {
