@@ -366,14 +366,14 @@ struct CatalogEntryRow: View {
         HStack(spacing: 12) {
             // Icon
             Group {
-                if let img = installedScript?.iconImage {
+                if let img = installedScript?.iconImage ?? catalogIconImage {
                     Image(nsImage: img)
                         .resizable()
                         .scaledToFit()
                         .grayscale(isInstalled && !hasUpdate ? 0.6 : 0)
                         .opacity(isInstalled && !hasUpdate ? 0.5 : 1)
                 } else {
-                    Image(systemName: "shippingbox")
+                    Image(systemName: entry.icon ?? "shippingbox")
                         .font(.title2)
                         .foregroundStyle(isInstalled && !hasUpdate ? Color.secondary.opacity(0.4) : .secondary)
                 }
@@ -456,6 +456,11 @@ struct CatalogEntryRow: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    private var catalogIconImage: NSImage? {
+        guard let svg = entry.svg, let data = svg.data(using: .utf8) else { return nil }
+        return NSImage(data: data)
     }
 
     private var typeBadge: some View {

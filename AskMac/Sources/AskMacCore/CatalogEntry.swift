@@ -19,6 +19,8 @@ public struct CatalogEntry: Identifiable, Decodable {
     public let version: String
     public let description: String
     public let icon: String?
+    /// Raw SVG markup embedded from the script's icon_file, if present.
+    public let svg: String?
     public let type: String?
     public let changelog: String?
     public let downloadURL: URL
@@ -30,18 +32,19 @@ public struct CatalogEntry: Identifiable, Decodable {
     public let requires: [CatalogRequirement]?
 
     public enum CodingKeys: String, CodingKey {
-        case id, name, version, description, icon, type, changelog, permissions, requires
+        case id, name, version, description, icon, svg, type, changelog, permissions, requires
         case downloadURL = "download_url"
     }
 
     public init(id: String, name: String, version: String, description: String,
-                icon: String?, type: String?, changelog: String?, downloadURL: URL,
+                icon: String?, svg: String? = nil, type: String?, changelog: String?, downloadURL: URL,
                 permissions: [String]? = nil, requires: [CatalogRequirement]? = nil) {
         self.id = id
         self.name = name
         self.version = version
         self.description = description
         self.icon = icon
+        self.svg = svg
         self.type = type
         self.changelog = changelog
         self.downloadURL = downloadURL
