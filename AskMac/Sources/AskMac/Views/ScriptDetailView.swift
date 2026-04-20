@@ -345,42 +345,16 @@ struct ScriptDetailView: View {
                 .buttonStyle(.plain)
                 .help("Reveal in Finder")
 
-                if hasBrand {
-                    Button {
-                        withAnimation(.spring(duration: 0.5)) { cardFlipped = true }
-                    } label: {
-                        Image(systemName: "paintpalette")
-                            .font(.body)
-                            .foregroundStyle(brandForegroundPrimary)
-                            .padding(8)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Edit brand colors")
-                }
-
-                if script.scriptType == "feed" && script.schedule != nil {
-                    Button {
-                        withAnimation(.spring(duration: 0.5)) { cardFlipped = true }
-                    } label: {
-                        Image(systemName: "clock")
-                            .font(.body)
-                            .foregroundStyle(brandForegroundPrimary)
-                            .padding(8)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Edit schedule")
-                }
-
                 Button {
                     withAnimation(.spring(duration: 0.5)) { cardFlipped = true }
                 } label: {
-                    Image(systemName: "checklist")
+                    Image(systemName: "slider.horizontal.3")
                         .font(.body)
                         .foregroundStyle(brandForegroundPrimary)
                         .padding(8)
                 }
                 .buttonStyle(.plain)
-                .help("Edit dependency checks")
+                .help("Script settings")
             }
             .padding(6)
         }
@@ -471,99 +445,108 @@ struct ScriptDetailView: View {
             }
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    // Brand override editor
-                    if hasBrand {
-                        brandOverrideSection
-                        Divider()
-                            .background(brandForegroundSecondary.opacity(0.2))
-                    }
+                HStack(alignment: .top, spacing: 20) {
 
-                    // Schedule editor (feed scripts only)
-                    if script.scriptType == "feed" && script.schedule != nil {
-                        scheduleEditorSection
-                        Divider()
-                            .background(brandForegroundSecondary.opacity(0.2))
-                    }
-
-                    // Dependency checks header + add button
-                    HStack {
-                        Text("Dependency Checks")
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(brandForegroundPrimary)
-                        Spacer()
-                        Button {
-                            addingDep = true
-                            newDepName = ""
-                            newDepCheck = ""
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.caption)
+                    // Left column: brand + schedule
+                    VStack(alignment: .leading, spacing: 16) {
+                        if hasBrand {
+                            brandOverrideSection
                         }
-                        .buttonStyle(.borderless)
-                        .help("Add dependency check")
-                    }
-
-                    // Inline add form
-                    if addingDep {
-                        VStack(alignment: .leading, spacing: 6) {
-                            TextField("Name (e.g. node)", text: $newDepName)
-                                .textFieldStyle(.roundedBorder)
+                        if script.scriptType == "feed" && script.schedule != nil {
+                            if hasBrand {
+                                Divider().background(brandForegroundSecondary.opacity(0.2))
+                            }
+                            scheduleEditorSection
+                        }
+                        if !hasBrand && !(script.scriptType == "feed" && script.schedule != nil) {
+                            Text("No appearance or schedule settings.")
                                 .font(.caption)
+                                .foregroundStyle(brandForegroundTertiary)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .top)
 
-                            TextField("Check command (exit 0 = installed)", text: $newDepCheck)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(.caption2, design: .monospaced))
+                    Divider().background(brandForegroundSecondary.opacity(0.2))
 
-                            HStack {
-                                Spacer()
-                                Button("Cancel") { addingDep = false }
-                                    .buttonStyle(.borderless)
+                    // Right column: dependency checks
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack {
+                            Text("Dependency Checks")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(brandForegroundPrimary)
+                            Spacer()
+                            Button {
+                                addingDep = true
+                                newDepName = ""
+                                newDepCheck = ""
+                            } label: {
+                                Image(systemName: "plus")
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Button("Add") { addDepCheck() }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.mini)
-                                    .disabled(newDepName.trimmingCharacters(in: .whitespaces).isEmpty ||
-                                              newDepCheck.trimmingCharacters(in: .whitespaces).isEmpty)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Add dependency check")
+                        }
+
+                        // Inline add form
+                        if addingDep {
+                            VStack(alignment: .leading, spacing: 6) {
+                                TextField("Name (e.g. node)", text: $newDepName)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.caption)
+
+                                TextField("Check command (exit 0 = installed)", text: $newDepCheck)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(.caption2, design: .monospaced))
+
+                                HStack {
+                                    Spacer()
+                                    Button("Cancel") { addingDep = false }
+                                        .buttonStyle(.borderless)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Button("Add") { addDepCheck() }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.mini)
+                                        .disabled(newDepName.trimmingCharacters(in: .whitespaces).isEmpty ||
+                                                  newDepCheck.trimmingCharacters(in: .whitespaces).isEmpty)
+                                }
+                            }
+                            .padding(8)
+                            .background(brandForegroundSecondary.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
+
+                        if script.requires.isEmpty && !addingDep {
+                            Text("No dependency checks defined.")
+                                .font(.caption)
+                                .foregroundStyle(brandForegroundTertiary)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(.vertical, 8)
+                        }
+
+                        // Run Setup — tinted orange when setup is needed
+                        if script.setupScript != nil {
+                            Divider().background(brandForegroundSecondary.opacity(0.2))
+                            Button {
+                                runSetup()
+                            } label: {
+                                Label("Run Setup", systemImage: "wrench.and.screwdriver")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .tint(script.needsSetup ? .orange : .accentColor)
+                            .sheet(isPresented: $showSetupSheet) {
+                                SetupOutputSheet(
+                                    scriptName: script.name,
+                                    lines: $setupOutputLines,
+                                    running: $setupRunning
+                                )
                             }
                         }
-                        .padding(8)
-                        .background(brandForegroundSecondary.opacity(0.06))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                    }
 
-                    if script.requires.isEmpty && !addingDep {
-                        Text("No dependency checks defined.")
-                            .font(.caption)
-                            .foregroundStyle(brandForegroundTertiary)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.vertical, 8)
-                    }
-
-                    // Run Setup — always visible here; tinted orange when setup is needed
-                    if script.setupScript != nil {
-                        Divider()
-                            .background(brandForegroundSecondary.opacity(0.2))
-                        Button {
-                            runSetup()
-                        } label: {
-                            Label("Run Setup", systemImage: "wrench.and.screwdriver")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .tint(script.needsSetup ? .orange : .accentColor)
-                        .sheet(isPresented: $showSetupSheet) {
-                            SetupOutputSheet(
-                                scriptName: script.name,
-                                lines: $setupOutputLines,
-                                running: $setupRunning
-                            )
-                        }
-                    }
-
-                    ForEach(script.requires, id: \.id) { dep in
+                        ForEach(script.requires, id: \.id) { dep in
                         VStack(alignment: .leading, spacing: 6) {
                             // Row: status icon + name + Run + Save
                             HStack(spacing: 6) {
@@ -652,7 +635,12 @@ struct ScriptDetailView: View {
                             }
                         }
                     }
-                }
+
+                        Spacer(minLength: 0)
+                    } // right column VStack
+                    .frame(maxWidth: .infinity, alignment: .top)
+
+                } // HStack columns
             }
         }
         .padding(16)
