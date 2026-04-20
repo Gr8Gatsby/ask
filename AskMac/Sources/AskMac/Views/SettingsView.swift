@@ -1799,6 +1799,7 @@ private func cloudKitEnvironmentFromEntitlements() -> String {
 private struct MachineDetailView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(HeartbeatService.self) private var heartbeat
+    @Environment(CloudKitService.self) private var cloudKit
     @Environment(ScriptManager.self) private var scriptManager
     @Environment(AppUpdater.self) private var updater
     @State private var selectedSection: MachineSection? = .cloud
@@ -1831,7 +1832,17 @@ private struct MachineDetailView: View {
     private var machineCloudSection: some View {
         Form {
             Section("iCloud Sync") {
-                LabeledContent("Status") {
+                LabeledContent("Account") {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(cloudKit.accountStatus == .available ? Color.green : Color.orange)
+                            .frame(width: 7, height: 7)
+                        Text(cloudKit.accountStatus.displayName)
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                    }
+                }
+                LabeledContent("Last Heartbeat") {
                     if let lastBeat = heartbeat.lastHeartbeat {
                         HStack(spacing: 4) {
                             Image(systemName: "icloud.fill")
@@ -1840,25 +1851,43 @@ private struct MachineDetailView: View {
                             Text(lastBeat, style: .relative)
                                 .foregroundStyle(.secondary)
                         }
-                    } else if let syncError = heartbeat.error {
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Label("Sync error", systemImage: "exclamationmark.icloud")
-                                .foregroundStyle(.red)
-                                .font(.caption)
-                            Text(syncError.localizedDescription)
-                                .foregroundStyle(.secondary)
-                                .font(.caption2)
-                                .multilineTextAlignment(.trailing)
-                        }
+                    } else if heartbeat.error != nil {
+                        Label("Sync error", systemImage: "exclamationmark.icloud")
+                            .foregroundStyle(.red)
+                            .font(.caption)
                     } else {
                         Text("Connecting…")
                             .foregroundStyle(.secondary)
                     }
                 }
-                LabeledContent("Heartbeat Interval") {
-                    Text("\(Int(HeartbeatService.interval))s")
+                if let syncError = heartbeat.error {
+                    LabeledContent("Last Error") {
+                        Text(syncError.localizedDescription)
+                            .foregroundStyle(.red)
+                            .font(.caption2)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+                LabeledContent("Heartbeats Sent") {
+                    Text("\(heartbeat.heartbeatCount)")
                         .foregroundStyle(.secondary)
                 }
+                if heartbeat.consecutiveFailures > 0 {
+                    LabeledContent("Consecutive Failures") {
+                        Text("\(heartbeat.consecutiveFailures)")
+                            .foregroundStyle(.red)
+                    }
+                }
+                HStack(spacing: 8) {
+                    Button("Re-check iCloud") {
+                        Task { await cloudKit.checkAccountStatus() }
+                    }
+                    Button("Force Heartbeat") {
+                        Task { await heartbeat.forceBeat() }
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
             Section("Diagnostics") {
                 LabeledContent("Machine ID") {
@@ -1871,6 +1900,7 @@ private struct MachineDetailView: View {
                     Text("iCloud.simple.ask")
                         .foregroundStyle(.secondary)
                         .font(.caption)
+                        .textSelection(.enabled)
                 }
                 LabeledContent("Database") {
                     Text("Private")

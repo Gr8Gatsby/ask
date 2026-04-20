@@ -12,6 +12,8 @@ final class HeartbeatService {
     private(set) var lastHeartbeat: Date?
     private(set) var error: Error?
     private(set) var connectedDevices: [DeviceRecord] = []
+    private(set) var heartbeatCount: Int = 0
+    private(set) var consecutiveFailures: Int = 0
 
     static let interval: TimeInterval = 30
 
@@ -47,6 +49,10 @@ final class HeartbeatService {
         try? await cloudKit.saveMachine(machine)
     }
 
+    func forceBeat() async {
+        await beat()
+    }
+
     // MARK: - Private
 
     private func beat() async {
@@ -55,9 +61,12 @@ final class HeartbeatService {
             // Machine record written — mark alive immediately.
             // Device refresh and cleanup are non-critical; failures must not block the heartbeat.
             lastHeartbeat = Date()
+            heartbeatCount += 1
+            consecutiveFailures = 0
             error = nil
         } catch {
             self.error = error
+            consecutiveFailures += 1
             return
         }
         await refreshDevices()

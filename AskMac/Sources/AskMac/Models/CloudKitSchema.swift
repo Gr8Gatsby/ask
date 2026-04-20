@@ -410,5 +410,20 @@ struct AskScriptRecord: Sendable {
     let updatedAt:  Date
 
     var recordName: String { "script-\(machineID)-\(scriptID)" }
+}
+
+// MARK: - CKAccountStatus display
+
+extension CKAccountStatus {
+    var displayName: String {
+        switch self {
+        case .available:              return "Available"
+        case .noAccount:              return "No Account"
+        case .restricted:             return "Restricted"
+        case .couldNotDetermine:      return "Unknown"
+        case .temporarilyUnavailable: return "Temporarily Unavailable"
+        @unknown default:             return "Unknown (\(rawValue))"
+        }
+    }
 
 }

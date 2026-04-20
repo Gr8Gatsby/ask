@@ -583,3 +583,19 @@ struct AskOutputChunk: Identifiable {
         self.isError = (record[CKSchema.OutputChunk.isError] as? Int64 ?? 0) != 0
     }
 }
+
+
+// MARK: - CKAccountStatus display
+
+extension CKAccountStatus {
+    var displayName: String {
+        switch self {
+        case .available:             return "Available"
+        case .noAccount:             return "No Account"
+        case .restricted:            return "Restricted"
+        case .couldNotDetermine:     return "Unknown"
+        case .temporarilyUnavailable: return "Temporarily Unavailable"
+        @unknown default:            return "Unknown (\(rawValue))"
+        }
+    }
+}

@@ -9,6 +9,8 @@ final class iOSCloudKitService {
     private let database: CKDatabase
 
     private(set) var accountStatus: CKAccountStatus = .couldNotDetermine
+    private(set) var lastCheckTime: Date?
+    private(set) var lastError: Error?
 
     init() {
         self.container = CKContainer(identifier: CKSchema.containerID)
@@ -19,10 +21,13 @@ final class iOSCloudKitService {
 
     func checkAccountStatus() async {
         if UITestingSupport.isUITesting { accountStatus = .available; return }
+        lastCheckTime = Date()
         do {
             accountStatus = try await container.accountStatus()
+            if accountStatus == .available { lastError = nil }
         } catch {
             accountStatus = .couldNotDetermine
+            lastError = error
         }
     }
 
