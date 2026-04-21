@@ -17,11 +17,12 @@ struct OnboardingView: View {
     @State private var step: Step = .permissions
     @State private var notificationStatus: UNAuthorizationStatus = .notDetermined
     @State private var loginItemEnabled = false
+    @State private var machineName: String = ""
     @State private var isInstalling = false
     @State private var installError: String?
     @State private var installer = ScriptInstaller()
 
-    enum Step { case permissions, welcome }
+    enum Step { case permissions, machineName, welcome }
 
     var body: some View {
         Group {
@@ -32,7 +33,16 @@ struct OnboardingView: View {
                     loginItemEnabled: loginItemEnabled,
                     onRequestNotifications: requestNotifications,
                     onToggleLoginItem: toggleLoginItem,
-                    onContinue: { withAnimation { step = .welcome } }
+                    onContinue: { withAnimation { step = .machineName } }
+                )
+            case .machineName:
+                MachineNameStep(
+                    machineName: $machineName,
+                    onContinue: {
+                        let trimmed = machineName.trimmingCharacters(in: .whitespaces)
+                        if !trimmed.isEmpty { settings.machineName = trimmed }
+                        withAnimation { step = .welcome }
+                    }
                 )
             case .welcome:
                 WelcomeStep(
@@ -43,7 +53,10 @@ struct OnboardingView: View {
             }
         }
         .frame(width: 480)
-        .task { await refreshPermissionsStatus() }
+        .task {
+            await refreshPermissionsStatus()
+            machineName = settings.machineName
+        }
     }
 
     // MARK: - Permissions
@@ -254,6 +267,48 @@ private struct PermissionRow: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Machine Name Step
+
+private struct MachineNameStep: View {
+    @Binding var machineName: String
+    let onContinue: () -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 32) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Name this Mac")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                Text("This is how your Mac appears in the Ask iPhone app.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("e.g. Kevin's MacBook Pro", text: $machineName)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.body)
+                    .focused($focused)
+                    .onSubmit { if !machineName.trimmingCharacters(in: .whitespaces).isEmpty { onContinue() } }
+                Text("You can change this later in Settings.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+
+            HStack {
+                Spacer()
+                Button("Continue", action: onContinue)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(machineName.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(32)
+        .onAppear { focused = true }
     }
 }
 

@@ -655,6 +655,16 @@ final class ScriptManager: @unchecked Sendable {
         installLockCount += 1
     }
 
+    /// Mark script IDs as known and enabled before the install-triggered reload runs.
+    /// Called by ScriptInstaller so that explicitly installed scripts start running
+    /// immediately instead of landing in the disabled state.
+    func markInstalledByUser(ids: [String]) {
+        for id in ids {
+            settings.knownScripts.insert(id)
+            settings.disabledScripts.remove(id)
+        }
+    }
+
     /// Call after install completes (success or failure). Flushes any deferred reload.
     func endInstall() {
         installLockCount = max(0, installLockCount - 1)
