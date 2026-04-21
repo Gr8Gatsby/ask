@@ -17,9 +17,10 @@ BLOCK_CONFIRM="git-confirm"
 # Directories that should never be entered during repo scanning.
 PRUNE_NAMES="Library|node_modules|.Trash|Pods|DerivedData|.build|build|dist|vendor|venv|.venv|.cache|.npm|.yarn|__pycache__|target|Volumes|.Spotlight-V100|.fseventsd"
 
-# Developer-focused candidate roots. Scanning only these avoids macOS TCC prompts
-# that fire when find traverses ~/Library, ~/Desktop, ~/Downloads, etc.
-# Directories are added in priority order; all that exist are searched.
+# Developer-focused candidate roots. Scanning only these avoids macOS TCC prompts.
+# ~/Documents and ~/Desktop are NOT listed as roots — on iCloud Drive setups macOS
+# treats broad Documents access as "access data from other apps" (a different TCC
+# category). Instead we list common developer subdirectory names under Documents.
 SCAN_CANDIDATES=(
     "$HOME/Developer"
     "$HOME/developer"
@@ -32,8 +33,17 @@ SCAN_CANDIDATES=(
     "$HOME/workspace"
     "$HOME/git"
     "$HOME/dev"
-    "$HOME/Documents"
-    "$HOME/Desktop"
+    "$HOME/Documents/code"
+    "$HOME/Documents/Code"
+    "$HOME/Documents/dev"
+    "$HOME/Documents/Dev"
+    "$HOME/Documents/projects"
+    "$HOME/Documents/Projects"
+    "$HOME/Documents/repos"
+    "$HOME/Documents/src"
+    "$HOME/Documents/Developer"
+    "$HOME/Documents/developer"
+    "$HOME/Documents/workspace"
 )
 
 ID=0
