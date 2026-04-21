@@ -36,16 +36,6 @@ struct MenuBarView: View {
                 .padding(12)
         }
         .frame(width: 360)
-        .sheet(item: Binding(
-            get: { scriptManager.scriptPendingConsent },
-            set: { _ in }
-        )) { consent in
-            PermissionConsentView(
-                consent: consent,
-                onAllow: { scriptManager.approvePermissions(scriptID: consent.scriptID) },
-                onDeny:  { scriptManager.denyPermissions(scriptID: consent.scriptID) }
-            )
-        }
         .onAppear {
             #if DEBUG
             if MacUITestingSupport.isUITesting {
@@ -165,6 +155,36 @@ struct MenuBarView: View {
 
     private var scriptsSection: some View {
         VStack(alignment: .leading, spacing: 6) {
+            // Consent-required banner — directs user to Ask window to approve
+            if let consent = scriptManager.scriptPendingConsent {
+                Button {
+                    openWindow(id: "scripts")
+                    dismiss()
+                    activateAskWindow()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "lock.badge.clock")
+                            .font(.body)
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("\(consent.scriptName) needs approval")
+                                .font(.caption).fontWeight(.medium)
+                                .foregroundStyle(.primary)
+                            Text("Tap to review permissions in Ask")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(8)
+                    .background(Color.orange.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+            }
+
             // Migration banner — shown once after permissions enforcement is enabled
             if settings.showPermissionMigrationBanner {
                 HStack(spacing: 8) {

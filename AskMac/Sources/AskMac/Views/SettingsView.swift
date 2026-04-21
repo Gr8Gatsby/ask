@@ -73,6 +73,16 @@ struct MacScriptsView: View {
                 }
             }
         }
+        .sheet(item: Binding(
+            get: { scriptManager.scriptPendingConsent },
+            set: { _ in }
+        )) { consent in
+            PermissionConsentView(
+                consent: consent,
+                onAllow: { scriptManager.approvePermissions(scriptID: consent.scriptID) },
+                onDeny:  { scriptManager.denyPermissions(scriptID: consent.scriptID) }
+            )
+        }
         .onAppear {
             // When opened from the MenuBarExtra the window is not automatically
             // made key, so List selection highlights and Picker segments render

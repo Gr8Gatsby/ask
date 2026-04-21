@@ -135,14 +135,23 @@ repo_status() {
 
 find_repos() {
     local count=0
-    # Use find with pruning for known skip directories
+    # Prune skip dirs *during* traversal so the OS never sees us entering them.
+    # grep post-filtering was insufficient: find still traversed ~/Library before
+    # the filter ran, triggering macOS TCC "access data from other apps" prompts.
     while IFS= read -r gitdir; do
         local repo="${gitdir%/.git}"
         echo "$repo"
         count=$((count+1))
         [[ $count -ge $MAX_REPOS ]] && break
-    done < <(find "$SCAN_ROOT" -name ".git" -type d -prune 2>/dev/null \
-        | grep -vE "/($SKIP_DIRS)(/|$)" \
+    done < <(find "$SCAN_ROOT" \
+        \( -name "Library" -o -name "node_modules" -o -name ".Trash" \
+           -o -name "Pods" -o -name "DerivedData" -o -name ".build" \
+           -o -name "build" -o -name "dist" -o -name "vendor" \
+           -o -name "venv" -o -name ".venv" -o -name ".cache" \
+           -o -name ".npm" -o -name ".yarn" -o -name "__pycache__" \
+           -o -name "target" -o -name "Volumes" \
+           -o -name ".Spotlight-V100" -o -name ".fseventsd" \
+        \) -prune -o -name ".git" -type d -print 2>/dev/null \
         | sort)
 }
 
