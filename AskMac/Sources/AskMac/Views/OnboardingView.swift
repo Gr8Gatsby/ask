@@ -14,6 +14,8 @@ struct OnboardingView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
 
+    @Environment(HeartbeatService.self) private var heartbeat
+
     @State private var step: Step = .permissions
     @State private var notificationStatus: UNAuthorizationStatus = .notDetermined
     @State private var loginItemEnabled = false
@@ -22,7 +24,7 @@ struct OnboardingView: View {
     @State private var installError: String?
     @State private var installer = ScriptInstaller()
 
-    enum Step { case permissions, machineName, welcome }
+    enum Step { case permissions, machineName, connectiPhone, welcome }
 
     var body: some View {
         Group {
@@ -41,8 +43,13 @@ struct OnboardingView: View {
                     onContinue: {
                         let trimmed = machineName.trimmingCharacters(in: .whitespaces)
                         if !trimmed.isEmpty { settings.machineName = trimmed }
-                        withAnimation { step = .welcome }
+                        withAnimation { step = .connectiPhone }
                     }
+                )
+            case .connectiPhone:
+                ConnectIPhoneStep(
+                    connectedDevices: heartbeat.connectedDevices,
+                    onContinue: { withAnimation { step = .welcome } }
                 )
             case .welcome:
                 WelcomeStep(
@@ -309,6 +316,82 @@ private struct MachineNameStep: View {
         }
         .padding(32)
         .onAppear { focused = true }
+    }
+}
+
+// MARK: - Connect iPhone Step
+
+private struct ConnectIPhoneStep: View {
+    let connectedDevices: [DeviceRecord]
+    let onContinue: () -> Void
+
+    @State private var didAutoAdvance = false
+
+    var isConnected: Bool { !connectedDevices.isEmpty }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 32) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Connect your iPhone")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                Text("Open the Ask app on your iPhone. It will find this Mac automatically.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if isConnected {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(connectedDevices, id: \.deviceID) { device in
+                        HStack(spacing: 10) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .font(.title3)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(device.deviceName)
+                                    .fontWeight(.medium)
+                                Text("Connected")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.green.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            } else {
+                HStack(spacing: 12) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Waiting for iPhone…")
+                        .foregroundStyle(.secondary)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.secondary.opacity(0.07))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
+            HStack {
+                Button("Skip") { onContinue() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(isConnected ? "Continue" : "Skip for now", action: onContinue)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+            }
+        }
+        .padding(32)
+        .onChange(of: connectedDevices.count) { _, newCount in
+            guard newCount > 0, !didAutoAdvance else { return }
+            didAutoAdvance = true
+            // Brief pause so the user sees the "Connected" state before advancing.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { onContinue() }
+        }
     }
 }
 
