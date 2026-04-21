@@ -1808,69 +1808,86 @@ private func cloudKitEnvironmentFromEntitlements() -> String {
     return (value as? String) ?? "Development"
 }
 
-// MARK: - System permissions checker
-
-private struct SystemPermissionItem: Identifiable {
-    let id: String
-    let title: String
-    let description: String
-    let icon: String
-    let path: String?         // nil = Full Disk Access (checked differently)
-    var status: PermStatus = .checking
-
-    enum PermStatus { case checking, allowed, denied, notApplicable }
-}
+// MARK: - System permissions reference view
 
 private struct SystemPermissionsView: View {
-    @State private var items: [SystemPermissionItem] = [
-        SystemPermissionItem(id: "documents", title: "Documents Folder",
-            description: "Scripts that scan ~/Documents for git repos or read files you store there.",
-            icon: "doc.fill", path: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Documents").path),
-        SystemPermissionItem(id: "desktop", title: "Desktop Folder",
-            description: "Scripts that access files saved to your Desktop.",
-            icon: "menubar.dock.rectangle", path: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop").path),
-        SystemPermissionItem(id: "downloads", title: "Downloads Folder",
-            description: "Scripts that read files in your Downloads folder.",
-            icon: "arrow.down.circle.fill", path: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads").path),
-        SystemPermissionItem(id: "fda", title: "Full Disk Access",
-            description: "Required only if scripts need to read files outside your home folder (e.g. system logs, other users).",
-            icon: "internaldrive.fill", path: nil),
+
+    private struct PermEntry: Identifiable {
+        let id: String
+        let title: String
+        let detail: String
+        let icon: String
+        let needed: String   // which scripts need it
+    }
+
+    private let entries: [PermEntry] = [
+        PermEntry(id: "files_folders", title: "Files and Folders",
+            detail: "Grants access to specific protected folders: Documents, Desktop, Downloads. macOS will ask once the first time a script reads from each folder.",
+            icon: "folder.fill",
+            needed: "git-repos (scans ~/Documents for repos)"),
+        PermEntry(id: "fda", title: "Full Disk Access",
+            detail: "Grants read access to all files on the Mac. Most scripts never need this — only scripts that must read system files outside your home folder.",
+            icon: "internaldrive.fill",
+            needed: "Not required by any bundled script"),
     ]
 
     var body: some View {
         Form {
             Section {
-                Text("These are macOS system-level grants — separate from Ask's own per-script consent. Ask asks for script permission first; macOS may ask once more when a script first touches a protected folder.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Folder Access") {
-                ForEach($items) { $item in
-                    if item.id != "fda" {
-                        permRow(item: $item)
-                    }
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("How permissions work", systemImage: "info.circle")
+                        .font(.subheadline).fontWeight(.medium)
+                    Text("Ask controls which scripts are allowed to run (per-script consent). macOS separately controls which folders those scripts can read — it asks once per folder, then remembers permanently.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("If you see a macOS prompt, it is tied to a specific script action — it will not repeat after you allow it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+                .padding(.vertical, 2)
             }
 
-            Section("Full Disk Access") {
-                if let fda = items.first(where: { $0.id == "fda" }) {
-                    permRow(item: Binding(
-                        get: { fda },
-                        set: { newVal in
-                            if let idx = items.firstIndex(where: { $0.id == "fda" }) {
-                                items[idx] = newVal
-                            }
+            Section("macOS Privacy Permissions") {
+                ForEach(entries) { entry in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Image(systemName: entry.icon)
+                                .font(.body)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 22)
+                            Text(entry.title)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
                         }
-                    ))
+                        Text(entry.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 30)
+                        HStack(spacing: 4) {
+                            Image(systemName: "terminal")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                            Text(entry.needed)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.leading, 30)
+                    }
+                    .padding(.vertical, 4)
                 }
-                Text("Full Disk Access is only needed for scripts that must read system files outside your home folder. Most scripts work fine without it.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
 
-            Section {
-                Button("Open Privacy & Security Settings") {
+            Section("If a script is blocked") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Check the script's detail view — a blocked script shows an orange 'macOS blocked file access' banner with a direct link.", systemImage: "1.circle.fill")
+                        .font(.caption)
+                    Label("Or open Privacy & Security in System Settings and look under Files and Folders or Full Disk Access.", systemImage: "2.circle.fill")
+                        .font(.caption)
+                }
+                .foregroundStyle(.secondary)
+                .padding(.vertical, 2)
+
+                Button("Open Privacy & Security Settings →") {
                     NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders")!)
                 }
                 .buttonStyle(.bordered)
@@ -1879,110 +1896,6 @@ private struct SystemPermissionsView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Permissions")
-        .task { await checkAll() }
-    }
-
-    @ViewBuilder
-    private func permRow(item: Binding<SystemPermissionItem>) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: item.wrappedValue.icon)
-                .font(.body)
-                .foregroundStyle(statusColor(item.wrappedValue.status))
-                .frame(width: 22)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.wrappedValue.title)
-                    .font(.subheadline)
-                Text(item.wrappedValue.description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Spacer()
-
-            statusBadge(item.wrappedValue.status)
-        }
-        .padding(.vertical, 2)
-    }
-
-    @ViewBuilder
-    private func statusBadge(_ status: SystemPermissionItem.PermStatus) -> some View {
-        switch status {
-        case .checking:
-            ProgressView().controlSize(.small)
-        case .allowed:
-            HStack(spacing: 3) {
-                Image(systemName: "checkmark.circle.fill").font(.caption)
-                Text("Allowed").font(.caption).fontWeight(.medium)
-            }
-            .foregroundStyle(.green)
-        case .denied:
-            HStack(spacing: 3) {
-                Image(systemName: "xmark.circle.fill").font(.caption)
-                Text("Denied").font(.caption).fontWeight(.medium)
-            }
-            .foregroundStyle(.orange)
-            .onTapGesture {
-                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders")!)
-            }
-        case .notApplicable:
-            Text("N/A").font(.caption).foregroundStyle(.tertiary)
-        }
-    }
-
-    private func statusColor(_ status: SystemPermissionItem.PermStatus) -> Color {
-        switch status {
-        case .allowed: .green
-        case .denied:  .orange
-        default:       .secondary
-        }
-    }
-
-    private func checkAll() async {
-        await withTaskGroup(of: (String, SystemPermissionItem.PermStatus).self) { group in
-            for item in items {
-                group.addTask {
-                    let status = await checkItem(item)
-                    return (item.id, status)
-                }
-            }
-            for await (id, status) in group {
-                if let idx = items.firstIndex(where: { $0.id == id }) {
-                    items[idx].status = status
-                }
-            }
-        }
-    }
-
-    private func checkItem(_ item: SystemPermissionItem) async -> SystemPermissionItem.PermStatus {
-        if item.id == "fda" {
-            return checkFullDiskAccess()
-        }
-        guard let path = item.path else { return .notApplicable }
-        let url = URL(fileURLWithPath: path)
-        guard FileManager.default.fileExists(atPath: path) else { return .notApplicable }
-        do {
-            _ = try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-            return .allowed
-        } catch let error as NSError {
-            // NSFileReadNoPermissionError (257) = EPERM — macOS TCC blocked the access
-            if error.code == NSFileReadNoPermissionError || error.code == 257 {
-                return .denied
-            }
-            return .allowed
-        }
-    }
-
-    private func checkFullDiskAccess() -> SystemPermissionItem.PermStatus {
-        // /Library/Application Support is only fully listable with Full Disk Access.
-        // A normal app can open it but can't see protected subdirectories.
-        let testPath = "/Library/Application Support/com.apple.TCC"
-        if FileManager.default.fileExists(atPath: testPath) {
-            return .allowed
-        }
-        // Path not visible — FDA not granted (or not needed)
-        return .notApplicable
     }
 }
 
