@@ -319,6 +319,12 @@ final class ScriptInstaller {
         }
 
         skipped.append(contentsOf: installationErrors)
+
+        // Mark all pending scripts as known+enabled so the reload triggered by endInstall()
+        // starts them immediately. Scripts that failed to copy won't have a valid manifest
+        // in the vault, so the reload simply won't find them.
+        scriptManager.markInstalledByUser(ids: pending.map(\.id))
+
         cleanup()
         installProgressLabel = nil
         phase = .done

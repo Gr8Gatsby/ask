@@ -353,6 +353,12 @@ final class ScriptManager: @unchecked Sendable {
                 continue
             }
 
+            // Newly installed scripts start disabled — user must explicitly enable them.
+            if !settings.knownScripts.contains(manifest.id) {
+                settings.knownScripts.insert(manifest.id)
+                settings.disabledScripts.insert(manifest.id)
+            }
+
             let isEnabled = !settings.disabledScripts.contains(manifest.id)
             guard isEnabled else {
                 upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon,
@@ -649,6 +655,16 @@ final class ScriptManager: @unchecked Sendable {
         installLockCount += 1
     }
 
+    /// Mark script IDs as known and enabled before the install-triggered reload runs.
+    /// Called by ScriptInstaller so that explicitly installed scripts start running
+    /// immediately instead of landing in the disabled state.
+    func markInstalledByUser(ids: [String]) {
+        for id in ids {
+            settings.knownScripts.insert(id)
+            settings.disabledScripts.remove(id)
+        }
+    }
+
     /// Call after install completes (success or failure). Flushes any deferred reload.
     func endInstall() {
         installLockCount = max(0, installLockCount - 1)
@@ -708,6 +724,19 @@ final class ScriptManager: @unchecked Sendable {
             if migrated { settings.showPermissionMigrationBanner = true }
         }
 
+        // One-time migration: mark all pre-existing scripts as known so they keep running.
+        // After this, any newly installed script starts disabled until the user enables it.
+        if !settings.knownScriptsMigrationDone {
+            for (dir, _) in allDirs {
+                guard let data = try? Data(contentsOf: dir.appendingPathComponent("manifest.json")),
+                      let manifest = try? JSONDecoder().decode(ScriptManifest.self, from: data),
+                      !manifest.isSystem
+                else { continue }
+                settings.knownScripts.insert(manifest.id)
+            }
+            settings.knownScriptsMigrationDone = true
+        }
+
         for (dir, _) in allDirs {
             guard let data = try? Data(contentsOf: dir.appendingPathComponent("manifest.json")),
                   let manifest = try? JSONDecoder().decode(ScriptManifest.self, from: data)
@@ -728,6 +757,12 @@ final class ScriptManager: @unchecked Sendable {
             if manifest.isSystem {
                 launchSystemWithDepCheck(manifest: manifest, scriptDir: dir)
                 continue
+            }
+
+            // Newly installed scripts start disabled — user must explicitly enable them.
+            if !settings.knownScripts.contains(manifest.id) {
+                settings.knownScripts.insert(manifest.id)
+                settings.disabledScripts.insert(manifest.id)
             }
 
             let isEnabled = !settings.disabledScripts.contains(manifest.id)
