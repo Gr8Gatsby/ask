@@ -22,6 +22,8 @@ final class AppSettings {
         static let showPermissionMigrationBanner = "showPermissionMigrationBanner"
         static let nudgeDismissed = "nudgeDismissed"
         static let hasSeenOnboarding = "hasSeenOnboarding"
+        static let knownScripts = "knownScripts"
+        static let knownScriptsMigrationDone = "knownScriptsMigrationDone"
     }
 
     static let maxPins = 20
@@ -99,6 +101,16 @@ final class AppSettings {
 
     var hasSeenOnboarding: Bool {
         didSet { defaults.set(hasSeenOnboarding, forKey: Key.hasSeenOnboarding) }
+    }
+
+    /// Script IDs that have been seen at least once. New (unseen) scripts start disabled.
+    var knownScripts: Set<String> {
+        didSet { defaults.set(Array(knownScripts), forKey: Key.knownScripts) }
+    }
+
+    /// True after the one-time migration that marks all pre-existing scripts as known.
+    var knownScriptsMigrationDone: Bool {
+        didSet { defaults.set(knownScriptsMigrationDone, forKey: Key.knownScriptsMigrationDone) }
     }
 
     var isConfigured: Bool {
@@ -196,6 +208,9 @@ final class AppSettings {
         self.showPermissionMigrationBanner = defaults.bool(forKey: Key.showPermissionMigrationBanner)
         self.nudgeDismissed = defaults.bool(forKey: Key.nudgeDismissed)
         self.hasSeenOnboarding = defaults.bool(forKey: Key.hasSeenOnboarding)
+        let storedKnown = defaults.stringArray(forKey: Key.knownScripts) ?? []
+        self.knownScripts = Set(storedKnown)
+        self.knownScriptsMigrationDone = defaults.bool(forKey: Key.knownScriptsMigrationDone)
     }
 
     func isDepCheckSkipped(scriptID: String, depID: String) -> Bool {
