@@ -1247,6 +1247,9 @@ final class ScriptManager: @unchecked Sendable {
             return
         }
         settings.grantPermissions(consent.permissions, for: scriptID)
+        // Drain any duplicate consents for the same script — prevents double-prompting
+        // when reviewPermissions was called while a consent was already queued.
+        consentQueue.removeAll { $0.scriptID == scriptID }
         advanceConsentQueue()
         if let entry = manifests[scriptID] {
             launchingScripts.remove(scriptID)
@@ -1259,6 +1262,7 @@ final class ScriptManager: @unchecked Sendable {
     }
 
     func denyPermissions(scriptID: String) {
+        consentQueue.removeAll { $0.scriptID == scriptID }
         advanceConsentQueue()
         settings.denyScript(scriptID)
         if let entry = manifests[scriptID] {
@@ -1270,6 +1274,10 @@ final class ScriptManager: @unchecked Sendable {
         guard let entry = manifests[scriptID] else { return }
         let perms = (entry.manifest.permissions ?? []).filter { $0 != "notifications" }
         guard !perms.isEmpty else { return }
+        // If consent is already the active prompt, nothing to do — the sheet is already showing.
+        if scriptPendingConsent?.scriptID == scriptID { return }
+        // Remove any queued duplicate before re-queueing so it goes to front.
+        consentQueue.removeAll { $0.scriptID == scriptID }
         settings.resetScriptPermissions(for: scriptID)
         launchingScripts.remove(scriptID)
         pendConsent(manifest: entry.manifest, permissions: perms, scriptDir: entry.dir)
