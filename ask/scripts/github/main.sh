@@ -8,14 +8,33 @@
 
 REFRESH_SECS=300  # 5 minutes
 MAX_REPOS=100
-SCAN_ROOT="$HOME"
 
 BLOCK_TILE="git-tile"
 BLOCK_STATUS="git-status"
 BLOCK_LIST="git-list"
 BLOCK_CONFIRM="git-confirm"
 
-SKIP_DIRS="node_modules|Library|.Trash|Pods|DerivedData|.build|build|dist|vendor|venv|.venv|.cache|.npm|.yarn|__pycache__|target|Volumes|.Spotlight-V100|.fseventsd"
+# Directories that should never be entered during repo scanning.
+PRUNE_NAMES="Library|node_modules|.Trash|Pods|DerivedData|.build|build|dist|vendor|venv|.venv|.cache|.npm|.yarn|__pycache__|target|Volumes|.Spotlight-V100|.fseventsd"
+
+# Developer-focused candidate roots. Scanning only these avoids macOS TCC prompts
+# that fire when find traverses ~/Library, ~/Desktop, ~/Downloads, etc.
+# Directories are added in priority order; all that exist are searched.
+SCAN_CANDIDATES=(
+    "$HOME/Developer"
+    "$HOME/developer"
+    "$HOME/Code"
+    "$HOME/code"
+    "$HOME/Projects"
+    "$HOME/projects"
+    "$HOME/src"
+    "$HOME/repos"
+    "$HOME/workspace"
+    "$HOME/git"
+    "$HOME/dev"
+    "$HOME/Documents"
+    "$HOME/Desktop"
+)
 
 ID=0
 send()    { printf '%s\n' "$1"; }
@@ -135,24 +154,34 @@ repo_status() {
 
 find_repos() {
     local count=0
-    # Prune skip dirs *during* traversal so the OS never sees us entering them.
-    # grep post-filtering was insufficient: find still traversed ~/Library before
-    # the filter ran, triggering macOS TCC "access data from other apps" prompts.
+
+    # Build the list of directories to search from SCAN_CANDIDATES (those that exist).
+    local search_dirs=()
+    for candidate in "${SCAN_CANDIDATES[@]}"; do
+        [[ -d "$candidate" ]] && search_dirs+=("$candidate")
+    done
+
+    [[ ${#search_dirs[@]} -eq 0 ]] && return
+
+    # Prune skip dirs during traversal — never let find enter them so the OS
+    # doesn't log access and trigger TCC prompts.
+    local prune_expr=()
+    IFS='|' read -ra names <<< "$PRUNE_NAMES"
+    for name in "${names[@]}"; do
+        prune_expr+=(-o -name "$name")
+    done
+    # Remove leading "-o" to form a valid expression
+    prune_expr=("${prune_expr[@]:1}")
+
     while IFS= read -r gitdir; do
         local repo="${gitdir%/.git}"
         echo "$repo"
         count=$((count+1))
         [[ $count -ge $MAX_REPOS ]] && break
-    done < <(find "$SCAN_ROOT" \
-        \( -name "Library" -o -name "node_modules" -o -name ".Trash" \
-           -o -name "Pods" -o -name "DerivedData" -o -name ".build" \
-           -o -name "build" -o -name "dist" -o -name "vendor" \
-           -o -name "venv" -o -name ".venv" -o -name ".cache" \
-           -o -name ".npm" -o -name ".yarn" -o -name "__pycache__" \
-           -o -name "target" -o -name "Volumes" \
-           -o -name ".Spotlight-V100" -o -name ".fseventsd" \
-        \) -prune -o -name ".git" -type d -print 2>/dev/null \
-        | sort)
+    done < <(find "${search_dirs[@]}" \
+        \( "${prune_expr[@]}" \) -prune \
+        -o -name ".git" -type d -print 2>/dev/null \
+        | sort -u)
 }
 
 state_label() {
@@ -246,7 +275,7 @@ scan() {
     local attn="${#needs_attn[@]}"
     local tile_label tile_color
     if [[ $total -eq 0 ]]; then
-        tile_label="No repos found"; tile_color="orange"
+        tile_label="No repos found in ~/Developer, ~/Code, ~/Projects…"; tile_color="orange"
     elif [[ $attn -gt 0 ]]; then
         local noun="repos"; [[ $attn -eq 1 ]] && noun="repo"
         tile_label="$attn $noun with uncommitted changes"; tile_color="blue"
