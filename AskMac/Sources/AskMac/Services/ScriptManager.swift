@@ -1042,6 +1042,14 @@ final class ScriptManager: @unchecked Sendable {
             if let m = manifests[manifest.id]?.manifest {
                 publishScript(m, status: "crashed", lastRunAt: Date())
             }
+            let allLines = conn?.allStderrLines ?? []
+            let stderrText = allLines.joined(separator: "\n").lowercased()
+            let isTCCDenial = stderrText.contains("operation not permitted") ||
+                              stderrText.contains("permission denied") ||
+                              stderrText.contains(": eperm")
+            if let idx = scripts.firstIndex(where: { $0.id == manifest.id }) {
+                scripts[idx].lastError = isTCCDenial ? "__system_permission_denied__" : stderr
+            }
             let feedIconData  = manifests[manifest.id]?.icon.flatMap { ScriptManager.iconPNGBase64($0) }
             let feedSvgString = manifests[manifest.id]?.svgString
             Task {
@@ -1072,9 +1080,18 @@ final class ScriptManager: @unchecked Sendable {
         connections.removeValue(forKey: manifest.id)
         blockStateManager.clearAll(forScript: manifest.id)
 
-        // Surface the last error line in the Mac UI
-        if let error = errorSummary, let idx = scripts.firstIndex(where: { $0.id == manifest.id }) {
-            scripts[idx].lastError = error
+        // Surface the last error line in the Mac UI.
+        // Detect macOS TCC denial specifically so the UI can show a targeted fix path.
+        if let idx = scripts.firstIndex(where: { $0.id == manifest.id }) {
+            let stderrText = allStderrLines.joined(separator: "\n").lowercased()
+            let isTCCDenial = stderrText.contains("operation not permitted") ||
+                              stderrText.contains("permission denied") ||
+                              stderrText.contains(": eperm")
+            if isTCCDenial {
+                scripts[idx].lastError = "__system_permission_denied__"
+            } else if let error = errorSummary {
+                scripts[idx].lastError = error
+            }
         }
 
         actionHistory.recordScriptCrash(

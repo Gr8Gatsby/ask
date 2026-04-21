@@ -1748,25 +1748,38 @@ struct ScriptDetailView: View {
     }
 
     private func crashBanner(_ error: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.red)
+        let isTCCDenial = error == "__system_permission_denied__"
+        return HStack(alignment: .top, spacing: 8) {
+            Image(systemName: isTCCDenial ? "lock.trianglebadge.exclamationmark.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(isTCCDenial ? .orange : .red)
                 .font(.caption)
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Script crashed")
+                Text(isTCCDenial ? "macOS blocked file access" : "Script crashed")
                     .font(.caption)
                     .fontWeight(.medium)
-                    .foregroundStyle(.red)
-                Text(error)
+                    .foregroundStyle(isTCCDenial ? .orange : .red)
+                if isTCCDenial {
+                    Text("macOS denied this script access to a protected folder (Documents, Desktop, or similar). Ask already approved it — this is a separate system-level grant.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Button("Fix in Privacy & Security Settings →") {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders")!)
+                    }
+                    .buttonStyle(.plain)
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(4)
+                    .foregroundStyle(.orange)
+                } else {
+                    Text(error)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(4)
+                }
             }
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.red.opacity(0.07))
+        .background(isTCCDenial ? Color.orange.opacity(0.07) : Color.red.opacity(0.07))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
