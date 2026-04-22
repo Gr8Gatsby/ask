@@ -139,6 +139,14 @@ struct OnboardingView: View {
 
         installer.load(zipURL: zipURL, existingScripts: scriptManager.scripts)
 
+        // Wait for the background parse Task to start (idle → parsing)
+        var startWaits = 0
+        while installer.phase == .idle, startWaits < 50 {
+            try await Task.sleep(for: .milliseconds(100))
+            startWaits += 1
+        }
+
+        // Wait for parsing to finish (parsing → ready)
         var parseWaits = 0
         while installer.phase == .parsing, parseWaits < 300 {
             try await Task.sleep(for: .milliseconds(100))
