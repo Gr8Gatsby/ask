@@ -1220,6 +1220,12 @@ private struct ScriptsTabView: View {
     @State private var showSuccessBanner = false
     @State private var successMessage = ""
 
+    private var shouldShowCatalogNudge: Bool {
+        guard !settings.nudgeDismissed else { return false }
+        let nonSystem = scriptManager.scripts.filter { !$0.isSystem }
+        return nonSystem.count == 1 && nonSystem.first?.id == "hello-world"
+    }
+
     var body: some View {
         NavigationSplitView {
             List(selection: $selectedScriptID) {
@@ -1318,6 +1324,13 @@ private struct ScriptsTabView: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 0) {
+                    if shouldShowCatalogNudge {
+                        CatalogNudgeBanner {
+                            withAnimation { showCatalog = true; showVault = false; selectedScriptID = nil }
+                        } onDismiss: {
+                            settings.nudgeDismissed = true
+                        }
+                    }
                     if let label = installer.installProgressLabel {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
@@ -1442,6 +1455,69 @@ private struct ScriptsTabView: View {
         }
     }
 }
+
+// MARK: - Catalog nudge banner
+
+private struct CatalogNudgeBanner: View {
+    let onOpen: () -> Void
+    let onDismiss: () -> Void
+
+    @State private var glowOpacity: Double = 0.3
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 10) {
+                Image(systemName: "sparkles")
+                    .font(.body)
+                    .foregroundStyle(.white)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Install more scripts")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
+                    Text("Browse the catalog →")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+
+                Spacer()
+
+                Button {
+                    withAnimation(.easeOut(duration: 0.2)) { onDismiss() }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.7))
+                        .padding(4)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                LinearGradient(
+                    colors: [Color(red: 0.38, green: 0.2, blue: 0.92),
+                             Color(red: 0.18, green: 0.46, blue: 0.96)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .shadow(color: Color(red: 0.28, green: 0.3, blue: 0.95).opacity(glowOpacity), radius: 12, x: 0, y: 2)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+        }
+        .buttonStyle(.plain)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
+                glowOpacity = 0.85
+            }
+        }
+    }
+}
+
+// MARK: - Scripts vault
 
 private struct ScriptsVaultView: View {
     @Bindable var installer: ScriptInstaller
