@@ -236,13 +236,13 @@ class Claude3:
         serialized = json.dumps(payload, sort_keys=True)
         if self._emitted_payloads.get(block_id) == serialized:
             return  # nothing changed — skip the emit
-        self._emitted_payloads[block_id] = serialized
         args = {'blockId': block_id, 'blockType': block_type, 'payload': payload}
         if ttl is not None:
             args['ttl'] = ttl
         if inbox:
             args['inbox'] = True
         await self._call_tool('emit_block', args)
+        self._emitted_payloads[block_id] = serialized  # only cache after successful emit
 
     async def clear_block(self, block_id: str):
         await self._call_tool('clear_block', {'blockId': block_id})
@@ -682,12 +682,18 @@ class Claude3:
         fut = asyncio.get_running_loop().create_future()
         self._pending_permissions[request.request_id] = fut
 
-        await self._set_task_status(session, 'working')
-        await self._append_structured_message(
-            session,
-            'Permission needed',
-            f'`{request.tool}` wants to run:\n\n```\n{preview}\n```',
-        )
+        try:
+            await self._set_task_status(session, 'working')
+        except Exception as exc:
+            _log(f'permission set_task_status failed: {exc}', 'WARN')
+        try:
+            await self._append_structured_message(
+                session,
+                'Permission needed',
+                f'`{request.tool}` wants to run:\n\n```\n{preview}\n```',
+            )
+        except Exception as exc:
+            _log(f'permission append_message failed: {exc}', 'WARN')
         await self._emit_session_block(session)
         await self._emit_tile()
         _save_registry(self._registry)
@@ -699,10 +705,16 @@ class Claude3:
         finally:
             self._pending_permissions.pop(request.request_id, None)
 
-        await self._append_structured_message(session, 'Permission resolved', value)
+        try:
+            await self._append_structured_message(session, 'Permission resolved', value)
+        except Exception as exc:
+            _log(f'permission resolved append_message failed: {exc}', 'WARN')
         session.pending_permission = None
         session.state = 'running_tool' if value in ('Allow', 'Always Allow', 'executed') else 'idle'
-        await self._set_task_status(session, 'working')
+        try:
+            await self._set_task_status(session, 'working')
+        except Exception as exc:
+            _log(f'permission resolved set_task_status failed: {exc}', 'WARN')
         await self._emit_session_block(session)
         await self._emit_tile()
         _save_registry(self._registry)
@@ -966,13 +978,16 @@ class Claude3:
             # An empty TTY means we haven't resolved routing yet — keep the session alive.
             if session.tty and not tty_is_live(session.tty):
                 _log(f'session {session.session_id} TTY gone — marking stopped')
-                await self._append_structured_message(
-                    session, 'Session ended', 'Terminal closed.')
                 session.state = 'stopped'
                 session.stopped_at = datetime.datetime.now().timestamp()
-                await self._set_task_status(session, 'completed')
-                await self.clear_block(self._session_block_id(session.session_id))
                 self._registry.remove(session.session_id)
+                try:
+                    await self._append_structured_message(
+                        session, 'Session ended', 'Terminal closed.')
+                    await self._set_task_status(session, 'completed')
+                    await self.clear_block(self._session_block_id(session.session_id))
+                except Exception as exc:
+                    _log(f'TTY-gone cleanup error for {session.session_id}: {exc}', 'WARN')
             else:
                 # Reset transient working states on refresh so sessions don't get
                 # stuck showing "Running Tool" after a daemon restart.
