@@ -117,6 +117,7 @@ struct AskMacApp: App {
         Window("Welcome to Ask", id: "onboarding") {
             OnboardingView()
                 .environment(settings)
+                .environment(heartbeat)
                 .environment(scriptManager)
                 .environment(scriptCatalog)
         }
