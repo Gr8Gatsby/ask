@@ -7,66 +7,61 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		AA1B2C3D4E5F6789ABCD0003 /* AskMacUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1B2C3D4E5F6789ABCD0002 /* AskMacUITests.swift */; };
-		AA1B2C3D4E5F6789ABCD0005 /* MacUITestingSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1B2C3D4E5F6789ABCD0004 /* MacUITestingSupport.swift */; };
+		000F4A980B0414BE0CC8C4FF /* PermissionConsentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AE817B39CB7F2A53FCDA7CB /* PermissionConsentView.swift */; };
+		0038B1D02FF68672B1F0C367 /* MacFeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9B898B8784054153152350B /* MacFeedView.swift */; };
 		0675DD58EE11FCC5FB9C0FE9 /* MCPConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D62BC3ACCF548A6926C83A4 /* MCPConnection.swift */; };
-		06C485A3E2C74E3C9F1A0001 /* TaskService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06C485A3E2C74E3C9F1A0000 /* TaskService.swift */; };
-		06C485A3E2C74E3C9F1A0003 /* TaskRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06C485A3E2C74E3C9F1A0002 /* TaskRegistry.swift */; };
 		0D696DD556936DCEC1997BEB /* TerminalMonitorServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F05D2937205C7D5DED51EEA /* TerminalMonitorServiceTests.swift */; };
 		2A8C999FCCA1DDA22786079F /* BlockService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 944903959A55B26822A4701D /* BlockService.swift */; };
-		2A8C999FCCA1DDA22786079E /* BlockStateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 944903959A55B26822A4701E /* BlockStateManager.swift */; };
 		2DDF70E89F94833C7837389B /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504764CE87B4791BDD3ABFD8 /* KeychainService.swift */; };
 		318C46CF42445B388B5E6739 /* libAskMacCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 52C75A2FE8B8444D42AF146A /* libAskMacCore.a */; };
-		CC000006CATALOG00ENTRY000 /* CatalogEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001CATALOG00ENTRY000 /* CatalogEntry.swift */; };
-		CC000007INSTALLED0SCRIPT0 /* InstalledScript.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002INSTALLED0SCRIPT0 /* InstalledScript.swift */; };
-		CC000008CATALOG0SERVICE00 /* ScriptCatalogService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D24A318DEBECC653846BFA7 /* ScriptCatalogService.swift */; };
-		CC000009TERMINAL0MONITOR0 /* TerminalMonitorService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFD416A6077DEA3848608AB1 /* TerminalMonitorService.swift */; };
-		CC000010VERSION0COMPARE00 /* VersionComparison.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F2A338EFC99F8D874DB40EE /* VersionComparison.swift */; };
 		337B871BCC56D6AD61869B87 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E4D0C6DDB6891CB03EA9572 /* MenuBarView.swift */; };
 		3654DDECAB92F2C7B7678F90 /* AskMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70F6904917CF419EF961332 /* AskMacApp.swift */; };
 		44001CADDFE8D87EC9DC698D /* MessageWatcherService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 834313B9757B652D0DB8E349 /* MessageWatcherService.swift */; };
+		49EE75B9FA1320C6CBACB7B0 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FBE58AD4319A750AC8132F6 /* OnboardingView.swift */; };
 		4FC5952095062C336D1CA67F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 468C8037AACD02ADA46B757B /* Assets.xcassets */; };
 		58854C8E2F0F81A7D7A40B80 /* BlockPreviewViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 406DAAC6415E06CCCF55B8BB /* BlockPreviewViews.swift */; };
-		BP0001HELPERSBUILDF00001 /* BlockPreviewHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = BP0001HELPERSFILEREF0001 /* BlockPreviewHelpers.swift */; };
-		BP0002INTERACTIVEBUILD001 /* BlockPreviewInteractive.swift in Sources */ = {isa = PBXBuildFile; fileRef = BP0002INTERACTIVEFILEREF1 /* BlockPreviewInteractive.swift */; };
-		BP0003STATUSBUILDF000001 /* BlockPreviewStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = BP0003STATUSFILEREF00001 /* BlockPreviewStatus.swift */; };
-		BP0004CONTENTBUILDF00001 /* BlockPreviewContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = BP0004CONTENTFILEREF0001 /* BlockPreviewContent.swift */; };
-		BP0005SESSIONBUILDF00001 /* BlockPreviewSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = BP0005SESSIONFILEREF0001 /* BlockPreviewSession.swift */; };
+		5B61E54CE9843A9A5C0AD50E /* ScriptCatalogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B00637FB853892DA9991BBF /* ScriptCatalogView.swift */; };
 		5ECA9EF4288A77DE66393903 /* ActionHistoryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83069E78F01A6ACCC68DA445 /* ActionHistoryService.swift */; };
+		63CA74CD980B73A3625E4A42 /* CatalogEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 511159CACA895A8F81CD7F01 /* CatalogEntry.swift */; };
+		64532E0B6F9F3D17C45F536A /* ScriptCatalogService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59391DEC75269D029ADC07D3 /* ScriptCatalogService.swift */; };
 		68ECD65ACEAFD3360C586C86 /* FeedScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE84811356D534B4D8E86AB8 /* FeedScheduler.swift */; };
+		6B72EE49DF6636DE0B0B7098 /* ScriptDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AEB210A6E3AED0E763F5EFA /* ScriptDetailView.swift */; };
 		6F24BAB0E82A7694C50B439F /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FBA2522655384EA7091AA8C /* HistoryView.swift */; };
 		6FF5F3CD40995F704A970F21 /* HeartbeatService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B65A981DB44C661C02FF9312 /* HeartbeatService.swift */; };
 		7A4B52614E8031E1D2E8710F /* ResponsePoller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4067387D7D1B4F65BAB0B74F /* ResponsePoller.swift */; };
+		8B154777BD5CBACF5561A998 /* BlockPreviewHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FB18E6D1590306C5E9169FA /* BlockPreviewHelpers.swift */; };
 		8B9F7C8632ECBE36C84A369E /* ScriptManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA1CC49C770BDCD1EB75B351 /* ScriptManager.swift */; };
+		8C30E811B8346325809717AD /* TaskServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8C66FCA9A17628445E9ECCA /* TaskServiceTests.swift */; };
+		8D1B5B2F3B2AD30DC3450B73 /* VersionComparison.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E900B371D21D4580D767EBA /* VersionComparison.swift */; };
 		8FE46F69A0823A2188C24DB4 /* ScriptManagerFilteringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A9E4EFAF553CA1CD22DA58A /* ScriptManagerFilteringTests.swift */; };
-		9A384768FE320AC25F231F48 /* MacMessagesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B82E4BC0B8C01489502831A9 /* MacMessagesView.swift */; };
 		A302F5F593A0983FFEE135A9 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28BCC8842C2E63700381890C /* SettingsView.swift */; };
-		AA0000002VIEW0HELPERS00 /* ViewHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000001VIEW0HELPERS00 /* ViewHelpers.swift */; };
-		AA0000004SCRIPTDETAIL00 /* ScriptDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000003SCRIPTDETAIL00 /* ScriptDetailView.swift */; };
-		AA0000006SCRIPTCATALOG0 /* ScriptCatalogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000005SCRIPTCATALOG0 /* ScriptCatalogView.swift */; };
-		AA0000008MACFEEDVIEW000 /* MacFeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000007MACFEEDVIEW000 /* MacFeedView.swift */; };
-		A3A4405290AAE7B21855BEE9 /* VersionComparison.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F2A338EFC99F8D874DB40EE /* VersionComparison.swift */; };
+		AF43483C7B2B14F044025386 /* LocalHTTPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE8BBC3775C0DEBB0665BF8A /* LocalHTTPServer.swift */; };
 		AFA75A68E946CD8E2CAE7BBE /* libAskMacCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 52C75A2FE8B8444D42AF146A /* libAskMacCore.a */; };
+		B0E1449E476C1EC21C08AB8E /* BlockPreviewSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 944A4DCFCCDB25464859E84A /* BlockPreviewSession.swift */; };
 		B5760E42FDC4626B6A2AD8D9 /* CloudKitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42EC5BBB34D453B2F332AF00 /* CloudKitService.swift */; };
 		BAE4E67E06F337A2A3722087 /* TerminalMonitorService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFD416A6077DEA3848608AB1 /* TerminalMonitorService.swift */; };
-		BB000001CATALOG0SERVICE00 /* ScriptCatalogService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D24A318DEBECC653846BFA7 /* ScriptCatalogService.swift */; };
-		BB000002VERSION0COMPARE00 /* VersionComparison.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F2A338EFC99F8D874DB40EE /* VersionComparison.swift */; };
-		BB000003CATALOG0ENTRY0000 /* CatalogEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001CATALOG00ENTRY000 /* CatalogEntry.swift */; };
-		BB000004INSTALLED0SCRIPT0 /* InstalledScript.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002INSTALLED0SCRIPT0 /* InstalledScript.swift */; };
+		BB95A9FB5143C6CE6E3D4CD3 /* InstalledScript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AF213161B330FC04561C69E /* InstalledScript.swift */; };
 		BF0B435F00BDDA9C64E86B06 /* TooltipSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53C1EA5DC0ECBB374F1FCF5B /* TooltipSupport.swift */; };
 		C2FCC42025E190C3F0BA4152 /* SystemScriptConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3012DFF4EC7CA529C10E374 /* SystemScriptConnection.swift */; };
 		C4A094A8937C7FDEF0021ADC /* CloudKitSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70A72093BE81EDF980E0B65F /* CloudKitSchema.swift */; };
+		C6AC124B00FCBF51126E1CD4 /* BlockStateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B2DAA8286B2D3B719A182D8 /* BlockStateManager.swift */; };
 		C99AE720C0F4BDEEC032237B /* VersionComparisonTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBB97B6BC873D01755AE3B01 /* VersionComparisonTests.swift */; };
 		CB275270E3CF93DD24F84506 /* AppUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8A9A572F12084AD9797F8B1 /* AppUpdater.swift */; };
 		D0C0EC092421E3FE9F41EB89 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA7C37B37BDE67ED30528117 /* AppSettings.swift */; };
 		D867C4A0F3AC8C6C77C16CC6 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = C42185CDB89CDF057E91C2A6 /* Sparkle */; };
+		D8C56B58F83FC0A72B93B0F9 /* BlockPreviewInteractive.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75AE94E49F8A69D9D86A1821 /* BlockPreviewInteractive.swift */; };
+		DA1696677CAF3AD1A1633669 /* TaskRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 394A7868696C7CA0D1CF57D1 /* TaskRegistry.swift */; };
+		DA268BB52919770AB2F3E41E /* ViewHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 246E4BBF06F630784496A69E /* ViewHelpers.swift */; };
 		DA6EADD0D5A75CED02E56F5C /* ScriptInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDBAEE7F7B9B1616758FEDE2 /* ScriptInstaller.swift */; };
+		DAA69300555DC6A6182D64DD /* ScriptDependencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B2C7957AA31DE73EE832ABD /* ScriptDependencyTests.swift */; };
+		E1FEABE93A364BCBB97A2D9F /* TaskService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B509F84BEA100E6E2E40C0C2 /* TaskService.swift */; };
+		E615CA321AB7F86AD7D082FA /* MacUITestingSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 085A360289ADA253977E3755 /* MacUITestingSupport.swift */; };
 		EFD8390B0162CA00B1B3144E /* ScriptCatalogServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F0BACCC7986B8E27CD6B9A8 /* ScriptCatalogServiceTests.swift */; };
-		F18233C4B5A2ADE4AD502C52 /* ScriptCatalogService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D24A318DEBECC653846BFA7 /* ScriptCatalogService.swift */; };
 		F47B199A3425DC6C05AC0480 /* ScriptInstallerRollbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAB5EAD55DFF07DA5ECE953A /* ScriptInstallerRollbackTests.swift */; };
 		F4A65B11697EF409F84B5886 /* ScriptUpdateService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 125B8BABE336DAA2EEDBC261 /* ScriptUpdateService.swift */; };
 		F6670C71B1ACAA3861CBE8B5 /* BlocksBuilderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78ADB28BB3AA3C89FB164C5F /* BlocksBuilderView.swift */; };
-		AA000010LOCALHTTPSERVER00 /* LocalHTTPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000011LOCALHTTPSERVER00 /* LocalHTTPServer.swift */; };
+		F731AD25577DEF6697BFE1A8 /* BlockPreviewContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FA01F4EBBCEE5682DC62048 /* BlockPreviewContent.swift */; };
+		FF0F953A573F6C0C5AFB2D2A /* BlockPreviewStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 402957444B4A25CFEA7F3BBC /* BlockPreviewStatus.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -91,59 +86,54 @@
 			remoteGlobalIDString = E59CE13E0F81B53C77683FB1;
 			remoteInfo = AskMac;
 		};
-		AA1B2C3D4E5F6789ABCD0013 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = B36075E18F257B51F15F8871 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = E59CE13E0F81B53C77683FB1;
-			remoteInfo = AskMac;
-		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		AA1B2C3D4E5F6789ABCD0001 /* AskMacUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AskMacUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		AA1B2C3D4E5F6789ABCD0002 /* AskMacUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskMacUITests.swift; sourceTree = "<group>"; };
-		AA1B2C3D4E5F6789ABCD0004 /* MacUITestingSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacUITestingSupport.swift; sourceTree = "<group>"; };
 		00C7F95F08E74502C870234D /* AskMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AskMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		085A360289ADA253977E3755 /* MacUITestingSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacUITestingSupport.swift; sourceTree = "<group>"; };
 		0D62BC3ACCF548A6926C83A4 /* MCPConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPConnection.swift; sourceTree = "<group>"; };
-		06C485A3E2C74E3C9F1A0000 /* TaskService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskService.swift; sourceTree = "<group>"; };
-		06C485A3E2C74E3C9F1A0002 /* TaskRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskRegistry.swift; sourceTree = "<group>"; };
 		125B8BABE336DAA2EEDBC261 /* ScriptUpdateService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptUpdateService.swift; sourceTree = "<group>"; };
+		1AE817B39CB7F2A53FCDA7CB /* PermissionConsentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionConsentView.swift; sourceTree = "<group>"; };
+		1FBE58AD4319A750AC8132F6 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
+		246E4BBF06F630784496A69E /* ViewHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewHelpers.swift; sourceTree = "<group>"; };
 		28BCC8842C2E63700381890C /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-		AA0000001VIEW0HELPERS00 /* ViewHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewHelpers.swift; sourceTree = "<group>"; };
-		AA0000003SCRIPTDETAIL00 /* ScriptDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptDetailView.swift; sourceTree = "<group>"; };
-		AA0000005SCRIPTCATALOG0 /* ScriptCatalogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptCatalogView.swift; sourceTree = "<group>"; };
-		AA0000007MACFEEDVIEW000 /* MacFeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacFeedView.swift; sourceTree = "<group>"; };
 		2E4D0C6DDB6891CB03EA9572 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
+		394A7868696C7CA0D1CF57D1 /* TaskRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskRegistry.swift; sourceTree = "<group>"; };
 		3A9E4EFAF553CA1CD22DA58A /* ScriptManagerFilteringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptManagerFilteringTests.swift; sourceTree = "<group>"; };
-		3D24A318DEBECC653846BFA7 /* ScriptCatalogService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptCatalogService.swift; sourceTree = "<group>"; };
-		AA000001CATALOG00ENTRY000 /* CatalogEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CatalogEntry.swift; sourceTree = "<group>"; };
-		AA000002INSTALLED0SCRIPT0 /* InstalledScript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstalledScript.swift; sourceTree = "<group>"; };
+		3B00637FB853892DA9991BBF /* ScriptCatalogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptCatalogView.swift; sourceTree = "<group>"; };
 		3F05D2937205C7D5DED51EEA /* TerminalMonitorServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalMonitorServiceTests.swift; sourceTree = "<group>"; };
-		3F2A338EFC99F8D874DB40EE /* VersionComparison.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VersionComparison.swift; sourceTree = "<group>"; };
+		402957444B4A25CFEA7F3BBC /* BlockPreviewStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockPreviewStatus.swift; sourceTree = "<group>"; };
 		4067387D7D1B4F65BAB0B74F /* ResponsePoller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResponsePoller.swift; sourceTree = "<group>"; };
 		406DAAC6415E06CCCF55B8BB /* BlockPreviewViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockPreviewViews.swift; sourceTree = "<group>"; };
-		BP0001HELPERSFILEREF0001 /* BlockPreviewHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockPreviewHelpers.swift; sourceTree = "<group>"; };
-		BP0002INTERACTIVEFILEREF1 /* BlockPreviewInteractive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockPreviewInteractive.swift; sourceTree = "<group>"; };
-		BP0003STATUSFILEREF00001 /* BlockPreviewStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockPreviewStatus.swift; sourceTree = "<group>"; };
-		BP0004CONTENTFILEREF0001 /* BlockPreviewContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockPreviewContent.swift; sourceTree = "<group>"; };
-		BP0005SESSIONFILEREF0001 /* BlockPreviewSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockPreviewSession.swift; sourceTree = "<group>"; };
 		42EC5BBB34D453B2F332AF00 /* CloudKitService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitService.swift; sourceTree = "<group>"; };
 		468C8037AACD02ADA46B757B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		4AF213161B330FC04561C69E /* InstalledScript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstalledScript.swift; sourceTree = "<group>"; };
+		4B2DAA8286B2D3B719A182D8 /* BlockStateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockStateManager.swift; sourceTree = "<group>"; };
+		4E900B371D21D4580D767EBA /* VersionComparison.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VersionComparison.swift; sourceTree = "<group>"; };
 		504764CE87B4791BDD3ABFD8 /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
+		511159CACA895A8F81CD7F01 /* CatalogEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CatalogEntry.swift; sourceTree = "<group>"; };
 		52C75A2FE8B8444D42AF146A /* libAskMacCore.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libAskMacCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		53C1EA5DC0ECBB374F1FCF5B /* TooltipSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TooltipSupport.swift; sourceTree = "<group>"; };
+		59391DEC75269D029ADC07D3 /* ScriptCatalogService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptCatalogService.swift; sourceTree = "<group>"; };
 		6A9CBCABF50128C52895B960 /* AskMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AskMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6FBA2522655384EA7091AA8C /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
 		70A72093BE81EDF980E0B65F /* CloudKitSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitSchema.swift; sourceTree = "<group>"; };
+		75AE94E49F8A69D9D86A1821 /* BlockPreviewInteractive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockPreviewInteractive.swift; sourceTree = "<group>"; };
 		78ADB28BB3AA3C89FB164C5F /* BlocksBuilderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlocksBuilderView.swift; sourceTree = "<group>"; };
 		7F0BACCC7986B8E27CD6B9A8 /* ScriptCatalogServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptCatalogServiceTests.swift; sourceTree = "<group>"; };
+		7FB18E6D1590306C5E9169FA /* BlockPreviewHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockPreviewHelpers.swift; sourceTree = "<group>"; };
 		83069E78F01A6ACCC68DA445 /* ActionHistoryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionHistoryService.swift; sourceTree = "<group>"; };
 		834313B9757B652D0DB8E349 /* MessageWatcherService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageWatcherService.swift; sourceTree = "<group>"; };
 		944903959A55B26822A4701D /* BlockService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockService.swift; sourceTree = "<group>"; };
-		944903959A55B26822A4701E /* BlockStateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockStateManager.swift; sourceTree = "<group>"; };
+		944A4DCFCCDB25464859E84A /* BlockPreviewSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockPreviewSession.swift; sourceTree = "<group>"; };
+		9AEB210A6E3AED0E763F5EFA /* ScriptDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptDetailView.swift; sourceTree = "<group>"; };
+		9B2C7957AA31DE73EE832ABD /* ScriptDependencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptDependencyTests.swift; sourceTree = "<group>"; };
+		9FA01F4EBBCEE5682DC62048 /* BlockPreviewContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockPreviewContent.swift; sourceTree = "<group>"; };
+		A9B898B8784054153152350B /* MacFeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacFeedView.swift; sourceTree = "<group>"; };
+		AE8BBC3775C0DEBB0665BF8A /* LocalHTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHTTPServer.swift; sourceTree = "<group>"; };
+		B509F84BEA100E6E2E40C0C2 /* TaskService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskService.swift; sourceTree = "<group>"; };
 		B65A981DB44C661C02FF9312 /* HeartbeatService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeartbeatService.swift; sourceTree = "<group>"; };
-		B82E4BC0B8C01489502831A9 /* MacMessagesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMessagesView.swift; sourceTree = "<group>"; };
+		C8C66FCA9A17628445E9ECCA /* TaskServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskServiceTests.swift; sourceTree = "<group>"; };
 		CA1CC49C770BDCD1EB75B351 /* ScriptManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptManager.swift; sourceTree = "<group>"; };
 		CA7C37B37BDE67ED30528117 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
 		CFD416A6077DEA3848608AB1 /* TerminalMonitorService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalMonitorService.swift; sourceTree = "<group>"; };
@@ -154,17 +144,9 @@
 		F70F6904917CF419EF961332 /* AskMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskMacApp.swift; sourceTree = "<group>"; };
 		FBB97B6BC873D01755AE3B01 /* VersionComparisonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VersionComparisonTests.swift; sourceTree = "<group>"; };
 		FE84811356D534B4D8E86AB8 /* FeedScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedScheduler.swift; sourceTree = "<group>"; };
-		AA000011LOCALHTTPSERVER00 /* LocalHTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHTTPServer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		AA1B2C3D4E5F6789ABCD0007 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		85CE620F6FAB25D9E93BB0D9 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -205,21 +187,21 @@
 			children = (
 				83069E78F01A6ACCC68DA445 /* ActionHistoryService.swift */,
 				944903959A55B26822A4701D /* BlockService.swift */,
-				944903959A55B26822A4701E /* BlockStateManager.swift */,
+				4B2DAA8286B2D3B719A182D8 /* BlockStateManager.swift */,
 				42EC5BBB34D453B2F332AF00 /* CloudKitService.swift */,
 				FE84811356D534B4D8E86AB8 /* FeedScheduler.swift */,
 				B65A981DB44C661C02FF9312 /* HeartbeatService.swift */,
 				504764CE87B4791BDD3ABFD8 /* KeychainService.swift */,
-				AA1B2C3D4E5F6789ABCD0004 /* MacUITestingSupport.swift */,
+				AE8BBC3775C0DEBB0665BF8A /* LocalHTTPServer.swift */,
+				085A360289ADA253977E3755 /* MacUITestingSupport.swift */,
 				0D62BC3ACCF548A6926C83A4 /* MCPConnection.swift */,
 				834313B9757B652D0DB8E349 /* MessageWatcherService.swift */,
 				4067387D7D1B4F65BAB0B74F /* ResponsePoller.swift */,
-				06C485A3E2C74E3C9F1A0000 /* TaskService.swift */,
 				DDBAEE7F7B9B1616758FEDE2 /* ScriptInstaller.swift */,
 				CA1CC49C770BDCD1EB75B351 /* ScriptManager.swift */,
-				AA000011LOCALHTTPSERVER00 /* LocalHTTPServer.swift */,
 				125B8BABE336DAA2EEDBC261 /* ScriptUpdateService.swift */,
 				F3012DFF4EC7CA529C10E374 /* SystemScriptConnection.swift */,
+				B509F84BEA100E6E2E40C0C2 /* TaskService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -228,8 +210,10 @@
 			isa = PBXGroup;
 			children = (
 				7F0BACCC7986B8E27CD6B9A8 /* ScriptCatalogServiceTests.swift */,
+				9B2C7957AA31DE73EE832ABD /* ScriptDependencyTests.swift */,
 				EAB5EAD55DFF07DA5ECE953A /* ScriptInstallerRollbackTests.swift */,
 				3A9E4EFAF553CA1CD22DA58A /* ScriptManagerFilteringTests.swift */,
+				C8C66FCA9A17628445E9ECCA /* TaskServiceTests.swift */,
 				3F05D2937205C7D5DED51EEA /* TerminalMonitorServiceTests.swift */,
 				FBB97B6BC873D01755AE3B01 /* VersionComparisonTests.swift */,
 			);
@@ -245,22 +229,12 @@
 			path = Settings;
 			sourceTree = "<group>";
 		};
-		AA1B2C3D4E5F6789ABCD0008 /* AskMacUITests */ = {
-			isa = PBXGroup;
-			children = (
-				AA1B2C3D4E5F6789ABCD0002 /* AskMacUITests.swift */,
-			);
-			name = AskMacUITests;
-			path = Tests/AskMacUITests;
-			sourceTree = "<group>";
-		};
 		7D85D3CDB2B9B6173CFB83F9 = {
 			isa = PBXGroup;
 			children = (
 				193160741783FAD848251CCB /* AskMac */,
 				C684A63C98AF3DBF68A15174 /* AskMacCore */,
 				68C19D81F1E89782D63E471F /* AskMacTests */,
-				AA1B2C3D4E5F6789ABCD0008 /* AskMacUITests */,
 				FB0D7985181B5E1A4D8FBDA2 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -268,22 +242,23 @@
 		A2E07FB35B1F8AB22AB98A99 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				9FA01F4EBBCEE5682DC62048 /* BlockPreviewContent.swift */,
+				7FB18E6D1590306C5E9169FA /* BlockPreviewHelpers.swift */,
+				75AE94E49F8A69D9D86A1821 /* BlockPreviewInteractive.swift */,
+				944A4DCFCCDB25464859E84A /* BlockPreviewSession.swift */,
+				402957444B4A25CFEA7F3BBC /* BlockPreviewStatus.swift */,
 				406DAAC6415E06CCCF55B8BB /* BlockPreviewViews.swift */,
-				BP0001HELPERSFILEREF0001 /* BlockPreviewHelpers.swift */,
-				BP0002INTERACTIVEFILEREF1 /* BlockPreviewInteractive.swift */,
-				BP0003STATUSFILEREF00001 /* BlockPreviewStatus.swift */,
-				BP0004CONTENTFILEREF0001 /* BlockPreviewContent.swift */,
-				BP0005SESSIONFILEREF0001 /* BlockPreviewSession.swift */,
 				78ADB28BB3AA3C89FB164C5F /* BlocksBuilderView.swift */,
 				6FBA2522655384EA7091AA8C /* HistoryView.swift */,
-				B82E4BC0B8C01489502831A9 /* MacMessagesView.swift */,
+				A9B898B8784054153152350B /* MacFeedView.swift */,
 				2E4D0C6DDB6891CB03EA9572 /* MenuBarView.swift */,
+				1FBE58AD4319A750AC8132F6 /* OnboardingView.swift */,
+				1AE817B39CB7F2A53FCDA7CB /* PermissionConsentView.swift */,
+				3B00637FB853892DA9991BBF /* ScriptCatalogView.swift */,
+				9AEB210A6E3AED0E763F5EFA /* ScriptDetailView.swift */,
 				28BCC8842C2E63700381890C /* SettingsView.swift */,
-				AA0000001VIEW0HELPERS00 /* ViewHelpers.swift */,
-				AA0000003SCRIPTDETAIL00 /* ScriptDetailView.swift */,
-				AA0000005SCRIPTCATALOG0 /* ScriptCatalogView.swift */,
-				AA0000007MACFEEDVIEW000 /* MacFeedView.swift */,
 				53C1EA5DC0ECBB374F1FCF5B /* TooltipSupport.swift */,
+				246E4BBF06F630784496A69E /* ViewHelpers.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -291,12 +266,12 @@
 		C684A63C98AF3DBF68A15174 /* AskMacCore */ = {
 			isa = PBXGroup;
 			children = (
-				AA000001CATALOG00ENTRY000 /* CatalogEntry.swift */,
-				AA000002INSTALLED0SCRIPT0 /* InstalledScript.swift */,
-				3D24A318DEBECC653846BFA7 /* ScriptCatalogService.swift */,
-				06C485A3E2C74E3C9F1A0002 /* TaskRegistry.swift */,
+				511159CACA895A8F81CD7F01 /* CatalogEntry.swift */,
+				4AF213161B330FC04561C69E /* InstalledScript.swift */,
+				59391DEC75269D029ADC07D3 /* ScriptCatalogService.swift */,
+				394A7868696C7CA0D1CF57D1 /* TaskRegistry.swift */,
 				CFD416A6077DEA3848608AB1 /* TerminalMonitorService.swift */,
-				3F2A338EFC99F8D874DB40EE /* VersionComparison.swift */,
+				4E900B371D21D4580D767EBA /* VersionComparison.swift */,
 			);
 			name = AskMacCore;
 			path = Sources/AskMacCore;
@@ -315,7 +290,6 @@
 			children = (
 				6A9CBCABF50128C52895B960 /* AskMac.app */,
 				00C7F95F08E74502C870234D /* AskMacTests.xctest */,
-				AA1B2C3D4E5F6789ABCD0001 /* AskMacUITests.xctest */,
 				52C75A2FE8B8444D42AF146A /* libAskMacCore.a */,
 			);
 			name = Products;
@@ -324,23 +298,6 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		AA1B2C3D4E5F6789ABCD0009 /* AskMacUITests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = AA1B2C3D4E5F6789ABCD0012 /* Build configuration list for PBXNativeTarget "AskMacUITests" */;
-			buildPhases = (
-				AA1B2C3D4E5F6789ABCD0006 /* Sources */,
-				AA1B2C3D4E5F6789ABCD0007 /* Frameworks */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				AA1B2C3D4E5F6789ABCD0014 /* PBXTargetDependency */,
-			);
-			name = AskMacUITests;
-			productName = AskMacUITests;
-			productReference = AA1B2C3D4E5F6789ABCD0001 /* AskMacUITests.xctest */;
-			productType = "com.apple.product-type.bundle.ui-testing";
-		};
 		170C9A2D6ECAA9D5B00CB20D /* AskMacTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 68A439BDF7AB7FF4038496B6 /* Build configuration list for PBXNativeTarget "AskMacTests" */;
@@ -412,9 +369,6 @@
 					170C9A2D6ECAA9D5B00CB20D = {
 						DevelopmentTeam = B5J28L8ARB;
 					};
-					AA1B2C3D4E5F6789ABCD0009 = {
-						DevelopmentTeam = B5J28L8ARB;
-					};
 					B5A9CAFDC0F194D4B590DD08 = {
 						DevelopmentTeam = B5J28L8ARB;
 					};
@@ -444,7 +398,6 @@
 				E59CE13E0F81B53C77683FB1 /* AskMac */,
 				B5A9CAFDC0F194D4B590DD08 /* AskMacCore */,
 				170C9A2D6ECAA9D5B00CB20D /* AskMacTests */,
-				AA1B2C3D4E5F6789ABCD0009 /* AskMacUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -480,21 +433,15 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		AA1B2C3D4E5F6789ABCD0006 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				AA1B2C3D4E5F6789ABCD0003 /* AskMacUITests.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		464C2CE2637CA99678E445FA /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				EFD8390B0162CA00B1B3144E /* ScriptCatalogServiceTests.swift in Sources */,
+				DAA69300555DC6A6182D64DD /* ScriptDependencyTests.swift in Sources */,
 				F47B199A3425DC6C05AC0480 /* ScriptInstallerRollbackTests.swift in Sources */,
 				8FE46F69A0823A2188C24DB4 /* ScriptManagerFilteringTests.swift in Sources */,
+				8C30E811B8346325809717AD /* TaskServiceTests.swift in Sources */,
 				0D696DD556936DCEC1997BEB /* TerminalMonitorServiceTests.swift in Sources */,
 				C99AE720C0F4BDEEC032237B /* VersionComparisonTests.swift in Sources */,
 			);
@@ -508,14 +455,14 @@
 				D0C0EC092421E3FE9F41EB89 /* AppSettings.swift in Sources */,
 				CB275270E3CF93DD24F84506 /* AppUpdater.swift in Sources */,
 				3654DDECAB92F2C7B7678F90 /* AskMacApp.swift in Sources */,
+				F731AD25577DEF6697BFE1A8 /* BlockPreviewContent.swift in Sources */,
+				8B154777BD5CBACF5561A998 /* BlockPreviewHelpers.swift in Sources */,
+				D8C56B58F83FC0A72B93B0F9 /* BlockPreviewInteractive.swift in Sources */,
+				B0E1449E476C1EC21C08AB8E /* BlockPreviewSession.swift in Sources */,
+				FF0F953A573F6C0C5AFB2D2A /* BlockPreviewStatus.swift in Sources */,
 				58854C8E2F0F81A7D7A40B80 /* BlockPreviewViews.swift in Sources */,
-				BP0001HELPERSBUILDF00001 /* BlockPreviewHelpers.swift in Sources */,
-				BP0002INTERACTIVEBUILD001 /* BlockPreviewInteractive.swift in Sources */,
-				BP0003STATUSBUILDF000001 /* BlockPreviewStatus.swift in Sources */,
-				BP0004CONTENTBUILDF00001 /* BlockPreviewContent.swift in Sources */,
-				BP0005SESSIONBUILDF00001 /* BlockPreviewSession.swift in Sources */,
 				2A8C999FCCA1DDA22786079F /* BlockService.swift in Sources */,
-				2A8C999FCCA1DDA22786079E /* BlockStateManager.swift in Sources */,
+				C6AC124B00FCBF51126E1CD4 /* BlockStateManager.swift in Sources */,
 				F6670C71B1ACAA3861CBE8B5 /* BlocksBuilderView.swift in Sources */,
 				C4A094A8937C7FDEF0021ADC /* CloudKitSchema.swift in Sources */,
 				B5760E42FDC4626B6A2AD8D9 /* CloudKitService.swift in Sources */,
@@ -523,28 +470,25 @@
 				6FF5F3CD40995F704A970F21 /* HeartbeatService.swift in Sources */,
 				6F24BAB0E82A7694C50B439F /* HistoryView.swift in Sources */,
 				2DDF70E89F94833C7837389B /* KeychainService.swift in Sources */,
-				AA1B2C3D4E5F6789ABCD0005 /* MacUITestingSupport.swift in Sources */,
+				AF43483C7B2B14F044025386 /* LocalHTTPServer.swift in Sources */,
 				0675DD58EE11FCC5FB9C0FE9 /* MCPConnection.swift in Sources */,
+				0038B1D02FF68672B1F0C367 /* MacFeedView.swift in Sources */,
+				E615CA321AB7F86AD7D082FA /* MacUITestingSupport.swift in Sources */,
 				337B871BCC56D6AD61869B87 /* MenuBarView.swift in Sources */,
 				44001CADDFE8D87EC9DC698D /* MessageWatcherService.swift in Sources */,
+				49EE75B9FA1320C6CBACB7B0 /* OnboardingView.swift in Sources */,
+				000F4A980B0414BE0CC8C4FF /* PermissionConsentView.swift in Sources */,
 				7A4B52614E8031E1D2E8710F /* ResponsePoller.swift in Sources */,
-				06C485A3E2C74E3C9F1A0001 /* TaskService.swift in Sources */,
-				CC000006CATALOG00ENTRY000 /* CatalogEntry.swift in Sources */,
-				CC000007INSTALLED0SCRIPT0 /* InstalledScript.swift in Sources */,
-				CC000008CATALOG0SERVICE00 /* ScriptCatalogService.swift in Sources */,
-				CC000009TERMINAL0MONITOR0 /* TerminalMonitorService.swift in Sources */,
-				CC000010VERSION0COMPARE00 /* VersionComparison.swift in Sources */,
+				5B61E54CE9843A9A5C0AD50E /* ScriptCatalogView.swift in Sources */,
+				6B72EE49DF6636DE0B0B7098 /* ScriptDetailView.swift in Sources */,
 				DA6EADD0D5A75CED02E56F5C /* ScriptInstaller.swift in Sources */,
 				8B9F7C8632ECBE36C84A369E /* ScriptManager.swift in Sources */,
-				AA000010LOCALHTTPSERVER00 /* LocalHTTPServer.swift in Sources */,
 				F4A65B11697EF409F84B5886 /* ScriptUpdateService.swift in Sources */,
 				A302F5F593A0983FFEE135A9 /* SettingsView.swift in Sources */,
-				AA0000002VIEW0HELPERS00 /* ViewHelpers.swift in Sources */,
-				AA0000004SCRIPTDETAIL00 /* ScriptDetailView.swift in Sources */,
-				AA0000006SCRIPTCATALOG0 /* ScriptCatalogView.swift in Sources */,
-				AA0000008MACFEEDVIEW000 /* MacFeedView.swift in Sources */,
 				C2FCC42025E190C3F0BA4152 /* SystemScriptConnection.swift in Sources */,
+				E1FEABE93A364BCBB97A2D9F /* TaskService.swift in Sources */,
 				BF0B435F00BDDA9C64E86B06 /* TooltipSupport.swift in Sources */,
+				DA268BB52919770AB2F3E41E /* ViewHelpers.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -552,23 +496,18 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				BB000003CATALOG0ENTRY0000 /* CatalogEntry.swift in Sources */,
-				BB000004INSTALLED0SCRIPT0 /* InstalledScript.swift in Sources */,
-				BB000001CATALOG0SERVICE00 /* ScriptCatalogService.swift in Sources */,
-				06C485A3E2C74E3C9F1A0003 /* TaskRegistry.swift in Sources */,
+				63CA74CD980B73A3625E4A42 /* CatalogEntry.swift in Sources */,
+				BB95A9FB5143C6CE6E3D4CD3 /* InstalledScript.swift in Sources */,
+				64532E0B6F9F3D17C45F536A /* ScriptCatalogService.swift in Sources */,
+				DA1696677CAF3AD1A1633669 /* TaskRegistry.swift in Sources */,
 				BAE4E67E06F337A2A3722087 /* TerminalMonitorService.swift in Sources */,
-				BB000002VERSION0COMPARE00 /* VersionComparison.swift in Sources */,
+				8D1B5B2F3B2AD30DC3450B73 /* VersionComparison.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		AA1B2C3D4E5F6789ABCD0014 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = E59CE13E0F81B53C77683FB1 /* AskMac */;
-			targetProxy = AA1B2C3D4E5F6789ABCD0013 /* PBXContainerItemProxy */;
-		};
 		153BF4E6B2701CCC64C50410 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = B5A9CAFDC0F194D4B590DD08 /* AskMacCore */;
@@ -753,7 +692,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.8.0;
+				MARKETING_VERSION = 0.9.1;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -761,7 +700,6 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.kevinhill.askmac;
 				PROVISIONING_PROFILE_SPECIFIER = "036fee16-227d-478a-a99e-021fe8ec952d";
 				SDKROOT = macosx;
-				SWIFT_INCLUDE_PATHS = "$(BUILT_PRODUCTS_DIR)";
 			};
 			name = Release;
 		};
@@ -790,26 +728,25 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CLOUDKIT_ENVIRONMENT = DEVELOPMENT;
-				CODE_SIGN_ENTITLEMENTS = Sources/AskMac/AskMacDev.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
+				CLOUDKIT_ENVIRONMENT = PRODUCTION;
+				CODE_SIGN_ENTITLEMENTS = Sources/AskMac/AskMac.entitlements;
+				CODE_SIGN_IDENTITY = "Developer ID Application: Kevin Hill (B5J28L8ARB)";
+				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = B5J28L8ARB;
 				INFOPLIST_FILE = Sources/AskMac/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.8.0;
+				MARKETING_VERSION = 0.9.1;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.kevinhill.askmac;
+				PROVISIONING_PROFILE_SPECIFIER = "036fee16-227d-478a-a99e-021fe8ec952d";
 				SDKROOT = macosx;
-				SWIFT_INCLUDE_PATHS = "$(BUILT_PRODUCTS_DIR)";
 			};
 			name = Debug;
 		};
@@ -834,42 +771,6 @@
 			};
 			name = Debug;
 		};
-		AA1B2C3D4E5F6789ABCD0010 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				COMBINE_HIDPI_IMAGES = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-					"@loader_path/../Frameworks",
-				);
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.kevinhill.AskMacUITests;
-				SDKROOT = macosx;
-				SWIFT_VERSION = 5.10;
-				TEST_TARGET_NAME = AskMac;
-			};
-			name = Debug;
-		};
-		AA1B2C3D4E5F6789ABCD0011 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				COMBINE_HIDPI_IMAGES = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-					"@loader_path/../Frameworks",
-				);
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.kevinhill.AskMacUITests;
-				SDKROOT = macosx;
-				SWIFT_VERSION = 5.10;
-				TEST_TARGET_NAME = AskMac;
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -887,15 +788,6 @@
 			buildConfigurations = (
 				7799AB0228C91D865E0193EB /* Debug */,
 				592FA27071A764C2716E13E3 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Debug;
-		};
-		AA1B2C3D4E5F6789ABCD0012 /* Build configuration list for PBXNativeTarget "AskMacUITests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				AA1B2C3D4E5F6789ABCD0010 /* Debug */,
-				AA1B2C3D4E5F6789ABCD0011 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

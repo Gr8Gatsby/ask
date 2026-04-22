@@ -436,3 +436,204 @@ class TestToolListSessions:
         result = await manager._tool_list_sessions({})
         ids = {s['session_id'] for s in result['sessions']}
         assert ids == {'s1', 's2'}
+
+
+# ---------------------------------------------------------------------------
+# _as_applescript_str
+# ---------------------------------------------------------------------------
+
+class TestAsApplescriptStr:
+    def test_plain_ascii(self):
+        result = tm._as_applescript_str('hello')
+        assert result == '"hello"'
+
+    def test_empty_string(self):
+        assert tm._as_applescript_str('') == '""'
+
+    def test_double_quote_escaped(self):
+        result = tm._as_applescript_str('say "hi"')
+        assert '(ASCII character 34)' in result
+        assert '"say ' in result
+
+    def test_non_printable_esc(self):
+        result = tm._as_applescript_str('\x1b[B')
+        assert '(ASCII character 27)' in result
+
+    def test_escape_arrow_sequence(self):
+        # ESC[B ESC[B — two down arrows
+        result = tm._as_applescript_str('\x1b[B\x1b[B')
+        assert result.count('(ASCII character 27)') == 2
+
+    def test_backslash_escaped(self):
+        result = tm._as_applescript_str('a\\b')
+        assert '(ASCII character 92)' in result
+
+
+# ---------------------------------------------------------------------------
+# Multi-terminal dispatch: inject_tty
+# ---------------------------------------------------------------------------
+
+class TestMultiTerminalInjectTty:
+    async def _register(self, manager, sid, tty, terminal_app):
+        """Register a session with a pre-set terminal_app, bypassing detection."""
+        with patch('terminal_manager_main._detect_terminal_for_tty',
+                   new_callable=AsyncMock, return_value=terminal_app):
+            await manager._tool_register_session(
+                {'session_id': sid, 'app_id': 'test', 'tty': tty}
+            )
+
+    @pytest.mark.asyncio
+    async def test_iterm2_routes_to_iterm2_inject(self):
+        manager = tm.TerminalManager()
+        await self._register(manager, 's1', 'ttys009', 'iTerm2')
+        with patch('terminal_manager_main._iterm2_inject_tty',
+                   new_callable=AsyncMock, return_value=True) as mock:
+            result = await manager._tool_inject_tty({'session_id': 's1', 'text': 'hi'})
+        assert result['ok'] is True
+        mock.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_terminal_app_routes_to_terminal_inject(self):
+        manager = tm.TerminalManager()
+        await self._register(manager, 's1', 'ttys009', 'Terminal')
+        with patch('terminal_manager_main._terminal_inject_tty',
+                   new_callable=AsyncMock, return_value=True) as mock:
+            result = await manager._tool_inject_tty({'session_id': 's1', 'text': 'hi'})
+        assert result['ok'] is True
+        mock.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ghostty_returns_false_no_native_inject(self):
+        manager = tm.TerminalManager()
+        await self._register(manager, 's1', 'ttys009', 'Ghostty')
+        result = await manager._tool_inject_tty({'session_id': 's1', 'text': 'hi'})
+        assert result['ok'] is False
+
+    @pytest.mark.asyncio
+    async def test_warp_returns_false_no_native_inject(self):
+        manager = tm.TerminalManager()
+        await self._register(manager, 's1', 'ttys009', 'Warp')
+        result = await manager._tool_inject_tty({'session_id': 's1', 'text': 'hi'})
+        assert result['ok'] is False
+
+
+# ---------------------------------------------------------------------------
+# Multi-terminal dispatch: send_text
+# ---------------------------------------------------------------------------
+
+class TestMultiTerminalSendText:
+    async def _register(self, manager, sid, tty, terminal_app):
+        with patch('terminal_manager_main._detect_terminal_for_tty',
+                   new_callable=AsyncMock, return_value=terminal_app):
+            await manager._tool_register_session(
+                {'session_id': sid, 'app_id': 'test', 'tty': tty}
+            )
+
+    @pytest.mark.asyncio
+    async def test_iterm2_routes_to_iterm2_send_text(self):
+        manager = tm.TerminalManager()
+        await self._register(manager, 's1', 'ttys009', 'iTerm2')
+        with patch('terminal_manager_main._iterm2_send_text',
+                   new_callable=AsyncMock, return_value=True) as mock:
+            result = await manager._tool_send_text({'session_id': 's1', 'text': 'hello'})
+        assert result['ok'] is True
+        mock.assert_called_once_with('ttys009', 'hello')
+
+    @pytest.mark.asyncio
+    async def test_terminal_routes_to_terminal_send_text(self):
+        manager = tm.TerminalManager()
+        await self._register(manager, 's1', 'ttys009', 'Terminal')
+        with patch('terminal_manager_main._terminal_send_text',
+                   new_callable=AsyncMock, return_value=True) as mock:
+            result = await manager._tool_send_text({'session_id': 's1', 'text': 'hello'})
+        assert result['ok'] is True
+        mock.assert_called_once_with('ttys009', 'hello')
+
+    @pytest.mark.asyncio
+    async def test_ghostty_routes_to_generic_send_text(self):
+        manager = tm.TerminalManager()
+        await self._register(manager, 's1', 'ttys009', 'Ghostty')
+        with patch('terminal_manager_main._generic_send_text',
+                   new_callable=AsyncMock, return_value=True) as mock:
+            result = await manager._tool_send_text({'session_id': 's1', 'text': 'hello'})
+        assert result['ok'] is True
+        mock.assert_called_once_with('Ghostty', 'hello')
+
+    @pytest.mark.asyncio
+    async def test_warp_routes_to_generic_send_text(self):
+        manager = tm.TerminalManager()
+        await self._register(manager, 's1', 'ttys009', 'Warp')
+        with patch('terminal_manager_main._generic_send_text',
+                   new_callable=AsyncMock, return_value=True) as mock:
+            result = await manager._tool_send_text({'session_id': 's1', 'text': 'hello'})
+        assert result['ok'] is True
+        mock.assert_called_once_with('Warp', 'hello')
+
+
+# ---------------------------------------------------------------------------
+# Multi-terminal dispatch: focus_window
+# ---------------------------------------------------------------------------
+
+class TestMultiTerminalFocusWindow:
+    async def _register(self, manager, sid, tty, terminal_app):
+        with patch('terminal_manager_main._detect_terminal_for_tty',
+                   new_callable=AsyncMock, return_value=terminal_app):
+            await manager._tool_register_session(
+                {'session_id': sid, 'app_id': 'test', 'tty': tty}
+            )
+
+    @pytest.mark.asyncio
+    async def test_iterm2_routes_to_iterm2_focus(self):
+        manager = tm.TerminalManager()
+        await self._register(manager, 's1', 'ttys009', 'iTerm2')
+        with patch('terminal_manager_main._iterm2_focus',
+                   new_callable=AsyncMock, return_value=True) as mock:
+            result = await manager._tool_focus_window({'session_id': 's1'})
+        assert result['ok'] is True
+        mock.assert_called_once_with('ttys009')
+
+    @pytest.mark.asyncio
+    async def test_ghostty_routes_to_generic_focus(self):
+        manager = tm.TerminalManager()
+        await self._register(manager, 's1', 'ttys009', 'Ghostty')
+        with patch('terminal_manager_main._generic_focus',
+                   new_callable=AsyncMock, return_value=True) as mock:
+            result = await manager._tool_focus_window({'session_id': 's1'})
+        assert result['ok'] is True
+        mock.assert_called_once_with('Ghostty')
+
+
+# ---------------------------------------------------------------------------
+# terminal_app stored on session and included in to_dict
+# ---------------------------------------------------------------------------
+
+class TestSessionTerminalApp:
+    @pytest.mark.asyncio
+    async def test_terminal_app_stored_on_session(self):
+        manager = tm.TerminalManager()
+        with patch('terminal_manager_main._detect_terminal_for_tty',
+                   new_callable=AsyncMock, return_value='iTerm2'):
+            await manager._tool_register_session(
+                {'session_id': 's1', 'app_id': 'test', 'tty': 'ttys009'}
+            )
+        assert manager._sessions['s1'].terminal_app == 'iTerm2'
+
+    @pytest.mark.asyncio
+    async def test_terminal_app_in_to_dict(self):
+        manager = tm.TerminalManager()
+        with patch('terminal_manager_main._detect_terminal_for_tty',
+                   new_callable=AsyncMock, return_value='Ghostty'):
+            await manager._tool_register_session(
+                {'session_id': 's1', 'app_id': 'test', 'tty': 'ttys009'}
+            )
+        result = await manager._tool_list_sessions({})
+        session = result['sessions'][0]
+        assert session['terminal_app'] == 'Ghostty'
+
+    @pytest.mark.asyncio
+    async def test_tmux_session_has_no_terminal_app(self):
+        manager = tm.TerminalManager()
+        await manager._tool_register_session(
+            {'session_id': 's1', 'app_id': 'test', 'tmux_target': 'main:0.0'}
+        )
+        assert manager._sessions['s1'].terminal_app == ''
