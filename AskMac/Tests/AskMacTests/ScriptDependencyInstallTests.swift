@@ -1,3 +1,6 @@
+// Integration tests that require Xcode's test-host app (AskMac.app) to link
+// against Sparkle and SwiftUI. Excluded from `swift test` (SPM) via the guard.
+#if !SWIFT_PACKAGE
 import Testing
 import Foundation
 @testable import AskMac
@@ -210,3 +213,4 @@ struct ScriptDependencyInstallTests {
                 "terminal-manager should not be re-installed if already present")
     }
 }
+#endif // !SWIFT_PACKAGE
