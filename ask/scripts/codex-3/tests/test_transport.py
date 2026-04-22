@@ -21,7 +21,7 @@ def test_ignores_unrelated_pane():
     assert not _is_codex_pane('zsh', 'zsh', 'shell')
 
 
-def test_send_text_clears_current_line_before_typing(monkeypatch):
+def test_send_text_types_and_submits(monkeypatch):
     calls = []
 
     def fake_run(args, **kwargs):
@@ -29,10 +29,10 @@ def test_send_text_clears_current_line_before_typing(monkeypatch):
         return SimpleNamespace(returncode=0, stdout="")
 
     monkeypatch.setattr(transport.subprocess, "run", fake_run)
+    monkeypatch.setattr(transport.time, "sleep", lambda _: None)
 
     assert transport.send_text("codex:jokes.0", "What are we working on?")
     assert calls == [
-        [transport.TMUX, 'send-keys', '-t', 'codex:jokes.0', 'C-u'],
         [transport.TMUX, 'send-keys', '-t', 'codex:jokes.0', '-l', 'What are we working on?'],
         [transport.TMUX, 'send-keys', '-t', 'codex:jokes.0', 'Enter'],
     ]
