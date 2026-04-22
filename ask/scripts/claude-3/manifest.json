@@ -1,12 +1,13 @@
 {
   "id": "claude-3",
   "name": "Claude 3",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "setup": "setup.py",
   "description": "Feed-first Claude Code session supervisor — routes permissions and session history to iPhone",
   "entry": "main.py",
   "icon": "sparkles",
   "icon_file": "icon.svg",
+  "permissions": ["Documents folder (to discover git repos)"],
   "tools": [
     {
       "name": "start_session",
