@@ -6,6 +6,12 @@
 # version require concurrent callbacks which bash cannot support. This version
 # surfaces repo status and runs operations via confirmation blocks sequentially.
 
+# Single-instance guard — exit if another copy is already running
+_LOCK="$HOME/.ask/run/github.lock"
+mkdir -p "$(dirname "$_LOCK")"
+exec 9>"$_LOCK"
+flock -n 9 || { printf '[github] another instance already running, exiting\n' >&2; exit 0; }
+
 REFRESH_SECS=300  # 5 minutes
 MAX_REPOS=100
 
@@ -112,6 +118,8 @@ reader_loop() {
                 | sed 's/"value":"//;s/"$//' > "$FIFO"
         fi
     done
+    # stdin closed — terminate the main process
+    kill "$$" 2>/dev/null || true
 }
 reader_loop <&0 &
 READER_PID=$!
