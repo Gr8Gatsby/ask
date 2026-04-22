@@ -256,10 +256,19 @@ private struct PermissionRow: View {
                 HStack(alignment: .firstTextBaseline) {
                     Text(title).fontWeight(.medium)
                     Spacer()
-                    Button(actionLabel, action: action)
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(isGranted)
+                    if isGranted {
+                        Text(actionLabel)
+                            .font(.caption)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .foregroundStyle(.primary.opacity(0.55))
+                            .background(.secondary.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    } else {
+                        Button(actionLabel, action: action)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
                 }
                 Text(subtitle)
                     .font(.callout)
