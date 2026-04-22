@@ -41,7 +41,7 @@ struct ScriptCatalogView: View {
     @State private var downloadErrors: [String: String] = [:]
     @State private var showLocalScripts = false
 
-    private static let worksOnMacLimit = 5
+    private static let worksOnMacLimit = 8
 
     private var isSearching: Bool { !searchText.trimmingCharacters(in: .whitespaces).isEmpty }
 
@@ -64,7 +64,13 @@ struct ScriptCatalogView: View {
                 !scriptManager.scripts.contains(where: { $0.id == entry.id }) &&
                 catalog.availableUpdates[entry.id] == nil
             }
-            .sorted { $0.name < $1.name }
+            .sorted {
+                // No-requires scripts first (simpler, more approachable), then alphabetical within each group
+                let aSimple = ($0.requires ?? []).isEmpty
+                let bSimple = ($1.requires ?? []).isEmpty
+                if aSimple != bSimple { return aSimple }
+                return $0.name < $1.name
+            }
             .prefix(Self.worksOnMacLimit)
             .map { $0 }
     }
