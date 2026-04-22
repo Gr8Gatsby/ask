@@ -2,6 +2,12 @@
 # brew-monitor — surfaces outdated Homebrew packages. Zero dependencies.
 # Communicates with AskMac via JSON-RPC 2.0 over stdio.
 
+# Single-instance guard — exit if another copy is already running
+_LOCK="$HOME/.ask/run/brew-monitor.lock"
+mkdir -p "$(dirname "$_LOCK")"
+exec 9>"$_LOCK"
+flock -n 9 || { printf '[brew-monitor] another instance already running, exiting\n' >&2; exit 0; }
+
 CHECK_INTERVAL=14400  # 4 hours
 
 BLOCK_UPDATES="brew-monitor-updates"
@@ -81,6 +87,8 @@ reader_loop() {
                 | sed 's/"value":"//;s/"$//' > "$FIFO"
         fi
     done
+    # stdin closed — terminate the main process
+    kill "$$" 2>/dev/null || true
 }
 reader_loop <&0 &
 READER_PID=$!
