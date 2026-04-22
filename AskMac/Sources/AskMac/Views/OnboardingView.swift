@@ -125,6 +125,14 @@ struct OnboardingView: View {
             scriptCatalog.fetch(installedScripts: scriptManager.scripts, force: true)
         }
 
+        // Wait for fetch to start (fetch() is async internally — isFetching may not be true yet)
+        var fetchStartWaits = 0
+        while !scriptCatalog.isFetching && scriptCatalog.allEntries.isEmpty, fetchStartWaits < 20 {
+            try await Task.sleep(for: .milliseconds(100))
+            fetchStartWaits += 1
+        }
+
+        // Wait for fetch to finish
         var fetchWaits = 0
         while scriptCatalog.isFetching, fetchWaits < 150 {
             try await Task.sleep(for: .milliseconds(200))
