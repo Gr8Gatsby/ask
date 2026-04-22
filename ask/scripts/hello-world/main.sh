@@ -2,6 +2,12 @@
 # hello-world — Ask daemon script (zero dependencies)
 # Communicates with AskMac via JSON-RPC 2.0 over stdio.
 
+# Single-instance guard — exit if another copy is already running
+_LOCK="$HOME/.ask/run/hello-world.lock"
+mkdir -p "$(dirname "$_LOCK")"
+exec 9>"$_LOCK"
+flock -n 9 || { printf '[hello-world] another instance already running, exiting\n' >&2; exit 0; }
+
 CONFIRM_ID="hello-world-confirm"
 STATUS_ID="hello-world-status"
 RESET_DELAY=30
@@ -56,6 +62,8 @@ reader_loop() {
                 | sed 's/"value":"//;s/"$//' > "$FIFO"
         fi
     done
+    # stdin closed — terminate the main process
+    kill "$$" 2>/dev/null || true
 }
 reader_loop <&0 &
 READER_PID=$!
