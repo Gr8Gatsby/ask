@@ -7,6 +7,19 @@
     <language>en</language>
     <!-- Release entries are prepended here by the release pipeline -->
     <item>
+      <title>Version 1.0.0</title>
+      <sparkle:version>1776888800</sparkle:version>
+      <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <pubDate>Wed, 22 Apr 2026 20:16:11 +0000</pubDate>
+      <enclosure
+        url="https://github.com/Gr8Gatsby/ask/releases/download/v1.0.0/AskMac-1.0.0.dmg"
+        length="3723716"
+        type="application/octet-stream"
+        sparkle:edSignature="7iOmYisCL0i4rJ4n89zEc1/UCOlpLTC7EdnaYb2RoYUTEUUowBoDqp9K2hgYzZvOL+BlmtvDMGZhSAMo0vlVBg=="
+      />
+    </item>
+    <item>
       <title>Version 0.9.2</title>
       <sparkle:version>1776873640</sparkle:version>
       <sparkle:shortVersionString>0.9.2</sparkle:shortVersionString>
