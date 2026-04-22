@@ -126,18 +126,15 @@ def _install_hooks():
         'Stop': [{'hooks': [{'type': 'command', 'command': f'{py} {os.path.join(hooks_dir, "session_stop.py")}'}]}],
         'UserPromptSubmit': [{'hooks': [{'type': 'command', 'command': f'{py} {os.path.join(hooks_dir, "user_prompt_submit.py")}'}]}],
     }
+    # Replace our events entirely so stale hooks from old script versions
+    # (e.g. codex-2) never survive a codex-3 upgrade.
     existing = _load_json(CODEX_HOOKS_PATH, {}).get('hooks', {})
-    merged = dict(existing)
-    for event, hook_list in our_hooks.items():
-        our_cmd = hook_list[0]['hooks'][0]['command']
-        current = existing.get(event, [])
-        already = any(
-            hook.get('command') == our_cmd
-            for entry in current
-            for hook in entry.get('hooks', [])
-        )
-        if not already:
-            merged[event] = hook_list + current
+    merged = {
+        event: groups
+        for event, groups in existing.items()
+        if event not in our_hooks
+    }
+    merged.update(our_hooks)
     os.makedirs(os.path.dirname(CODEX_HOOKS_PATH), exist_ok=True)
     with open(CODEX_HOOKS_PATH, 'w') as handle:
         json.dump({'hooks': merged}, handle, indent=2)
