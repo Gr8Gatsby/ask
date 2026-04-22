@@ -12,8 +12,9 @@ Copy updated scripts from the project repo to the prod vault, then reload AskMac
 |---|---|
 | **Source (edit here)** | `<repo-root>/ask/scripts/` |
 | **Dest (prod vault)** | `~/.ask/scripts/` |
+| **Dest (dev vault)** | `~/.ask/dev-vault/` — only scripts already present there |
 
-Scripts are never edited in `~/.ask/scripts/` directly. The repo is the single source of truth.
+Scripts are never edited in either vault directly. The repo is the single source of truth.
 
 ## Steps to execute
 
@@ -41,9 +42,16 @@ done
 ```
 Skip this step when deploying a single named script.
 
-4. For each script to deploy, rsync it:
+4. For each script to deploy, rsync it to the prod vault:
 ```bash
 rsync -av --delete "<repo-root>/ask/scripts/<script-id>/" ~/.ask/scripts/<script-id>/
+```
+
+   Also sync to the dev vault for any script already installed there (dev builds use `~/.ask/dev-vault/`):
+```bash
+if [ -d "$HOME/.ask/dev-vault/<script-id>" ]; then
+  rsync -av --delete "<repo-root>/ask/scripts/<script-id>/" ~/.ask/dev-vault/<script-id>/
+fi
 ```
 
 5. **brew-monitor only** — it's a Swift script with a compiled binary. After copying, rebuild it:
