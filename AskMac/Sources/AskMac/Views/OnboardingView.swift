@@ -125,6 +125,14 @@ struct OnboardingView: View {
             scriptCatalog.fetch(installedScripts: scriptManager.scripts, force: true)
         }
 
+        // Wait for fetch to start (fetch() is async internally — isFetching may not be true yet)
+        var fetchStartWaits = 0
+        while !scriptCatalog.isFetching && scriptCatalog.allEntries.isEmpty, fetchStartWaits < 20 {
+            try await Task.sleep(for: .milliseconds(100))
+            fetchStartWaits += 1
+        }
+
+        // Wait for fetch to finish
         var fetchWaits = 0
         while scriptCatalog.isFetching, fetchWaits < 150 {
             try await Task.sleep(for: .milliseconds(200))
@@ -139,6 +147,14 @@ struct OnboardingView: View {
 
         installer.load(zipURL: zipURL, existingScripts: scriptManager.scripts)
 
+        // Wait for the background parse Task to start (idle → parsing)
+        var startWaits = 0
+        while installer.phase == .idle, startWaits < 50 {
+            try await Task.sleep(for: .milliseconds(100))
+            startWaits += 1
+        }
+
+        // Wait for parsing to finish (parsing → ready)
         var parseWaits = 0
         while installer.phase == .parsing, parseWaits < 300 {
             try await Task.sleep(for: .milliseconds(100))
@@ -152,6 +168,11 @@ struct OnboardingView: View {
         installer.showSheet = false
         installer.install(to: vault, scriptManager: scriptManager, catalog: scriptCatalog)
 
+        // Yield once so the install Task gets a chance to run. For simple scripts with no
+        // async work (e.g. hello-world), doInstall completes entirely on this first yield.
+        try await Task.sleep(for: .milliseconds(100))
+
+        // If still running (complex install with dependencies), wait for it to finish.
         var installWaits = 0
         while installer.phase != .idle, installWaits < 600 {
             try await Task.sleep(for: .milliseconds(100))
@@ -256,10 +277,19 @@ private struct PermissionRow: View {
                 HStack(alignment: .firstTextBaseline) {
                     Text(title).fontWeight(.medium)
                     Spacer()
-                    Button(actionLabel, action: action)
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(isGranted)
+                    if isGranted {
+                        Text(actionLabel)
+                            .font(.caption)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .foregroundStyle(.primary.opacity(0.55))
+                            .background(.secondary.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    } else {
+                        Button(actionLabel, action: action)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
                 }
                 Text(subtitle)
                     .font(.callout)

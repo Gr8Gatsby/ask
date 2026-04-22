@@ -176,9 +176,7 @@ final class AppSettings {
         if exe.contains("DerivedData") || exe.contains("/.build/") {
             let devVault = FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent(".ask/dev-vault")
-            if FileManager.default.fileExists(atPath: devVault.path) {
-                self.vaultPath = devVault
-            }
+            self.vaultPath = devVault
         }
 
         let storedDisabled = defaults.stringArray(forKey: Key.disabledScripts) ?? []

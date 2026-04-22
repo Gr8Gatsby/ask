@@ -50,6 +50,8 @@ Skip any directory without a `manifest.json`.
 
 ## Step 4 — Build catalog.json
 
+For each script, if the manifest has an `icon_file` field (e.g. `"icon_file": "icon.svg"`), read the file content from `ask/scripts/<id>/<icon_file>` and embed it as the `svg` field. If the file doesn't exist or `icon_file` is absent, omit `svg`.
+
 Construct `catalog.json` with this structure:
 
 ```json
@@ -62,6 +64,7 @@ Construct `catalog.json` with this structure:
       "version": "<version>",
       "description": "<description>",
       "icon": "<icon or null>",
+      "svg": "<full SVG file content as a string, if icon_file exists>",
       "type": "<type: tile|feed|system>",
       "changelog": "<changelog text from Step 2>",
       "download_url": "https://github.com/Gr8Gatsby/ask/releases/download/scripts-latest/<id>.zip",
@@ -83,6 +86,7 @@ Construct `catalog.json` with this structure:
 Omit `permissions` if the manifest has none (empty array or missing field).
 Omit `requires` if the manifest has none.
 Omit `script_dependencies` if the manifest has none.
+Omit `svg` if `icon_file` is absent or the file cannot be read.
 
 Write to a temp location: `/tmp/ask-scripts-release/catalog.json`
 
