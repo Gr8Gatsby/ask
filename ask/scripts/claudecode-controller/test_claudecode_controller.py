@@ -605,3 +605,135 @@ class TestConcurrentReplySerialization:
 
         # Both should have started at nearly the same time (within 20ms)
         assert abs(start_times.get('s1', 0) - start_times.get('s2', 0)) < 0.02
+
+
+# ---------------------------------------------------------------------------
+# Dedup guard — prevents double/triple send from RPC timeout + retry
+# ---------------------------------------------------------------------------
+
+class TestDedupGuard:
+    def _make_client_with_tty_session(self):
+        client = make_client()
+        client._sessions['s1'] = {
+            'cwd': '/code/repo', 'project': 'repo',
+            'last_seen': time.time(), 'tty': 'ttys009',
+        }
+        return client
+
+    @pytest.mark.asyncio
+    async def test_exact_duplicate_within_window_is_dropped(self):
+        """Second call with same (session, text) within 5 s must not reach the terminal."""
+        client = self._make_client_with_tty_session()
+        send_count = 0
+
+        async def mock_rpc(method, params=None, timeout=10.0):
+            nonlocal send_count
+            name = (params or {}).get('name', '')
+            if name == 'inject_tty':
+                send_count += 1
+                return {'ok': True}
+            return {'ok': False}
+
+        client._rpc = mock_rpc
+        with patch('asyncio.create_task'):
+            await client._route_to_terminal_locked('s1', 'hello')
+            await client._route_to_terminal_locked('s1', 'hello')  # duplicate
+
+        assert send_count == 1, f'Expected 1 send, got {send_count}'
+
+    @pytest.mark.asyncio
+    async def test_different_text_is_not_deduplicated(self):
+        """Different text to the same session must both be delivered."""
+        client = self._make_client_with_tty_session()
+        sent_texts = []
+
+        async def mock_rpc(method, params=None, timeout=10.0):
+            name = (params or {}).get('name', '')
+            if name == 'inject_tty':
+                sent_texts.append((params or {}).get('arguments', {}).get('text', ''))
+                return {'ok': True}
+            return {'ok': False}
+
+        client._rpc = mock_rpc
+        with patch('asyncio.create_task'):
+            await client._route_to_terminal_locked('s1', 'hello')
+            await client._route_to_terminal_locked('s1', 'world')
+
+        assert sent_texts == ['hello', 'world']
+
+    @pytest.mark.asyncio
+    async def test_same_text_different_sessions_both_delivered(self):
+        """Same text to different sessions must both be delivered."""
+        client = make_client()
+        for sid in ('s1', 's2'):
+            client._sessions[sid] = {
+                'cwd': f'/code/{sid}', 'project': sid,
+                'last_seen': time.time(), 'tty': f'ttys00{sid[-1]}',
+            }
+        send_count = 0
+
+        async def mock_rpc(method, params=None, timeout=10.0):
+            nonlocal send_count
+            if (params or {}).get('name') == 'inject_tty':
+                send_count += 1
+                return {'ok': True}
+            return {'ok': False}
+
+        client._rpc = mock_rpc
+        with patch('asyncio.create_task'):
+            await client._route_to_terminal_locked('s1', 'hello')
+            await client._route_to_terminal_locked('s2', 'hello')
+
+        assert send_count == 2
+
+    @pytest.mark.asyncio
+    async def test_duplicate_allowed_after_window_expires(self):
+        """Same text is allowed again once the 5 s dedup window has passed."""
+        client = self._make_client_with_tty_session()
+        send_count = 0
+
+        async def mock_rpc(method, params=None, timeout=10.0):
+            nonlocal send_count
+            if (params or {}).get('name') == 'inject_tty':
+                send_count += 1
+                return {'ok': True}
+            return {'ok': False}
+
+        client._rpc = mock_rpc
+        # Plant an entry that expired 6 s ago
+        client._last_sent[('s1', 'hello')] = time.monotonic() - 6.0
+        with patch('asyncio.create_task'):
+            await client._route_to_terminal_locked('s1', 'hello')
+
+        assert send_count == 1
+
+    @pytest.mark.asyncio
+    async def test_slow_rpc_ghost_does_not_cause_double_send(self):
+        """Simulate the ghost-execution bug: RPC times out in caller, but terminal-manager
+        still completes the operation.  The dedup guard must absorb the retry send."""
+        client = self._make_client_with_tty_session()
+        send_count = 0
+
+        async def slow_inject_rpc(method, params=None, timeout=10.0):
+            nonlocal send_count
+            name = (params or {}).get('name', '')
+            if name == 'inject_tty':
+                # Simulate ghost: operation executes but reply comes after timeout
+                send_count += 1
+                await asyncio.sleep(0.01)   # fast in test, but would be slow in prod
+                return {'ok': True}
+            return {'ok': False}
+
+        client._rpc = slow_inject_rpc
+
+        # First call: inject_tty succeeds → dedup key recorded
+        with patch('asyncio.create_task'):
+            await client._route_to_terminal_locked('s1', 'hello')
+
+        assert send_count == 1
+
+        # Second call (retry after ghost timeout): must be absorbed by dedup guard
+        with patch('asyncio.create_task'):
+            await client._route_to_terminal_locked('s1', 'hello')
+
+        assert send_count == 1, f'Dedup guard failed: {send_count} sends (expected 1)'

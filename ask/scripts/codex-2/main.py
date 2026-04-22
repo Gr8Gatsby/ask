@@ -228,6 +228,24 @@ def _ensure_config_flag():
             _log(f'Could not update config.toml: {e}', 'WARN')
 
 
+def _check_hook_files():
+    """Warn loudly if any hook file is missing — missing hooks block message submission."""
+    hooks_dir = os.path.join(SCRIPT_DIR, 'hooks')
+    required = [
+        'session_start.py', 'pre_tool_use.py', 'post_tool_use.py',
+        'session_stop.py', 'user_prompt_submit.py',
+    ]
+    missing = [f for f in required if not os.path.exists(os.path.join(hooks_dir, f))]
+    if missing:
+        print(
+            f'[codex-2] WARNING: hook files missing in {hooks_dir}: {missing}\n'
+            f'         Messages will be blocked until hooks are deployed.\n'
+            f'         Run: /deploy-scripts codex-2',
+            file=sys.stderr,
+        )
+    return missing
+
+
 def _write_hooks_json():
     py = sys.executable
     hooks_dir = os.path.join(SCRIPT_DIR, 'hooks')
@@ -1965,6 +1983,7 @@ class CodexController:
 
     async def run(self):
         _log('codex-2 starting')
+        _check_hook_files()
         _install_hooks()
         server = await self._start_socket_server()
 
