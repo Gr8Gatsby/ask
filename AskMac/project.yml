@@ -106,3 +106,21 @@ schemes:
         - AskMacTests
     archive:
       config: Release
+
+  AskMac (First Run):
+    build:
+      targets:
+        AskMac: all
+    run:
+      config: Debug
+      preActions:
+        - name: Reset first-run state
+          script: |
+            rm -rf "$HOME/.ask/dev-vault"
+            /usr/bin/defaults delete com.kevinhill.askmac hasSeenOnboarding 2>/dev/null || true
+            /usr/bin/defaults delete com.kevinhill.askmac usesBundledScripts 2>/dev/null || true
+            /usr/bin/defaults delete com.kevinhill.askmac permissionsMigrationDone 2>/dev/null || true
+            /usr/bin/defaults delete com.kevinhill.askmac knownScriptsMigrationDone 2>/dev/null || true
+            /usr/bin/defaults delete com.kevinhill.askmac knownScripts 2>/dev/null || true
+            /usr/bin/defaults delete com.kevinhill.askmac pinnedScripts 2>/dev/null || true
+          settingsTarget: AskMac
