@@ -68,6 +68,8 @@ class MCPClient:
         self._recently_launched_cwds: set = set()
         # per-session locks so concurrent iOS replies are serialized (prevents clipboard races)
         self._route_locks: dict = {}
+        # (session_id, text) -> monotonic timestamp of last successful send — dedup guard
+        self._last_sent: dict = {}
         # Tile state
         self._active_confirmations = 0
         self._tile_body: Optional[str] = None
@@ -1652,6 +1654,26 @@ class MCPClient:
           tmux — _capture_tmux_response (polls capture-pane)
           TTY  — _capture_tty_response  (polls via wait_for_idle)
         """
+        # Dedup guard: drop identical (session, text) pairs within 5 s.
+        # Protects against ghost-execution when an RPC times out in the caller
+        # but terminal-manager still completes the operation — the timeout
+        # triggers a retry, resulting in the same text being sent 2-3 times.
+        # NOTE: timestamp is recorded AFTER a successful send (not here) so that
+        # a failed first attempt does not suppress a legitimate retry.
+        dedup_key = (session_id, text)
+        now = time.monotonic()
+        if now - self._last_sent.get(dedup_key, float('-inf')) < 5.0:
+            _log(f'[claudecode] dedup: dropping duplicate send to {session_id[:8]}')
+            return
+
+        def _record_sent():
+            """Record this (session, text) pair as successfully sent and evict stale entries."""
+            ts = time.monotonic()
+            self._last_sent[dedup_key] = ts
+            stale = [k for k, v in self._last_sent.items() if ts - v > 30]
+            for k in stale:
+                del self._last_sent[k]
+
         session = self._sessions.get(session_id, {})
         tmux_target = session.get('tmux_target')
 
@@ -1665,9 +1687,10 @@ class MCPClient:
                     result = await self._rpc('tools/call', {
                         'name': 'inject_tty',
                         'arguments': {'session_id': session_id, 'text': text}
-                    }, timeout=3.0)
+                    }, timeout=8.0)
                     if isinstance(result, dict) and result.get('ok'):
                         _log(f'[claudecode] routed via inject_tty: {session_id[:8]}')
+                        _record_sent()
                         asyncio.create_task(self._capture_tty_response(session_id))
                         return
                     break  # got a valid response (ok=False), no point retrying
@@ -1685,9 +1708,10 @@ class MCPClient:
                     result = await self._rpc('tools/call', {
                         'name': 'send_text',
                         'arguments': {'session_id': session_id, 'text': text}
-                    }, timeout=3.0)
+                    }, timeout=8.0)
                     if isinstance(result, dict) and result.get('ok'):
                         _log(f'[claudecode] routed via send_text: {session_id[:8]}')
+                        _record_sent()
                         asyncio.create_task(self._capture_tty_response(session_id))
                         return
                     break
@@ -1709,9 +1733,10 @@ class MCPClient:
                     result = await self._rpc('tools/call', {
                         'name': 'send_text',
                         'arguments': {'session_id': session_id, 'text': text}
-                    }, timeout=3.0)
+                    }, timeout=8.0)
                     if isinstance(result, dict) and result.get('ok'):
                         _log(f'[claudecode] routed via terminal-manager send_text: {session_id[:8]}')
+                        _record_sent()
                         asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
                         return
                     break
@@ -1736,6 +1761,7 @@ class MCPClient:
                 await p2.communicate()
             except Exception as e:
                 print(f'[claudecode-controller] tmux send-keys fallback failed: {e}', file=sys.stderr)
+            _record_sent()
             asyncio.create_task(self._capture_tmux_response(tmux_target, session_id))
             return
 
@@ -1947,6 +1973,7 @@ end tell
                 _log(f'[claudecode] osascript error: {err.decode().strip()}')
             else:
                 _log(f'[claudecode] osascript succeeded (rc={proc.returncode})')
+                _record_sent()
                 asyncio.create_task(self._capture_tty_response(session_id))
         except Exception as e:
             _log(f'[claudecode] _route_to_terminal exception: {e}')
@@ -2441,7 +2468,26 @@ async def _session_heartbeat(client):
             print(f'[claudecode-controller] start_session heartbeat error: {e}', file=sys.stderr)
 
 
+def _check_hook_files():
+    """Warn loudly on startup if any hook file is missing."""
+    hooks_dir = os.path.join(os.path.dirname(__file__), 'hooks')
+    required = [
+        'session_start.py', 'user_prompt_submit.py', 'pre_tool_use.py',
+        'post_tool_use.py', 'session_stop.py',
+    ]
+    missing = [f for f in required if not os.path.exists(os.path.join(hooks_dir, f))]
+    if missing:
+        print(
+            f'[claudecode-controller] WARNING: hook files missing in {hooks_dir}: {missing}\n'
+            f'         Messages will be blocked until hooks are deployed.\n'
+            f'         Run: /deploy-scripts claudecode-controller',
+            file=sys.stderr,
+        )
+    return missing
+
+
 async def run():
+    _check_hook_files()
     client = MCPClient()
     server = await client.start_socket_server()
 
