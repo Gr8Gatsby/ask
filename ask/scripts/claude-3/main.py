@@ -389,7 +389,7 @@ class Claude3:
             await self._rpc('tools/call', {
                 'name': 'inject_tty',
                 'arguments': {'session_id': session.raw_id, 'text': text},
-            }, timeout=5.0)
+            }, timeout=20.0)
             return True
         except Exception as e:
             _log(f'inject_tty failed for {session.session_id}: {e}', 'WARN')
@@ -402,7 +402,7 @@ class Claude3:
             await self._rpc('tools/call', {
                 'name': 'send_text',
                 'arguments': {'session_id': session.raw_id, 'text': text},
-            }, timeout=5.0)
+            }, timeout=20.0)
             return True
         except Exception as e:
             _log(f'send_text failed for {session.session_id}: {e}', 'WARN')
@@ -454,19 +454,19 @@ class Claude3:
             _log(f'tm_register failed: {e}', 'WARN')
 
     async def _route_text(self, session: SessionRecord, text: str) -> bool:
-        """Send user text to a session. Try inject_tty first, fall back to send_text."""
+        """Send user text to a session. Try inject_tty, fall back to send_text only when TTY unknown."""
         text_with_newline = text if text.endswith('\n') else text + '\n'
+        had_tty = bool(session.tty)
         ok = await self._tm_inject_tty(session, text_with_newline)
-        if not ok:
-            # If TTY is still unknown, try to discover it now from the process list.
-            if not session.tty and session.cwd:
+        if not ok and not had_tty:
+            # TTY was unknown — discover it, re-register, and retry inject_tty once.
+            if session.cwd:
                 for proc in discover_claude_processes():
                     if proc.get('cwd') == session.cwd and proc.get('tty'):
                         session.tty = proc['tty']
                         self._registry._index_aliases(session)
                         _log(f'late-discovered tty={session.tty!r} for session {session.session_id}')
                         break
-            # Re-register and retry once
             await self._tm_register(session)
             ok = await self._tm_inject_tty(session, text_with_newline)
         if not ok:
