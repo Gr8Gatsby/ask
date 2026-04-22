@@ -44,7 +44,7 @@ For each directory in `ask/scripts/` that contains a `manifest.json`:
 ls ask/scripts/
 ```
 
-Read each `ask/scripts/<id>/manifest.json` and extract: `id`, `name`, `version`, `description`, `icon`, `icon_file`, `type`, `permissions`, `requires`.
+Read each `ask/scripts/<id>/manifest.json` and extract: `id`, `name`, `version`, `description`, `icon`, `icon_file`, `type`, `permissions`, `requires`, `script_dependencies`.
 
 Skip any directory without a `manifest.json`.
 
@@ -73,7 +73,8 @@ Construct `catalog.json` with this structure:
           "check": "<shell command that exits 0 when dep is present>",
           "install_url": "<url or null>"
         }
-      ]
+      ],
+      "script_dependencies": ["<script-id>", ...]
     }
   ]
 }
@@ -81,6 +82,7 @@ Construct `catalog.json` with this structure:
 
 Omit `permissions` if the manifest has none (empty array or missing field).
 Omit `requires` if the manifest has none.
+Omit `script_dependencies` if the manifest has none.
 
 Write to a temp location: `/tmp/ask-scripts-release/catalog.json`
 

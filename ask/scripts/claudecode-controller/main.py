@@ -1829,6 +1829,7 @@ class MCPClient:
 set targetTTY to "{safe_tty}"
 set didFocus to false
 
+-- Terminal.app: match by TTY
 if application "Terminal" is running then
     tell application "Terminal"
         repeat with w in every window
@@ -1845,9 +1846,41 @@ if application "Terminal" is running then
             end repeat
             if didFocus then exit repeat
         end repeat
-        if not didFocus then activate
     end tell
-    set didFocus to true
+end if
+
+-- iTerm2: match by TTY
+if not didFocus and application "iTerm2" is running then
+    tell application "iTerm2"
+        repeat with w in windows
+            repeat with tb in tabs of w
+                repeat with s in sessions of tb
+                    try
+                        if tty of s is targetTTY then
+                            select tb
+                            set index of w to 1
+                            activate
+                            set didFocus to true
+                            exit repeat
+                        end if
+                    end try
+                end repeat
+                if didFocus then exit repeat
+            end repeat
+            if didFocus then exit repeat
+        end repeat
+    end tell
+end if
+
+-- Generic fallback: activate any known running terminal
+if not didFocus then
+    repeat with appName in {{"Ghostty", "Warp", "Alacritty", "WezTerm", "kitty", "Hyper"}}
+        if application appName is running then
+            tell application appName to activate
+            set didFocus to true
+            exit repeat
+        end if
+    end repeat
 end if
 
 delay 0.4
@@ -1868,6 +1901,7 @@ end tell
 set pathFragment to "{safe_path}"
 set didFocus to false
 
+-- Terminal.app: match by window name
 if application "Terminal" is running then
     tell application "Terminal"
         repeat with w in every window
@@ -1880,9 +1914,18 @@ if application "Terminal" is running then
                 end if
             end try
         end repeat
-        if not didFocus then activate
     end tell
-    set didFocus to true
+end if
+
+-- Generic fallback: activate any known running terminal
+if not didFocus then
+    repeat with appName in {{"iTerm2", "Ghostty", "Warp", "Alacritty", "WezTerm", "kitty"}}
+        if application appName is running then
+            tell application appName to activate
+            set didFocus to true
+            exit repeat
+        end if
+    end repeat
 end if
 
 delay 0.4

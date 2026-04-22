@@ -4,6 +4,19 @@ import AskMacCore
 import Foundation
 import SwiftUI
 
+// MARK: - ScriptInstallTarget
+
+/// The subset of ScriptManager that ScriptInstaller needs — extracted so tests can inject a mock.
+protocol ScriptInstallTarget: AnyObject {
+    var scripts: [ManagedScript] { get }
+    func beginInstall()
+    func endInstall()
+    func stopScriptForUpdate(id: String)
+    func markInstalledByUser(ids: [String])
+}
+
+extension ScriptManager: ScriptInstallTarget {}
+
 // MARK: - ScriptInstaller
 
 @Observable
@@ -31,6 +44,7 @@ final class ScriptInstaller {
         let installKind: InstallKind
         let existingVersion: String?
         let warnings: [String]       // non-blocking issues surfaced in the sheet
+        let scriptDependencies: [String]  // other script IDs required before this one runs
     }
 
     struct SkippedScript: Identifiable {
@@ -245,6 +259,8 @@ final class ScriptInstaller {
             warnings.append("Name '\(name)' is already used by script '\(conflicting.id)' — both will appear in the sidebar")
         }
 
+        let scriptDeps = manifest["script_dependencies"] as? [String] ?? []
+
         return .success(PendingScript(
             id: id,
             name: name,
@@ -257,21 +273,53 @@ final class ScriptInstaller {
             sourceDir: dir,
             installKind: installKind,
             existingVersion: existingVersion,
-            warnings: warnings
+            warnings: warnings,
+            scriptDependencies: scriptDeps
         ))
     }
 
     // MARK: - Installation
 
-    func install(to vaultURL: URL, scriptManager: ScriptManager) {
-        Task { await doInstall(to: vaultURL, scriptManager: scriptManager) }
+    func install(to vaultURL: URL, scriptManager: any ScriptInstallTarget,
+                 catalog: ScriptCatalogService? = nil) {
+        Task { await doInstall(to: vaultURL, scriptManager: scriptManager, catalog: catalog) }
     }
 
     @MainActor
-    private func doInstall(to vaultURL: URL, scriptManager: ScriptManager) async {
+    private func doInstall(to vaultURL: URL, scriptManager: any ScriptInstallTarget,
+                           catalog: ScriptCatalogService? = nil) async {
         phase = .installing
         showSheet = false
         scriptManager.beginInstall()
+
+        // Resolve script dependencies: install any missing deps silently before main scripts.
+        if let catalog {
+            let installedIDs = Set(scriptManager.scripts.map(\.id))
+            let neededDepIDs = Set(pending.flatMap(\.scriptDependencies))
+                .subtracting(installedIDs)
+                .subtracting(Set(pending.map(\.id)))  // also being installed this run
+
+            for depID in neededDepIDs {
+                guard let depEntry = catalog.allEntries.first(where: { $0.id == depID }) else {
+                    skipped.append(SkippedScript(
+                        folderName: depID,
+                        reason: "Required dependency '\(depID)' not found in catalog — install it manually"
+                    ))
+                    continue
+                }
+                installProgressLabel = "Installing dependency: \(depEntry.name)…"
+                do {
+                    let zipURL = try await catalog.downloadZip(for: depEntry)
+                    await installFromZip(zipURL: zipURL, vaultURL: vaultURL,
+                                         scriptManager: scriptManager, label: depEntry.name)
+                } catch {
+                    skipped.append(SkippedScript(
+                        folderName: depID,
+                        reason: "Could not download dependency '\(depID)': \(error.localizedDescription)"
+                    ))
+                }
+            }
+        }
 
         let fm = FileManager.default
         var installationErrors: [SkippedScript] = []
@@ -336,6 +384,49 @@ final class ScriptInstaller {
     }
 
     // MARK: - Helpers
+
+    /// Extract a zip and install all valid scripts found inside it, used for silent dep installs.
+    @MainActor
+    private func installFromZip(zipURL: URL, vaultURL: URL,
+                                scriptManager: any ScriptInstallTarget, label: String) async {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ask-dep-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        do {
+            try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+            let exitCode = await Task.detached(priority: .userInitiated) {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+                proc.arguments = ["-o", zipURL.path, "-d", tmp.path]
+                proc.standardOutput = Pipe(); proc.standardError = Pipe()
+                try? proc.run(); proc.waitUntilExit()
+                return proc.terminationStatus
+            }.value
+            guard exitCode == 0 else { return }
+            let dirs = (try? findScriptDirs(in: tmp)) ?? []
+            let fm = FileManager.default
+            for dir in dirs {
+                guard case .success(let ps) = validate(dir: dir, existingScripts: scriptManager.scripts) else { continue }
+                let destDir = vaultURL.appendingPathComponent(ps.id)
+                if fm.fileExists(atPath: destDir.path) {
+                    scriptManager.stopScriptForUpdate(id: ps.id)
+                    let oldSetup = destDir.appendingPathComponent("setup.py")
+                    if fm.fileExists(atPath: oldSetup.path) {
+                        await runSetup(scriptPath: oldSetup, scriptDir: destDir, argument: "--uninstall")
+                    }
+                    let backup = vaultURL.appendingPathComponent("\(ps.id).previous")
+                    try? fm.removeItem(at: backup)
+                    try? fm.moveItem(at: destDir, to: backup)
+                }
+                try fm.copyItem(at: ps.sourceDir, to: destDir)
+                let setup = destDir.appendingPathComponent("setup.py")
+                if fm.fileExists(atPath: setup.path) {
+                    await runSetup(scriptPath: setup, scriptDir: destDir, argument: "--install")
+                }
+                scriptManager.markInstalledByUser(ids: [ps.id])
+            }
+        } catch {}
+    }
 
     /// Run `setup.py --install` or `setup.py --uninstall` with a 5-minute timeout.
     private func runSetup(scriptPath: URL, scriptDir: URL, argument: String) async {

@@ -1411,7 +1411,8 @@ private struct ScriptsTabView: View {
             }
             .sheet(isPresented: $installer.showSheet) {
                 ScriptInstallSheet(installer: installer, scriptManager: scriptManager,
-                                   vaultURL: settings.vaultPath ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ask/scripts"))
+                                   vaultURL: settings.vaultPath ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ask/scripts"),
+                                   catalog: catalog)
             }
         } detail: {
             if showCatalog {
@@ -2375,6 +2376,7 @@ struct ScriptInstallSheet: View {
     @Bindable var installer: ScriptInstaller
     let scriptManager: ScriptManager
     let vaultURL: URL
+    let catalog: ScriptCatalogService
 
     var body: some View {
         VStack(spacing: 0) {
@@ -2470,7 +2472,7 @@ struct ScriptInstallSheet: View {
                     .buttonStyle(.bordered)
                     Spacer()
                     Button(installButtonLabel) {
-                        installer.install(to: vaultURL, scriptManager: scriptManager)
+                        installer.install(to: vaultURL, scriptManager: scriptManager, catalog: catalog)
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(installer.phase != .ready)

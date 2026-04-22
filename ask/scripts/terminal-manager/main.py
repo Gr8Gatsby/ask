@@ -53,6 +53,9 @@ KEY_MAP = {
     'ctrl_u':  (None, 'C-u'),
 }
 
+# Terminal apps we know how to address by name, in detection priority order
+TERMINAL_APP_NAMES = ['Terminal', 'iTerm2', 'Ghostty', 'Warp', 'Alacritty', 'WezTerm', 'kitty', 'Hyper']
+
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -72,6 +75,82 @@ def _log(msg: str, level: str = 'INFO'):
 
 def _dbg(msg: str):
     _log(msg, 'DEBUG')
+
+
+# ---------------------------------------------------------------------------
+# AppleScript helpers
+# ---------------------------------------------------------------------------
+
+def _as_applescript_str(s: str) -> str:
+    """Convert a Python string to an AppleScript string expression, escaping non-ASCII chars."""
+    if not s:
+        return '""'
+    parts, buf = [], ''
+    for ch in s:
+        code = ord(ch)
+        if 32 <= code <= 126 and ch not in ('"', '\\'):
+            buf += ch
+        else:
+            if buf:
+                parts.append(f'"{buf}"')
+                buf = ''
+            parts.append(f'(ASCII character {code})')
+    if buf:
+        parts.append(f'"{buf}"')
+    return ' & '.join(parts) if parts else '""'
+
+
+# ---------------------------------------------------------------------------
+# Terminal app detection
+# ---------------------------------------------------------------------------
+
+async def _detect_terminal_for_tty(tty: str) -> str:
+    """Walk the process tree for the TTY to find which terminal app owns it.
+
+    Returns a name from TERMINAL_APP_NAMES (e.g. 'Terminal', 'iTerm2') or 'unknown'.
+    """
+    short = tty.replace('/dev/', '')
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            'ps', '-t', short, '-o', 'pid=',
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3)
+        pids = [int(x) for x in stdout.decode().split() if x.strip().isdigit()]
+    except Exception as e:
+        _log(f'_detect_terminal_for_tty ps failed: {e}', 'WARN')
+        return 'unknown'
+
+    checked: set = set()
+    to_check = list(pids)
+    while to_check:
+        pid = to_check.pop(0)
+        if pid in checked or pid <= 1:
+            continue
+        checked.add(pid)
+        if len(checked) > 40:
+            break
+        try:
+            r = subprocess.run(
+                ['ps', '-p', str(pid), '-o', 'comm=,ppid='],
+                capture_output=True, text=True, timeout=1,
+            )
+            parts = r.stdout.strip().split()
+            if not parts:
+                continue
+            comm = parts[0].split('/')[-1]
+            for app in TERMINAL_APP_NAMES:
+                if comm.lower() == app.lower() or comm.lower().startswith(app.lower()):
+                    _dbg(f'  [detect_terminal] tty={tty} → {app} (pid={pid} comm={comm!r})')
+                    return app
+            ppid = int(parts[-1]) if len(parts) >= 2 and parts[-1].isdigit() else 0
+            if ppid > 1:
+                to_check.append(ppid)
+        except Exception:
+            pass
+
+    _dbg(f'  [detect_terminal] tty={tty} → unknown (checked {len(checked)} pids)')
+    return 'unknown'
 
 
 # ---------------------------------------------------------------------------
@@ -608,27 +687,7 @@ async def _terminal_inject_tty(tty: str, text: str) -> bool:
     full = _tty_to_full(tty)
     safe = full.replace('"', '\\"')
 
-    # Convert Python string to an AppleScript expression.
-    # Non-printable chars (like ESC = 0x1B) become (ASCII character N).
-    # do script appends Enter automatically, so ESC[B sequences navigate without extra Enter.
-    def _as_str(s: str) -> str:
-        if not s:
-            return '""'
-        parts, buf = [], ''
-        for ch in s:
-            code = ord(ch)
-            if 32 <= code <= 126 and ch not in ('"', '\\'):
-                buf += ch
-            else:
-                if buf:
-                    parts.append(f'"{buf}"')
-                    buf = ''
-                parts.append(f'(ASCII character {code})')
-        if buf:
-            parts.append(f'"{buf}"')
-        return ' & '.join(parts) if parts else '""'
-
-    as_text = _as_str(text)
+    as_text = _as_applescript_str(text)
 
     # Use Terminal.app's do script to send text + Enter to the running process's stdin.
     # No Accessibility permission needed — Terminal.app handles it internally.
@@ -734,6 +793,240 @@ return true'''
 
 
 # ---------------------------------------------------------------------------
+# I/O — iTerm2 via AppleScript
+# ---------------------------------------------------------------------------
+
+async def _iterm2_inject_tty(tty: str, text: str) -> bool:
+    """Inject text into an iTerm2 session by TTY — no window focus needed."""
+    safe = _tty_to_full(tty).replace('"', '\\"')
+    as_text = _as_applescript_str(text)
+    script = f'''tell application "iTerm2"
+    repeat with w in windows
+        repeat with tb in tabs of w
+            repeat with s in sessions of tb
+                try
+                    if tty of s is "{safe}" then
+                        write text {as_text} to s
+                        return true
+                    end if
+                end try
+            end repeat
+        end repeat
+    end repeat
+    return false
+end tell'''
+    result = await _run_script(script)
+    ok = result.strip() == 'true'
+    _dbg(f'  [iterm2_inject_tty] text={text!r} tty={tty} ok={ok}')
+    if not ok:
+        _log(f'iterm2_inject_tty: session not found for {tty}', 'WARN')
+    return ok
+
+
+async def _iterm2_send_text(tty: str, text: str) -> bool:
+    """Focus iTerm2 session by TTY and type text via System Events."""
+    safe_tty = _tty_to_full(tty).replace('"', '\\"')
+    safe_text = text.replace('\\', '\\\\').replace('"', '\\"')
+    script = f'''set targetTTY to "{safe_tty}"
+set foundSession to false
+if application "iTerm2" is running then
+    tell application "iTerm2"
+        repeat with w in windows
+            repeat with tb in tabs of w
+                repeat with s in sessions of tb
+                    try
+                        if tty of s is targetTTY then
+                            select tb
+                            set index of w to 1
+                            activate
+                            set foundSession to true
+                            exit repeat
+                        end if
+                    end try
+                end repeat
+                if foundSession then exit repeat
+            end repeat
+            if foundSession then exit repeat
+        end repeat
+    end tell
+end if
+if not foundSession then return false
+delay 0.3
+tell application "System Events"
+    keystroke "u" using {{control down}}
+    delay 0.1
+    keystroke "{safe_text}"
+    delay 0.05
+    key code 36
+end tell
+return true'''
+    result = await _run_script(script)
+    ok = result.strip() == 'true'
+    _dbg(f'  [iterm2_send_text] text={text!r} tty={tty} ok={ok}')
+    return ok
+
+
+async def _iterm2_send_key(tty: str, key: str) -> bool:
+    """Focus iTerm2 session by TTY and send a named key via System Events."""
+    key_code, _ = KEY_MAP.get(key, (None, None))
+    safe_tty = _tty_to_full(tty).replace('"', '\\"')
+    if key == 'ctrl_c':
+        action = 'keystroke "c" using {control down}'
+    elif key == 'ctrl_u':
+        action = 'keystroke "u" using {control down}'
+    elif key_code is not None:
+        action = f'key code {key_code}'
+    else:
+        _log(f'Unknown key for iTerm2: {key!r}', 'WARN')
+        return False
+    script = f'''set targetTTY to "{safe_tty}"
+set foundSession to false
+if application "iTerm2" is running then
+    tell application "iTerm2"
+        repeat with w in windows
+            repeat with tb in tabs of w
+                repeat with s in sessions of tb
+                    try
+                        if tty of s is targetTTY then
+                            select tb
+                            set index of w to 1
+                            activate
+                            set foundSession to true
+                            exit repeat
+                        end if
+                    end try
+                end repeat
+                if foundSession then exit repeat
+            end repeat
+            if foundSession then exit repeat
+        end repeat
+    end tell
+end if
+if not foundSession then return false
+delay 0.3
+tell application "System Events"
+    {action}
+end tell
+return true'''
+    result = await _run_script(script)
+    ok = result.strip() == 'true'
+    _dbg(f'  [iterm2_send_key] key={key!r} tty={tty} ok={ok}')
+    return ok
+
+
+async def _iterm2_focus(tty: str) -> bool:
+    """Bring the iTerm2 window/tab hosting this TTY to the front."""
+    safe = _tty_to_full(tty).replace('"', '\\"')
+    script = f'''set targetTTY to "{safe}"
+set found to false
+if application "iTerm2" is running then
+    tell application "iTerm2"
+        repeat with w in windows
+            repeat with tb in tabs of w
+                repeat with s in sessions of tb
+                    try
+                        if tty of s is targetTTY then
+                            select tb
+                            set index of w to 1
+                            activate
+                            set found to true
+                            exit repeat
+                        end if
+                    end try
+                end repeat
+                if found then exit repeat
+            end repeat
+            if found then exit repeat
+        end repeat
+    end tell
+end if
+return found'''
+    result = await _run_script(script)
+    ok = result.strip() == 'true'
+    _dbg(f'  [iterm2_focus] tty={tty} ok={ok}')
+    return ok
+
+
+# ---------------------------------------------------------------------------
+# I/O — Generic (Ghostty, Warp, Alacritty, etc.)
+# ---------------------------------------------------------------------------
+
+async def _generic_send_text(app_name: str, text: str) -> bool:
+    """Activate the named terminal app and send text using clipboard + keyboard.
+
+    Used for terminals without TTY-based window lookup. Activates the app (bringing
+    its last-focused window to front) then pastes via Ctrl+U, Cmd+V, Enter.
+    """
+    safe_app = app_name.replace('"', '\\"')
+    try:
+        subprocess.run(['pbcopy'], input=text.encode('utf-8'), timeout=2, check=True)
+    except Exception as e:
+        _log(f'_generic_send_text pbcopy failed: {e}', 'WARN')
+        return False
+    script = f'''if application "{safe_app}" is running then
+    tell application "{safe_app}" to activate
+else
+    return false
+end if
+delay 0.4
+tell application "System Events"
+    keystroke "u" using {{control down}}
+    delay 0.1
+    keystroke "v" using command down
+    delay 0.1
+    key code 36
+end tell
+return true'''
+    result = await _run_script(script)
+    ok = result.strip() == 'true'
+    _dbg(f'  [generic_send_text] app={app_name!r} ok={ok}')
+    return ok
+
+
+async def _generic_send_key(app_name: str, key: str) -> bool:
+    """Activate the named app and send a key via System Events."""
+    key_code, _ = KEY_MAP.get(key, (None, None))
+    safe_app = app_name.replace('"', '\\"')
+    if key == 'ctrl_c':
+        action = 'keystroke "c" using {control down}'
+    elif key == 'ctrl_u':
+        action = 'keystroke "u" using {control down}'
+    elif key_code is not None:
+        action = f'key code {key_code}'
+    else:
+        _log(f'Unknown key for generic: {key!r}', 'WARN')
+        return False
+    script = f'''if application "{safe_app}" is running then
+    tell application "{safe_app}" to activate
+else
+    return false
+end if
+delay 0.4
+tell application "System Events"
+    {action}
+end tell
+return true'''
+    result = await _run_script(script)
+    ok = result.strip() == 'true'
+    _dbg(f'  [generic_send_key] app={app_name!r} key={key!r} ok={ok}')
+    return ok
+
+
+async def _generic_focus(app_name: str) -> bool:
+    """Activate the named app, bringing its last-focused window to front."""
+    safe = app_name.replace('"', '\\"')
+    script = f'''if application "{safe}" is running then
+    tell application "{safe}" to activate
+    return true
+end if
+return false'''
+    result = await _run_script(script)
+    ok = result.strip() == 'true'
+    _dbg(f'  [generic_focus] app={app_name!r} ok={ok}')
+    return ok
+
+
+# ---------------------------------------------------------------------------
 # I/O — tmux
 # ---------------------------------------------------------------------------
 
@@ -827,13 +1120,15 @@ async def _tmux_send_text(target: str, text: str) -> bool:
 
 class Session:
     def __init__(self, session_id: str, app_id: str, tty: str = '',
-                 tmux_target: str = '', hook: dict = None, read_mode: str = 'history'):
+                 tmux_target: str = '', hook: dict = None, read_mode: str = 'history',
+                 terminal_app: str = ''):
         self.session_id = session_id
         self.app_id = app_id
         self.tty = tty
         self.tmux_target = tmux_target
         self.hook = hook or {}
         self.read_mode = read_mode  # 'history' or 'contents'
+        self.terminal_app = terminal_app  # 'Terminal', 'iTerm2', 'Ghostty', etc.
         self.session_type = 'tmux' if tmux_target else 'terminal_app'
 
     def to_dict(self) -> dict:
@@ -843,6 +1138,7 @@ class Session:
             'type':         self.session_type,
             'tty':          self.tty,
             'tmux_target':  self.tmux_target,
+            'terminal_app': self.terminal_app,
             'has_hook':     bool(self.hook),
         }
 
@@ -942,6 +1238,9 @@ class TerminalManager:
             raise ValueError('tty or tmux_target required')
 
         read_mode = args.get('read_mode', 'history')
+        terminal_app = ''
+        if tty and not tmux:
+            terminal_app = await _detect_terminal_for_tty(tty)
         session = Session(
             session_id=sid,
             app_id=args.get('app_id', 'unknown'),
@@ -949,11 +1248,12 @@ class TerminalManager:
             tmux_target=tmux,
             hook=args.get('hook'),
             read_mode=read_mode,
+            terminal_app=terminal_app,
         )
         self._sessions[sid] = session
         _log(f'Registered session {sid[:12]} type={session.session_type} '
-             f'tty={tty!r} tmux={tmux!r} read_mode={read_mode!r} '
-             f'hook_patterns={len(session.hook.get("patterns", []))}')
+             f'tty={tty!r} tmux={tmux!r} terminal_app={terminal_app!r} '
+             f'read_mode={read_mode!r} hook_patterns={len(session.hook.get("patterns", []))}')
         return {'ok': True, 'session_id': sid, 'type': session.session_type}
 
     async def _tool_unregister_session(self, args: dict) -> dict:
@@ -1091,19 +1391,26 @@ class TerminalManager:
         return {'ok': ok}
 
     async def _tool_inject_tty(self, args: dict) -> dict:
-        """Inject text into the TTY input queue via TIOCSTI — no clipboard, no focus needed."""
+        """Inject text into the TTY input queue — no clipboard, no window focus needed."""
         sid = args.get('session_id', '')
         text = args.get('text', '')
         session = self._sessions.get(sid)
         if not session:
             raise ValueError(f'Unknown session: {sid}')
         if session.session_type == 'tmux':
-            # tmux sessions don't use a TTY device — fall back to send_text
             _log(f'inject_tty {sid[:12]} — tmux session, delegating to send_text')
             ok = await _tmux_send_text(session.tmux_target, text)
         else:
-            _log(f'inject_tty {sid[:12]} tty={session.tty!r}')
-            ok = await _terminal_inject_tty(session.tty, text)
+            app = session.terminal_app or 'Terminal'
+            _log(f'inject_tty {sid[:12]} tty={session.tty!r} terminal={app!r}')
+            if app == 'iTerm2':
+                ok = await _iterm2_inject_tty(session.tty, text)
+            elif app in ('Terminal', 'unknown', ''):
+                ok = await _terminal_inject_tty(session.tty, text)
+            else:
+                # Ghostty, Warp, etc.: no direct inject — signal caller to use send_text
+                _log(f'inject_tty: {app!r} has no native inject, returning false', 'WARN')
+                ok = False
         return {'ok': ok}
 
     async def _tool_focus_window(self, args: dict) -> dict:
@@ -1127,8 +1434,14 @@ class TerminalManager:
                 _log(f'focus_window tmux error: {e}', 'WARN')
                 return {'ok': False}
         else:
-            _log(f'focus_window {sid[:12]} tty={session.tty!r}')
-            ok = await _terminal_focus(session.tty)
+            app = session.terminal_app or 'Terminal'
+            _log(f'focus_window {sid[:12]} tty={session.tty!r} terminal={app!r}')
+            if app == 'iTerm2':
+                ok = await _iterm2_focus(session.tty)
+            elif app in ('Terminal', 'unknown', ''):
+                ok = await _terminal_focus(session.tty)
+            else:
+                ok = await _generic_focus(app)
             return {'ok': ok}
 
     async def _tool_wait_for_idle(self, args: dict) -> dict:
@@ -1220,14 +1533,24 @@ class TerminalManager:
     async def _send_key(self, session: Session, key: str) -> bool:
         if session.session_type == 'tmux':
             return await _tmux_send_key(session.tmux_target, key)
-        else:
+        app = session.terminal_app or 'Terminal'
+        if app == 'iTerm2':
+            return await _iterm2_send_key(session.tty, key)
+        elif app in ('Terminal', 'unknown', ''):
             return await _terminal_send_key(session.tty, key)
+        else:
+            return await _generic_send_key(app, key)
 
     async def _send_text(self, session: Session, text: str) -> bool:
         if session.session_type == 'tmux':
             return await _tmux_send_text(session.tmux_target, text)
-        else:
+        app = session.terminal_app or 'Terminal'
+        if app == 'iTerm2':
+            return await _iterm2_send_text(session.tty, text)
+        elif app in ('Terminal', 'unknown', ''):
             return await _terminal_send_text(session.tty, text)
+        else:
+            return await _generic_send_text(app, text)
 
     async def _send_raw(self, session: Session, text: str) -> bool:
         if session.session_type == 'tmux':

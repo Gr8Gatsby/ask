@@ -9,6 +9,7 @@ import SwiftUI
 struct AddScriptsView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(ScriptManager.self) private var scriptManager
+    @Environment(ScriptCatalogService.self) private var catalog
 
     @State private var installer = ScriptInstaller()
 
@@ -20,7 +21,8 @@ struct AddScriptsView: View {
                     scriptManager: scriptManager,
                     vaultURL: settings.vaultPath
                         ?? FileManager.default.homeDirectoryForCurrentUser
-                            .appendingPathComponent(".ask/scripts")
+                            .appendingPathComponent(".ask/scripts"),
+                    catalog: catalog
                 )
             }
     }
@@ -190,7 +192,8 @@ struct ScriptCatalogView: View {
                 installer: installer,
                 scriptManager: scriptManager,
                 vaultURL: settings.vaultPath ?? FileManager.default.homeDirectoryForCurrentUser
-                    .appendingPathComponent(".ask/scripts")
+                    .appendingPathComponent(".ask/scripts"),
+                catalog: catalog
             )
         }
         .task {
