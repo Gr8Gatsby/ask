@@ -4,6 +4,19 @@ import AskMacCore
 import Foundation
 import SwiftUI
 
+// MARK: - ScriptInstallTarget
+
+/// The subset of ScriptManager that ScriptInstaller needs — extracted so tests can inject a mock.
+protocol ScriptInstallTarget: AnyObject {
+    var scripts: [ManagedScript] { get }
+    func beginInstall()
+    func endInstall()
+    func stopScriptForUpdate(id: String)
+    func markInstalledByUser(ids: [String])
+}
+
+extension ScriptManager: ScriptInstallTarget {}
+
 // MARK: - ScriptInstaller
 
 @Observable
@@ -267,13 +280,13 @@ final class ScriptInstaller {
 
     // MARK: - Installation
 
-    func install(to vaultURL: URL, scriptManager: ScriptManager,
+    func install(to vaultURL: URL, scriptManager: any ScriptInstallTarget,
                  catalog: ScriptCatalogService? = nil) {
         Task { await doInstall(to: vaultURL, scriptManager: scriptManager, catalog: catalog) }
     }
 
     @MainActor
-    private func doInstall(to vaultURL: URL, scriptManager: ScriptManager,
+    private func doInstall(to vaultURL: URL, scriptManager: any ScriptInstallTarget,
                            catalog: ScriptCatalogService? = nil) async {
         phase = .installing
         showSheet = false
@@ -375,7 +388,7 @@ final class ScriptInstaller {
     /// Extract a zip and install all valid scripts found inside it, used for silent dep installs.
     @MainActor
     private func installFromZip(zipURL: URL, vaultURL: URL,
-                                scriptManager: ScriptManager, label: String) async {
+                                scriptManager: any ScriptInstallTarget, label: String) async {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("ask-dep-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tmp) }

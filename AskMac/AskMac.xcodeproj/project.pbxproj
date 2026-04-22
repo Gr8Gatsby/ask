@@ -32,6 +32,7 @@
 		8B154777BD5CBACF5561A998 /* BlockPreviewHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FB18E6D1590306C5E9169FA /* BlockPreviewHelpers.swift */; };
 		8B9F7C8632ECBE36C84A369E /* ScriptManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA1CC49C770BDCD1EB75B351 /* ScriptManager.swift */; };
 		8C30E811B8346325809717AD /* TaskServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8C66FCA9A17628445E9ECCA /* TaskServiceTests.swift */; };
+		8CB066949DA102A4AFC0B76E /* ScriptDependencyInstallTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 976DD80CB6CE2881A37201BC /* ScriptDependencyInstallTests.swift */; };
 		8D1B5B2F3B2AD30DC3450B73 /* VersionComparison.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E900B371D21D4580D767EBA /* VersionComparison.swift */; };
 		8FE46F69A0823A2188C24DB4 /* ScriptManagerFilteringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A9E4EFAF553CA1CD22DA58A /* ScriptManagerFilteringTests.swift */; };
 		A302F5F593A0983FFEE135A9 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28BCC8842C2E63700381890C /* SettingsView.swift */; };
@@ -126,6 +127,7 @@
 		834313B9757B652D0DB8E349 /* MessageWatcherService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageWatcherService.swift; sourceTree = "<group>"; };
 		944903959A55B26822A4701D /* BlockService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockService.swift; sourceTree = "<group>"; };
 		944A4DCFCCDB25464859E84A /* BlockPreviewSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockPreviewSession.swift; sourceTree = "<group>"; };
+		976DD80CB6CE2881A37201BC /* ScriptDependencyInstallTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptDependencyInstallTests.swift; sourceTree = "<group>"; };
 		9AEB210A6E3AED0E763F5EFA /* ScriptDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptDetailView.swift; sourceTree = "<group>"; };
 		9B2C7957AA31DE73EE832ABD /* ScriptDependencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptDependencyTests.swift; sourceTree = "<group>"; };
 		9FA01F4EBBCEE5682DC62048 /* BlockPreviewContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockPreviewContent.swift; sourceTree = "<group>"; };
@@ -210,6 +212,7 @@
 			isa = PBXGroup;
 			children = (
 				7F0BACCC7986B8E27CD6B9A8 /* ScriptCatalogServiceTests.swift */,
+				976DD80CB6CE2881A37201BC /* ScriptDependencyInstallTests.swift */,
 				9B2C7957AA31DE73EE832ABD /* ScriptDependencyTests.swift */,
 				EAB5EAD55DFF07DA5ECE953A /* ScriptInstallerRollbackTests.swift */,
 				3A9E4EFAF553CA1CD22DA58A /* ScriptManagerFilteringTests.swift */,
@@ -438,6 +441,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				EFD8390B0162CA00B1B3144E /* ScriptCatalogServiceTests.swift in Sources */,
+				8CB066949DA102A4AFC0B76E /* ScriptDependencyInstallTests.swift in Sources */,
 				DAA69300555DC6A6182D64DD /* ScriptDependencyTests.swift in Sources */,
 				F47B199A3425DC6C05AC0480 /* ScriptInstallerRollbackTests.swift in Sources */,
 				8FE46F69A0823A2188C24DB4 /* ScriptManagerFilteringTests.swift in Sources */,
