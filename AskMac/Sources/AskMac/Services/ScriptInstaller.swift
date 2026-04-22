@@ -322,6 +322,7 @@ final class ScriptInstaller {
         }
 
         let fm = FileManager.default
+        try? fm.createDirectory(at: vaultURL, withIntermediateDirectories: true)
         var installationErrors: [SkippedScript] = []
 
         for script in pending {
@@ -405,6 +406,7 @@ final class ScriptInstaller {
             guard exitCode == 0 else { return }
             let dirs = (try? findScriptDirs(in: tmp)) ?? []
             let fm = FileManager.default
+            try? fm.createDirectory(at: vaultURL, withIntermediateDirectories: true)
             for dir in dirs {
                 guard case .success(let ps) = validate(dir: dir, existingScripts: scriptManager.scripts) else { continue }
                 let destDir = vaultURL.appendingPathComponent(ps.id)

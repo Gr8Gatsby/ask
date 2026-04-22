@@ -168,14 +168,11 @@ struct OnboardingView: View {
         installer.showSheet = false
         installer.install(to: vault, scriptManager: scriptManager, catalog: scriptCatalog)
 
-        // Wait for install to start (idle → installing)
-        var installStartWaits = 0
-        while installer.phase == .idle, installStartWaits < 50 {
-            try await Task.sleep(for: .milliseconds(100))
-            installStartWaits += 1
-        }
+        // Yield once so the install Task gets a chance to run. For simple scripts with no
+        // async work (e.g. hello-world), doInstall completes entirely on this first yield.
+        try await Task.sleep(for: .milliseconds(100))
 
-        // Wait for install to finish (installing/done → idle)
+        // If still running (complex install with dependencies), wait for it to finish.
         var installWaits = 0
         while installer.phase != .idle, installWaits < 600 {
             try await Task.sleep(for: .milliseconds(100))
