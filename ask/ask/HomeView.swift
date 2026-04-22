@@ -1401,7 +1401,7 @@ private struct OnboardingStep: View {
                 Text("\(number)")
                     .font(.subheadline)
                     .fontWeight(.semibold)
-                    .foregroundStyle(.accent)
+                    .foregroundStyle(Color.accentColor)
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
@@ -1416,7 +1416,7 @@ private struct OnboardingStep: View {
                 Button(action: action) {
                     Image(systemName: "arrow.up.right")
                         .font(.caption)
-                        .foregroundStyle(.accent)
+                        .foregroundStyle(Color.accentColor)
                 }
                 .buttonStyle(.plain)
             }
