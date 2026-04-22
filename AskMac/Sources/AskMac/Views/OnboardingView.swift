@@ -168,6 +168,14 @@ struct OnboardingView: View {
         installer.showSheet = false
         installer.install(to: vault, scriptManager: scriptManager, catalog: scriptCatalog)
 
+        // Wait for install to start (idle → installing)
+        var installStartWaits = 0
+        while installer.phase == .idle, installStartWaits < 50 {
+            try await Task.sleep(for: .milliseconds(100))
+            installStartWaits += 1
+        }
+
+        // Wait for install to finish (installing/done → idle)
         var installWaits = 0
         while installer.phase != .idle, installWaits < 600 {
             try await Task.sleep(for: .milliseconds(100))
