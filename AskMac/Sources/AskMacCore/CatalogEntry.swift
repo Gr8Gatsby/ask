@@ -30,15 +30,19 @@ public struct CatalogEntry: Identifiable, Decodable {
     /// Prerequisite checks from the script's manifest requires array.
     /// Optional — nil when the catalog was generated without this field.
     public let requires: [CatalogRequirement]?
+    /// Other script IDs that must be installed before this script runs.
+    public let scriptDependencies: [String]?
 
     public enum CodingKeys: String, CodingKey {
         case id, name, version, description, icon, svg, type, changelog, permissions, requires
         case downloadURL = "download_url"
+        case scriptDependencies = "script_dependencies"
     }
 
     public init(id: String, name: String, version: String, description: String,
                 icon: String?, svg: String? = nil, type: String?, changelog: String?, downloadURL: URL,
-                permissions: [String]? = nil, requires: [CatalogRequirement]? = nil) {
+                permissions: [String]? = nil, requires: [CatalogRequirement]? = nil,
+                scriptDependencies: [String]? = nil) {
         self.id = id
         self.name = name
         self.version = version
@@ -50,6 +54,7 @@ public struct CatalogEntry: Identifiable, Decodable {
         self.downloadURL = downloadURL
         self.permissions = permissions
         self.requires = requires
+        self.scriptDependencies = scriptDependencies
     }
 }
 

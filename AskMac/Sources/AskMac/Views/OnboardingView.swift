@@ -150,7 +150,7 @@ struct OnboardingView: View {
         }
 
         installer.showSheet = false
-        installer.install(to: vault, scriptManager: scriptManager)
+        installer.install(to: vault, scriptManager: scriptManager, catalog: scriptCatalog)
 
         var installWaits = 0
         while installer.phase != .idle, installWaits < 600 {
