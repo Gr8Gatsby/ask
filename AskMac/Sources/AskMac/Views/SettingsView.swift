@@ -1220,11 +1220,12 @@ private struct ScriptsTabView: View {
     @State private var showSuccessBanner = false
     @State private var successMessage = ""
     @State private var nudgeGlow: Double = 0.3
+    @State private var showCatalogNudge = false
 
-    private var shouldShowCatalogNudge: Bool {
-        guard !settings.nudgeDismissed else { return false }
+    private func evaluateCatalogNudge() {
+        guard !settings.nudgeDismissed else { showCatalogNudge = false; return }
         let nonSystem = scriptManager.scripts.filter { !$0.isSystem }
-        return nonSystem.count == 1 && nonSystem.first?.id == "hello-world"
+        showCatalogNudge = nonSystem.contains { $0.id == "hello-world" }
     }
 
     var body: some View {
@@ -1325,7 +1326,7 @@ private struct ScriptsTabView: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 0) {
-                    if shouldShowCatalogNudge {
+                    if showCatalogNudge {
                         CatalogNudgeBanner {
                             withAnimation { showCatalog = true; showVault = false; selectedScriptID = nil }
                         } onDismiss: {
@@ -1396,29 +1397,23 @@ private struct ScriptsTabView: View {
                         .buttonStyle(.plain)
                         .foregroundStyle(
                             showCatalog ? Color.accentColor :
-                            shouldShowCatalogNudge ? nudgeGradientColors[0] :
+                            showCatalogNudge ? nudgeGradientColors[0] :
                             Color.secondary
                         )
                         .shadow(
-                            color: shouldShowCatalogNudge
+                            color: showCatalogNudge
                                 ? nudgeGradientColors[0].opacity(nudgeGlow)
                                 : .clear,
                             radius: 6
                         )
                         .quickTooltip("Catalog")
-                        .onAppear {
-                            guard shouldShowCatalogNudge else { return }
-                            withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
-                                nudgeGlow = 0.85
-                            }
-                        }
-                        .onChange(of: shouldShowCatalogNudge) { _, active in
+                        .onChange(of: showCatalogNudge) { _, active in
                             if active {
                                 withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
                                     nudgeGlow = 0.85
                                 }
                             } else {
-                                nudgeGlow = 0.3
+                                withAnimation { nudgeGlow = 0.3 }
                             }
                         }
 
@@ -1476,8 +1471,15 @@ private struct ScriptsTabView: View {
         .onAppear {
             catalog.fetch(installedScripts: scriptManager.scripts)
         }
+        .task {
+            evaluateCatalogNudge()
+        }
         .onChange(of: scriptManager.scripts.map(\.id)) { _, _ in
             catalog.recomputeUpdates(installedScripts: scriptManager.scripts)
+            evaluateCatalogNudge()
+        }
+        .onChange(of: settings.nudgeDismissed) { _, _ in
+            evaluateCatalogNudge()
         }
     }
 }
