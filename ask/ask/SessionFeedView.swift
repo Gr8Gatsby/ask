@@ -9,6 +9,7 @@ struct SessionFeedView: View {
     let onRespond: (RKBlock, String) async -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(TaskHistoryStore.self) private var taskHistory
 
     @Query private var messages: [TaskMessage]
     @Query private var artifacts: [ArtifactRecord]
@@ -16,6 +17,8 @@ struct SessionFeedView: View {
     @State private var draft = ""
     @State private var isSending = false
     @State private var showStopConfirm = false
+    /// Optimistic user messages shown immediately on send, removed once real records arrive.
+    @State private var pendingUserTexts: [String] = []
 
     private let sessionId: String
     private let initialProject: String
@@ -79,6 +82,9 @@ struct SessionFeedView: View {
                         ForEach(unattachedArtifacts, id: \.recordName) { artifact in
                             SessionFeedArtifactRow(artifact: artifact)
                         }
+                        ForEach(pendingUserTexts, id: \.self) { text in
+                            PendingUserBubble(text: text)
+                        }
                         Color.clear.frame(height: 8).id("bottom")
                     }
                     .padding(.horizontal, 12)
@@ -86,6 +92,7 @@ struct SessionFeedView: View {
                 }
                 .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
                 .onChange(of: messages.count) { _, _ in
+                    pendingUserTexts.removeAll()
                     withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
@@ -101,6 +108,14 @@ struct SessionFeedView: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            await taskHistory.refresh(machineIDs: [machineID])
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled else { break }
+                await taskHistory.refresh(machineIDs: [machineID])
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {
@@ -281,8 +296,13 @@ struct SessionFeedView: View {
         guard !text.isEmpty, !isSending else { return }
         isSending = true
         draft = ""
+        pendingUserTexts.append(text)
         await onRespond(block, text)
         isSending = false
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            await taskHistory.refresh(machineIDs: [machineID])
+        }
     }
 }
 
@@ -350,6 +370,24 @@ private struct SessionFeedArtifactRow: View {
         .padding(.vertical, 10)
         .background(Color(.secondarySystemGroupedBackground))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+private struct PendingUserBubble: View {
+    let text: String
+    var body: some View {
+        HStack {
+            Spacer(minLength: 60)
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.accentColor.opacity(0.6))
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.vertical, 2)
     }
 }
 
