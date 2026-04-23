@@ -22,6 +22,12 @@ struct SessionFeedView: View {
     /// Live assistant messages captured from livePayload.lastMessage onChange; cleared when CloudKit records arrive.
     @State private var liveAssistantMessages: [String] = []
     @State private var lastSeenAssistantMessage: String = ""
+    /// Latched permission confirmation: once shown, kept visible until the user responds.
+    /// Cleared only when the user taps Yes/Deny (not when the live block updates).
+    @State private var latchedConfirmation: RKPendingConfirmation? = nil
+    @State private var latchedBlock: RKBlock? = nil
+    /// Set when user taps a permission option; hides the bar immediately for up to 5s.
+    @State private var permissionRespondedAt: Date? = nil
 
     private let sessionId: String
     private let initialProject: String
@@ -105,6 +111,10 @@ struct SessionFeedView: View {
                         lastSeenAssistantMessage = msg
                         liveAssistantMessages = [msg]
                     }
+                    if let pc = livePayload?.pendingConfirmation, latchedConfirmation == nil {
+                        latchedConfirmation = pc
+                        latchedBlock = liveBlock
+                    }
                 }
                 .onChange(of: messages.count) { _, _ in
                     pendingUserTexts.removeAll()
@@ -112,6 +122,15 @@ struct SessionFeedView: View {
                     withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
+                }
+                .onChange(of: livePayload?.pendingConfirmation) { _, newVal in
+                    if let pc = newVal {
+                        // New confirmation arrived — latch it so it survives block TTL gaps
+                        latchedConfirmation = pc
+                        latchedBlock = liveBlock
+                        permissionRespondedAt = nil
+                    }
+                    // Do NOT clear latchedConfirmation when newVal == nil; only cleared on user action.
                 }
                 .onChange(of: livePayload?.lastMessage) { _, newMsg in
                     guard let msg = newMsg, !msg.isEmpty, msg != lastSeenAssistantMessage else { return }
@@ -124,7 +143,8 @@ struct SessionFeedView: View {
                     Task { await taskHistory.refresh(machineIDs: [machineID]) }
                 }
             }
-            if isActive, let pending = livePayload?.pendingConfirmation, let block = liveBlock {
+            if let pending = latchedConfirmation, let block = latchedBlock ?? liveBlock,
+               !isOptimisticallyDismissed {
                 pendingConfirmationBar(pending, block: block)
             }
             Divider()
@@ -231,6 +251,13 @@ struct SessionFeedView: View {
         .opacity(isActive ? 1.0 : 0.5)
     }
 
+    /// True for up to 5s after the user taps a permission option, so the bar dismisses immediately
+    /// without waiting for the CloudKit round-trip that clears pendingConfirmation.
+    private var isOptimisticallyDismissed: Bool {
+        guard let t = permissionRespondedAt else { return false }
+        return Date().timeIntervalSince(t) < 5
+    }
+
     @ViewBuilder
     private func pendingConfirmationBar(_ confirmation: RKPendingConfirmation, block: RKBlock) -> some View {
         PermissionApprovalBar(
@@ -238,7 +265,13 @@ struct SessionFeedView: View {
             preview: confirmation.body ?? livePayload?.currentPreview,
             options: confirmation.options,
             showBackground: false,
-            onRespond: { option in Task { await onRespond(block, option) } }
+            onRespond: { option in
+                withAnimation(.easeOut(duration: 0.2)) {
+                    permissionRespondedAt = Date()
+                    latchedConfirmation = nil
+                }
+                Task { await onRespond(block, option) }
+            }
         )
         .background(.ultraThinMaterial)
     }
