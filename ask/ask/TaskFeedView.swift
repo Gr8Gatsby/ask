@@ -14,38 +14,7 @@ struct TaskFeedView: View {
     @Query(sort: \TaskRecord.lastActivityAt, order: .reverse)
     private var allTasks: [TaskRecord]
 
-    @State private var showOlder = false
     @State private var showInvokeSheet = false
-
-    private let olderCutoff = Date().addingTimeInterval(-30 * 24 * 3600)
-
-    // MARK: - Filtered sections
-
-    private var activeTasks: [TaskRecord] {
-        allTasks.filter { $0.status == "working" || $0.status == "input-required" }
-            .sorted {
-                // input-required floats above working
-                if $0.status != $1.status {
-                    return $0.status == "input-required"
-                }
-                return $0.lastActivityAt > $1.lastActivityAt
-            }
-    }
-
-    private var recentTasks: [TaskRecord] {
-        allTasks.filter { $0.status == "completed" || $0.status == "failed" || $0.status == "cancelled" }
-    }
-
-    private var visibleRecentTasks: [TaskRecord] {
-        let recent = recentTasks.filter { $0.lastActivityAt >= olderCutoff }
-        let older  = recentTasks.filter { $0.lastActivityAt < olderCutoff }
-        if showOlder { return recent + older }
-        return recent
-    }
-
-    private var hiddenOlderCount: Int {
-        recentTasks.filter { $0.lastActivityAt < olderCutoff }.count
-    }
 
     // MARK: - Body
 
@@ -88,67 +57,32 @@ struct TaskFeedView: View {
 
     private var taskList: some View {
         List {
-            if !activeTasks.isEmpty {
-                Section("Active") {
-                    ForEach(activeTasks, id: \.recordName) { task in
-                        NavigationLink {
-                            TaskThreadView(task: task)
-                                .environment(taskHistory)
-                        } label: {
-                            TaskListRow(task: task)
-                        }
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                try? taskHistory.deleteTask(task)
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                        }
-                    }
+            ForEach(allTasks, id: \.recordName) { task in
+                NavigationLink {
+                    TaskThreadView(task: task)
+                        .environment(taskHistory)
+                } label: {
+                    TaskListRow(task: task)
                 }
-            }
-
-            if !recentTasks.isEmpty {
-                Section("Recent") {
-                    ForEach(visibleRecentTasks, id: \.recordName) { task in
-                        NavigationLink {
-                            TaskThreadView(task: task)
-                                .environment(taskHistory)
-                        } label: {
-                            TaskListRow(task: task)
-                        }
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                try? taskHistory.deleteTask(task)
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                        }
-                    }
-                    if hiddenOlderCount > 0 && !showOlder {
-                        Button {
-                            withAnimation { showOlder = true }
-                        } label: {
-                            Label("Show \(hiddenOlderCount) older task\(hiddenOlderCount == 1 ? "" : "s")",
-                                  systemImage: "clock")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
+                .swipeActions(edge: .trailing) {
+                    Button(role: .destructive) {
+                        try? taskHistory.deleteTask(task)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
                     }
                 }
             }
         }
-        .listStyle(.insetGrouped)
+        .listStyle(.plain)
     }
 
     // MARK: - Empty state
 
     private var emptyState: some View {
         ContentUnavailableView {
-            Label("No Tasks Yet", systemImage: "tray")
+            Label("No Events Yet", systemImage: "tray")
         } description: {
-            Text("Tasks created by scripts will appear here.")
+            Text("Events from your scripts will appear here.")
         }
     }
 }
