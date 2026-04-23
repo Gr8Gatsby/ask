@@ -612,8 +612,14 @@ class Claude3:
         session.preview = prompt[:200]
         session.last_prompt = prompt
         if prompt:
-            await self.append_message(session.task_id, 'user', prompt)
-        await self._set_task_status(session, 'working')
+            try:
+                await self.append_message(session.task_id, 'user', prompt)
+            except Exception as exc:
+                _log(f'user_prompt append_message failed: {exc}', 'WARN')
+        try:
+            await self._set_task_status(session, 'working')
+        except Exception as exc:
+            _log(f'user_prompt set_task_status failed: {exc}', 'WARN')
         await self._emit_session_block(session)
         await self._emit_tile()
         _save_registry(self._registry)
@@ -630,8 +636,11 @@ class Claude3:
         last_msg = (msg.get('last_message', '') or '').strip()
         if last_msg and last_msg != session.last_message:
             session.last_message = last_msg
-            await self.append_message(session.task_id, 'assistant', last_msg)
-            await self._append_artifact_if_large(session, 'Final response', last_msg)
+            try:
+                await self.append_message(session.task_id, 'assistant', last_msg)
+                await self._append_artifact_if_large(session, 'Final response', last_msg)
+            except Exception as exc:
+                _log(f'session_stop append_message failed: {exc}', 'WARN')
         # session_stop fires at end of every turn — keep the session alive so it
         # remains visible in the UI while Claude is waiting for the next user message.
         session.state = 'idle'
@@ -648,7 +657,10 @@ class Claude3:
         if not raw_id or not summary:
             return
         session = self._registry.ensure(raw_id=raw_id, cwd=msg.get('cwd', ''))
-        await self._append_structured_message(session, 'Context compacted', summary)
+        try:
+            await self._append_structured_message(session, 'Context compacted', summary)
+        except Exception as exc:
+            _log(f'post_compact append failed: {exc}', 'WARN')
         _log(f'post_compact raw_id={raw_id[:8]} summary={summary[:60]}')
 
     async def _handle_permission_request(self, msg: dict) -> str:
@@ -891,7 +903,10 @@ class Claude3:
         if value == '__interrupt__':
             ok = await self._tm_send_interrupt(session)
             _log(f'interrupt session={session.session_id!r} ok={ok}')
-            await self._append_structured_message(session, 'Interrupted', 'Sent Ctrl-C to the session.')
+            try:
+                await self._append_structured_message(session, 'Interrupted', 'Sent Ctrl-C to the session.')
+            except Exception as exc:
+                _log(f'interrupt append failed: {exc}', 'WARN')
             session.state = 'idle'
             await self._emit_session_block(session)
             _save_registry(self._registry)
@@ -900,7 +915,10 @@ class Claude3:
         # Close session
         if value == '__close_session__':
             await self._tm_inject_tty(session, '/quit\n')
-            await self._append_structured_message(session, 'Stop requested', 'Sent quit to Claude Code.')
+            try:
+                await self._append_structured_message(session, 'Stop requested', 'Sent quit to Claude Code.')
+            except Exception as exc:
+                _log(f'close append failed: {exc}', 'WARN')
             session.state = 'stopping'
             await self._emit_session_block(session)
             _save_registry(self._registry)
@@ -918,10 +936,16 @@ class Claude3:
             ok = await self._route_text(session, value)
             _log(f'reply session={session.session_id!r} ok={ok} text={value[:80]!r}')
             if ok:
-                await self.append_message(session.task_id, 'user', value)
+                try:
+                    await self.append_message(session.task_id, 'user', value)
+                except Exception as exc:
+                    _log(f'reply append_message failed: {exc}', 'WARN')
                 session.state = 'running_tool'
                 session.preview = value[:200]
-                await self._set_task_status(session, 'working')
+                try:
+                    await self._set_task_status(session, 'working')
+                except Exception as exc:
+                    _log(f'reply set_task_status failed: {exc}', 'WARN')
                 await self._emit_session_block(session)
                 _save_registry(self._registry)
 
