@@ -454,21 +454,25 @@ class Claude3:
             _log(f'tm_register failed: {e}', 'WARN')
 
     async def _route_text(self, session: SessionRecord, text: str) -> bool:
-        """Send user text to a session. Try inject_tty, fall back to send_text only when TTY unknown."""
+        """Send user text to a session via inject_tty, with send_text fallback for sessions with no TTY."""
         text_with_newline = text if text.endswith('\n') else text + '\n'
         had_tty = bool(session.tty)
         ok = await self._tm_inject_tty(session, text_with_newline)
-        if not ok and not had_tty:
-            # TTY was unknown — discover it, re-register, and retry inject_tty once.
-            if session.cwd:
-                for proc in discover_claude_processes():
-                    if proc.get('cwd') == session.cwd and proc.get('tty'):
-                        session.tty = proc['tty']
-                        self._registry._index_aliases(session)
-                        _log(f'late-discovered tty={session.tty!r} for session {session.session_id}')
-                        break
-            await self._tm_register(session)
-            ok = await self._tm_inject_tty(session, text_with_newline)
+        if had_tty:
+            # TTY was known before the call. A timeout most likely means AskMac was slow
+            # to ack — the text was probably delivered. Do NOT fall through to send_text,
+            # which would inject a second copy.
+            return ok
+        # TTY was unknown — try to discover it, re-register, and retry once.
+        if session.cwd:
+            for proc in discover_claude_processes():
+                if proc.get('cwd') == session.cwd and proc.get('tty'):
+                    session.tty = proc['tty']
+                    self._registry._index_aliases(session)
+                    _log(f'late-discovered tty={session.tty!r} for session {session.session_id}')
+                    break
+        await self._tm_register(session)
+        ok = await self._tm_inject_tty(session, text_with_newline)
         if not ok:
             ok = await self._tm_send_text(session, text)
         return ok
