@@ -209,6 +209,7 @@ class Codex3:
 
     async def open_task(self, task_id: str, title: str, status: str):
         await self._call_tool('open_task', {'taskId': task_id, 'title': title, 'status': status}, timeout=self._A2A_TIMEOUT)
+        _log(f'open_task ok task_id={task_id!r} status={status!r}')
 
     async def append_message(self, task_id: str, role: str, text: str):
         await self._call_tool('append_message', {
@@ -216,6 +217,7 @@ class Codex3:
             'role': role,
             'parts': [{'type': 'text', 'text': text}],
         }, timeout=self._A2A_TIMEOUT)
+        _log(f'append_message ok task_id={task_id!r} role={role!r}')
 
     async def put_artifact(self, task_id: str, artifact_id: str, filename: str, mime_type: str, description: str, file_path: str):
         await self._call_tool('put_artifact', {
@@ -887,10 +889,16 @@ class Codex3:
             line = await loop.run_in_executor(None, sys.stdin.readline)
             if not line:
                 break
-            try:
-                await self._handle_rpc_line(line)
-            except Exception as exc:
-                _log(f'rpc handler error: {exc}', 'WARN')
+            # Dispatch as a task so the readline loop continues immediately —
+            # this prevents deadlocks when a handler needs to call _call_tool
+            # (which writes to stdout and waits for the response on stdin).
+            asyncio.create_task(self._safe_handle_rpc_line(line))
+
+    async def _safe_handle_rpc_line(self, line: str):
+        try:
+            await self._handle_rpc_line(line)
+        except Exception as exc:
+            _log(f'rpc handler error: {exc}', 'WARN')
 
     async def run(self):
         _log('codex-3 starting')

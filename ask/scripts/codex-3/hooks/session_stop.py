@@ -16,7 +16,7 @@ try:
     send_event({
         'type': 'session_idle',
         'session_id': session_id,
-        'cwd': data.get('cwd', ''),
+        'cwd': data.get('cwd', '') or os.getcwd(),
         'tty': get_tty(),
         'tmux_target': get_tmux_target(),
         'last_message': (data.get('last_assistant_message') or '').strip()[:2000],

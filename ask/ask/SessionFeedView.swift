@@ -19,6 +19,9 @@ struct SessionFeedView: View {
     @State private var showStopConfirm = false
     /// Optimistic user messages shown immediately on send, removed once real records arrive.
     @State private var pendingUserTexts: [String] = []
+    /// Live assistant messages captured from livePayload.lastMessage onChange; cleared when CloudKit records arrive.
+    @State private var liveAssistantMessages: [String] = []
+    @State private var lastSeenAssistantMessage: String = ""
 
     private let sessionId: String
     private let initialProject: String
@@ -82,6 +85,12 @@ struct SessionFeedView: View {
                         ForEach(unattachedArtifacts, id: \.recordName) { artifact in
                             SessionFeedArtifactRow(artifact: artifact)
                         }
+                        ForEach(liveAssistantMessages, id: \.self) { text in
+                            SessionFeedMarkdownView(text: text)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 2)
+                                .opacity(0.85)
+                        }
                         ForEach(pendingUserTexts, id: \.self) { text in
                             PendingUserBubble(text: text)
                         }
@@ -90,12 +99,29 @@ struct SessionFeedView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 12)
                 }
-                .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+                .onAppear {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                    if let msg = livePayload?.lastMessage, !msg.isEmpty, msg != lastSeenAssistantMessage {
+                        lastSeenAssistantMessage = msg
+                        liveAssistantMessages = [msg]
+                    }
+                }
                 .onChange(of: messages.count) { _, _ in
                     pendingUserTexts.removeAll()
+                    liveAssistantMessages.removeAll()
                     withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
+                }
+                .onChange(of: livePayload?.lastMessage) { _, newMsg in
+                    guard let msg = newMsg, !msg.isEmpty, msg != lastSeenAssistantMessage else { return }
+                    lastSeenAssistantMessage = msg
+                    pendingUserTexts.removeAll()
+                    liveAssistantMessages.append(msg)
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                    Task { await taskHistory.refresh(machineIDs: [machineID]) }
                 }
             }
             if isActive, let pending = livePayload?.pendingConfirmation, let block = liveBlock {

@@ -15,7 +15,7 @@ def get_tmux_target() -> str:
         return ''
     try:
         result = subprocess.run(
-            ['tmux', 'display-message', '-p', '-t', tmux_pane, '#{session_name}:#{window_index}.#{pane_index}'],
+            ['tmux', 'display-message', '-p', '-t', tmux_pane, '#{session_name}:#{window_name}.#{pane_index}'],
             capture_output=True, text=True, timeout=2,
         )
         return result.stdout.strip() if result.returncode == 0 else ''
