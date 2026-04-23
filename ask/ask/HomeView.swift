@@ -194,6 +194,8 @@ struct HomeView: View {
     @State private var lastHeartbeatAt: Date = .distantPast
     @State private var notifiedBlockIDs: Set<String> = []
     @State private var burstPollingUntil: Date = .distantPast
+    /// Set when CloudKit returns a throttle/rate-limit error with a Retry-After value.
+    @State private var throttledUntil: Date = .distantPast
     /// Cached script icons — available immediately on launch for the loading scene.
     @State private var iconCache = ScriptIconCache()
     /// Controls the loading icon overlay — kept true briefly after hasLoaded
@@ -769,13 +771,21 @@ struct HomeView: View {
     }
 
     private var fetchFailedState: some View {
-        ContentUnavailableView {
-            Label("iCloud Unavailable", systemImage: "icloud.slash")
+        let isThrottled = Date() < throttledUntil
+        return ContentUnavailableView {
+            Label(isThrottled ? "iCloud Rate Limited" : "iCloud Unavailable",
+                  systemImage: isThrottled ? "clock.arrow.circlepath" : "icloud.slash")
         } description: {
-            Text("Could not reach iCloud. This is usually temporary — please try again in a moment.")
+            if isThrottled {
+                Text("CloudKit is temporarily rate limiting this app. This clears automatically — no action needed.")
+            } else {
+                Text("Could not reach iCloud. This is usually temporary — please try again in a moment.")
+            }
         } actions: {
-            Button("Try Again") { Task { await load() } }
-                .buttonStyle(.borderedProminent)
+            if !isThrottled {
+                Button("Try Again") { Task { await load() } }
+                    .buttonStyle(.borderedProminent)
+            }
         }
     }
 
@@ -797,8 +807,12 @@ struct HomeView: View {
             let fresh = try await cloudKit.fetchMachines()
             machines = MachineTombstoneStore.apply(to: fresh)
             fetchFailed = false
+            throttledUntil = .distantPast
         } catch {
             print("[HomeView] Failed to fetch machines: \(error)")
+            if let ckError = error as? CKError, let retryAfter = ckError.retryAfterSeconds {
+                throttledUntil = Date().addingTimeInterval(retryAfter)
+            }
             fetchFailed = machines.isEmpty
         }
 
@@ -887,13 +901,22 @@ struct HomeView: View {
             // Prevents a blank UI during the Mac restart window while scripts re-emit.
             var consecutiveEmpty = 0
             while !Task.isCancelled {
-                let interval: Double = Date() < burstPollingUntil ? 1.0 : 15.0
+                // Respect CloudKit Retry-After; fall back to burst/normal cadence.
+                let now = Date()
+                let throttleWait = max(0, throttledUntil.timeIntervalSince(now))
+                let interval: Double = throttleWait > 0 ? throttleWait : (now < burstPollingUntil ? 1.0 : 15.0)
                 try? await Task.sleep(for: .seconds(interval))
                 guard !Task.isCancelled else { break }
 
-                if let fresh = try? await cloudKit.fetchMachines(), !fresh.isEmpty {
-                    machines = fresh
+                do {
+                    let fresh = try await cloudKit.fetchMachines()
+                    if !fresh.isEmpty { machines = MachineTombstoneStore.apply(to: fresh) }
                     fetchFailed = false
+                    throttledUntil = .distantPast
+                } catch {
+                    if let ckError = error as? CKError, let retryAfter = ckError.retryAfterSeconds {
+                        throttledUntil = Date().addingTimeInterval(retryAfter)
+                    }
                 }
 
                 // Detect any machine coming back online — show queue review if needed.
