@@ -233,26 +233,13 @@ struct SessionFeedView: View {
 
     @ViewBuilder
     private func pendingConfirmationBar(_ confirmation: RKPendingConfirmation, block: RKBlock) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(confirmation.title)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(confirmation.options, id: \.self) { option in
-                        Button(option) {
-                            Task { await onRespond(block, option) }
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.orange)
-                        .font(.footnote)
-                    }
-                }
-                .padding(.horizontal)
-            }
-        }
-        .padding(.vertical, 10)
+        PermissionApprovalBar(
+            title: confirmation.title,
+            preview: confirmation.body ?? livePayload?.currentPreview,
+            options: confirmation.options,
+            showBackground: false,
+            onRespond: { option in Task { await onRespond(block, option) } }
+        )
         .background(.ultraThinMaterial)
     }
 

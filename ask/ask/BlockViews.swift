@@ -1869,56 +1869,57 @@ struct QuickReplyBlockView: View {
 
 // MARK: - Permission approval bar
 
-private struct PermissionOptionButton: View {
+struct PermissionOptionButton: View {
     let option: String
     let onRespond: (String) -> Void
+    var prominent: Bool = false
 
     private var lc:       String { option.lowercased() }
     private var isDeny:   Bool   { lc == "deny" || lc == "no" || lc.hasPrefix("deny") }
     private var isAlways: Bool   { lc.hasPrefix("always") }
     private var label:    String { isAlways ? "Always" : option }
 
-    private var bgColor:     Color { isDeny ? Color.red.opacity(0.12) : isAlways ? Color.orange.opacity(0.12) : Color.blue }
+    private var bgColor:     Color { isDeny ? Color.red.opacity(0.15) : isAlways ? Color.orange.opacity(0.12) : Color.blue }
     private var fgColor:     Color { isDeny ? Color.red               : isAlways ? Color.orange               : Color.white }
-    private var borderColor: Color { isDeny ? Color.red.opacity(0.3)  : isAlways ? Color.orange.opacity(0.3)  : Color.clear }
+    private var borderColor: Color { isDeny ? Color.red.opacity(0.25) : isAlways ? Color.orange.opacity(0.3)  : Color.clear }
 
     var body: some View {
         Button { onRespond(option) } label: {
             Text(label)
-                .font(.caption)
-                .fontWeight(.semibold)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
+                .font(prominent ? .subheadline.weight(.semibold) : .caption.weight(.semibold))
+                .padding(.horizontal, prominent ? 20 : 12)
+                .padding(.vertical, prominent ? 10 : 6)
                 .background(bgColor)
                 .foregroundStyle(fgColor)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(borderColor, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: prominent ? 10 : 8))
+                .overlay(RoundedRectangle(cornerRadius: prominent ? 10 : 8).stroke(borderColor, lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
 }
 
-/// Shared permission-approval UI used by both inline pending_confirmation and
-/// linked confirmation blocks. Matches the web PendingConfirmationBar design:
-/// semibold title, monospace command preview, semantically coloured buttons.
+/// Shared permission-approval UI used by inline pending_confirmation and linked
+/// confirmation blocks. Set `prominent = true` for home-screen cards where larger
+/// buttons are appropriate, and `showBackground = false` when the host provides its own background.
 struct PermissionApprovalBar: View {
     let title: String
     let preview: String?
     let options: [String]
+    var prominent: Bool = false
+    var showBackground: Bool = true
     let onRespond: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title)
-                .font(.footnote)
-                .fontWeight(.semibold)
+                .font(prominent ? .subheadline.weight(.semibold) : .footnote.weight(.semibold))
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if let preview, !preview.isEmpty {
                 Text(preview)
-                    .font(.system(.caption, design: .monospaced))
+                    .font(.system(prominent ? .footnote : .caption, design: .monospaced))
                     .foregroundStyle(.primary)
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1934,17 +1935,19 @@ struct PermissionApprovalBar: View {
 
             HStack(spacing: 8) {
                 ForEach(options, id: \.self) { option in
-                    PermissionOptionButton(option: option, onRespond: onRespond)
+                    PermissionOptionButton(option: option, onRespond: onRespond, prominent: prominent)
                 }
             }
         }
-        .padding(.horizontal)
+        .padding(.horizontal, prominent ? 14 : 16)
         .padding(.vertical, 12)
-        .background(Color.orange.opacity(0.05))
+        .background(showBackground ? Color.orange.opacity(0.05) : Color.clear)
         .overlay(alignment: .top) {
-            Rectangle()
-                .fill(Color.orange.opacity(0.25))
-                .frame(height: 0.5)
+            if showBackground {
+                Rectangle()
+                    .fill(Color.orange.opacity(0.25))
+                    .frame(height: 0.5)
+            }
         }
     }
 }
