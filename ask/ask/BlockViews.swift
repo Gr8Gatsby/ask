@@ -1866,3 +1866,85 @@ struct QuickReplyBlockView: View {
         .animation(.easeInOut(duration: 0.15), value: responding)
     }
 }
+
+// MARK: - Permission approval bar
+
+private struct PermissionOptionButton: View {
+    let option: String
+    let onRespond: (String) -> Void
+
+    private var lc:       String { option.lowercased() }
+    private var isDeny:   Bool   { lc == "deny" || lc == "no" || lc.hasPrefix("deny") }
+    private var isAlways: Bool   { lc.hasPrefix("always") }
+    private var label:    String { isAlways ? "Always" : option }
+
+    private var bgColor:     Color { isDeny ? Color.red.opacity(0.12) : isAlways ? Color.orange.opacity(0.12) : Color.blue }
+    private var fgColor:     Color { isDeny ? Color.red               : isAlways ? Color.orange               : Color.white }
+    private var borderColor: Color { isDeny ? Color.red.opacity(0.3)  : isAlways ? Color.orange.opacity(0.3)  : Color.clear }
+
+    var body: some View {
+        Button { onRespond(option) } label: {
+            Text(label)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(bgColor)
+                .foregroundStyle(fgColor)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(borderColor, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Shared permission-approval UI used by both inline pending_confirmation and
+/// linked confirmation blocks. Matches the web PendingConfirmationBar design:
+/// semibold title, monospace command preview, semantically coloured buttons.
+struct PermissionApprovalBar: View {
+    let title: String
+    let preview: String?
+    let options: [String]
+    let onRespond: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.footnote)
+                .fontWeight(.semibold)
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let preview, !preview.isEmpty {
+                Text(preview)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(Color(.secondarySystemFill))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+                    )
+            }
+
+            HStack(spacing: 8) {
+                ForEach(options, id: \.self) { option in
+                    PermissionOptionButton(option: option, onRespond: onRespond)
+                }
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 12)
+        .background(Color.orange.opacity(0.05))
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color.orange.opacity(0.25))
+                .frame(height: 0.5)
+        }
+    }
+}

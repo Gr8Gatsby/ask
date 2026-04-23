@@ -441,31 +441,9 @@ struct SessionChatView: View {
 
     @ViewBuilder
     private func pendingConfirmationBar(pc: RKPendingConfirmation, block: RKBlock) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(pc.title)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal)
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(pc.options, id: \.self) { option in
-                    Button {
-                        Task { await onRespond(block, option) }
-                    } label: {
-                        Text(option)
-                            .font(.footnote)
-                            .multilineTextAlignment(.leading)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.orange)
-                }
-            }
-            .padding(.horizontal)
+        PermissionApprovalBar(title: pc.title, preview: pc.body, options: pc.options) { option in
+            Task { await onRespond(block, option) }
         }
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial)
     }
 
     @ViewBuilder
@@ -480,34 +458,12 @@ struct SessionChatView: View {
             .padding(.vertical, 10)
             .background(.ultraThinMaterial)
         } else {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(cp.title)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal)
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(cp.options, id: \.self) { option in
-                        Button {
-                            Task {
-                                await onRespond(block, option)
-                                markLinkedConfirmationResolved(block: block, value: option)
-                            }
-                        } label: {
-                            Text(option)
-                                .font(.footnote)
-                                .multilineTextAlignment(.leading)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.orange)
-                    }
+            PermissionApprovalBar(title: cp.title, preview: cp.body, options: cp.options) { option in
+                Task {
+                    await onRespond(block, option)
+                    markLinkedConfirmationResolved(block: block, value: option)
                 }
-                .padding(.horizontal)
             }
-            .padding(.vertical, 10)
-            .background(.ultraThinMaterial)
         }
     }
 
