@@ -1,7 +1,7 @@
 {
   "id": "claude-3",
   "name": "Claude 3",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "setup": "setup.py",
   "description": "Feed-first Claude Code session supervisor — routes permissions and session history to iPhone",
   "entry": "main.py",

@@ -218,8 +218,8 @@ class Claude3:
             self._pending_calls.pop(rpc_id, None)
             raise
 
-    async def _call_tool(self, name: str, arguments: dict = None):
-        result = await self._rpc('tools/call', {'name': name, 'arguments': arguments or {}})
+    async def _call_tool(self, name: str, arguments: dict = None, timeout: float = 15.0):
+        result = await self._rpc('tools/call', {'name': name, 'arguments': arguments or {}}, timeout=timeout)
         if isinstance(result, dict) and 'content' not in result:
             return result
         try:
@@ -247,15 +247,29 @@ class Claude3:
     async def clear_block(self, block_id: str):
         await self._call_tool('clear_block', {'blockId': block_id})
 
+    # A2A calls involve CloudKit writes and can be slow.  Give them a generous
+    # timeout and fire them as background tasks so handlers never block on them.
+    _A2A_TIMEOUT = 60.0
+
+    def _fire_a2a(self, coro) -> None:
+        """Schedule an A2A write as a background task; the caller continues immediately."""
+        async def _run():
+            try:
+                await coro
+            except Exception as exc:
+                _log(f'a2a write failed: {exc}', 'WARN')
+        asyncio.create_task(_run())
+
     async def open_task(self, task_id: str, title: str, status: str):
-        await self._call_tool('open_task', {'taskId': task_id, 'title': title, 'status': status})
+        await self._call_tool('open_task', {'taskId': task_id, 'title': title, 'status': status},
+                              timeout=self._A2A_TIMEOUT)
 
     async def append_message(self, task_id: str, role: str, text: str):
         await self._call_tool('append_message', {
             'taskId': task_id,
             'role': role,
             'parts': [{'type': 'text', 'text': text}],
-        })
+        }, timeout=self._A2A_TIMEOUT)
 
     async def put_artifact(self, task_id: str, artifact_id: str, filename: str,
                            mime_type: str, description: str, file_path: str):
@@ -266,7 +280,7 @@ class Claude3:
             'mimeType': mime_type,
             'description': description,
             'filePath': file_path,
-        })
+        }, timeout=self._A2A_TIMEOUT)
 
     # ------------------------------------------------------------------
     # Block IDs
@@ -612,14 +626,8 @@ class Claude3:
         session.preview = prompt[:200]
         session.last_prompt = prompt
         if prompt:
-            try:
-                await self.append_message(session.task_id, 'user', prompt)
-            except Exception as exc:
-                _log(f'user_prompt append_message failed: {exc}', 'WARN')
-        try:
-            await self._set_task_status(session, 'working')
-        except Exception as exc:
-            _log(f'user_prompt set_task_status failed: {exc}', 'WARN')
+            self._fire_a2a(self.append_message(session.task_id, 'user', prompt))
+        self._fire_a2a(self._set_task_status(session, 'working'))
         await self._emit_session_block(session)
         await self._emit_tile()
         _save_registry(self._registry)
@@ -636,11 +644,8 @@ class Claude3:
         last_msg = (msg.get('last_message', '') or '').strip()
         if last_msg and last_msg != session.last_message:
             session.last_message = last_msg
-            try:
-                await self.append_message(session.task_id, 'assistant', last_msg)
-                await self._append_artifact_if_large(session, 'Final response', last_msg)
-            except Exception as exc:
-                _log(f'session_stop append_message failed: {exc}', 'WARN')
+            self._fire_a2a(self.append_message(session.task_id, 'assistant', last_msg))
+            self._fire_a2a(self._append_artifact_if_large(session, 'Final response', last_msg))
         # session_stop fires at end of every turn — keep the session alive so it
         # remains visible in the UI while Claude is waiting for the next user message.
         session.state = 'idle'
@@ -657,10 +662,7 @@ class Claude3:
         if not raw_id or not summary:
             return
         session = self._registry.ensure(raw_id=raw_id, cwd=msg.get('cwd', ''))
-        try:
-            await self._append_structured_message(session, 'Context compacted', summary)
-        except Exception as exc:
-            _log(f'post_compact append failed: {exc}', 'WARN')
+        self._fire_a2a(self._append_structured_message(session, 'Context compacted', summary))
         _log(f'post_compact raw_id={raw_id[:8]} summary={summary[:60]}')
 
     async def _handle_permission_request(self, msg: dict) -> str:
@@ -698,18 +700,12 @@ class Claude3:
         fut = asyncio.get_running_loop().create_future()
         self._pending_permissions[request.request_id] = fut
 
-        try:
-            await self._set_task_status(session, 'working')
-        except Exception as exc:
-            _log(f'permission set_task_status failed: {exc}', 'WARN')
-        try:
-            await self._append_structured_message(
-                session,
-                'Permission needed',
-                f'`{request.tool}` wants to run:\n\n```\n{preview}\n```',
-            )
-        except Exception as exc:
-            _log(f'permission append_message failed: {exc}', 'WARN')
+        self._fire_a2a(self._set_task_status(session, 'working'))
+        self._fire_a2a(self._append_structured_message(
+            session,
+            'Permission needed',
+            f'`{request.tool}` wants to run:\n\n```\n{preview}\n```',
+        ))
         await self._emit_session_block(session)
         await self._emit_tile()
         _save_registry(self._registry)
@@ -721,16 +717,10 @@ class Claude3:
         finally:
             self._pending_permissions.pop(request.request_id, None)
 
-        try:
-            await self._append_structured_message(session, 'Permission resolved', value)
-        except Exception as exc:
-            _log(f'permission resolved append_message failed: {exc}', 'WARN')
+        self._fire_a2a(self._append_structured_message(session, 'Permission resolved', value))
         session.pending_permission = None
         session.state = 'running_tool' if value in ('Allow', 'Always Allow', 'executed') else 'idle'
-        try:
-            await self._set_task_status(session, 'working')
-        except Exception as exc:
-            _log(f'permission resolved set_task_status failed: {exc}', 'WARN')
+        self._fire_a2a(self._set_task_status(session, 'working'))
         await self._emit_session_block(session)
         await self._emit_tile()
         _save_registry(self._registry)
@@ -903,10 +893,7 @@ class Claude3:
         if value == '__interrupt__':
             ok = await self._tm_send_interrupt(session)
             _log(f'interrupt session={session.session_id!r} ok={ok}')
-            try:
-                await self._append_structured_message(session, 'Interrupted', 'Sent Ctrl-C to the session.')
-            except Exception as exc:
-                _log(f'interrupt append failed: {exc}', 'WARN')
+            self._fire_a2a(self._append_structured_message(session, 'Interrupted', 'Sent Ctrl-C to the session.'))
             session.state = 'idle'
             await self._emit_session_block(session)
             _save_registry(self._registry)
@@ -915,10 +902,7 @@ class Claude3:
         # Close session
         if value == '__close_session__':
             await self._tm_inject_tty(session, '/quit\n')
-            try:
-                await self._append_structured_message(session, 'Stop requested', 'Sent quit to Claude Code.')
-            except Exception as exc:
-                _log(f'close append failed: {exc}', 'WARN')
+            self._fire_a2a(self._append_structured_message(session, 'Stop requested', 'Sent quit to Claude Code.'))
             session.state = 'stopping'
             await self._emit_session_block(session)
             _save_registry(self._registry)
@@ -936,16 +920,10 @@ class Claude3:
             ok = await self._route_text(session, value)
             _log(f'reply session={session.session_id!r} ok={ok} text={value[:80]!r}')
             if ok:
-                try:
-                    await self.append_message(session.task_id, 'user', value)
-                except Exception as exc:
-                    _log(f'reply append_message failed: {exc}', 'WARN')
+                self._fire_a2a(self.append_message(session.task_id, 'user', value))
                 session.state = 'running_tool'
                 session.preview = value[:200]
-                try:
-                    await self._set_task_status(session, 'working')
-                except Exception as exc:
-                    _log(f'reply set_task_status failed: {exc}', 'WARN')
+                self._fire_a2a(self._set_task_status(session, 'working'))
                 await self._emit_session_block(session)
                 _save_registry(self._registry)
 
