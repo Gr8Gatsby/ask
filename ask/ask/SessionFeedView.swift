@@ -132,6 +132,21 @@ struct SessionFeedView: View {
                     }
                     // Do NOT clear latchedConfirmation when newVal == nil; only cleared on user action.
                 }
+                .onChange(of: livePayload?.isWorking) { _, isWorking in
+                    // Codex finished — clear any pending bubble regardless of whether lastMessage changed.
+                    // This handles the case where Codex responds with identical text (onChange(of:lastMessage) won't fire).
+                    if isWorking == false {
+                        pendingUserTexts.removeAll()
+                        if let msg = livePayload?.lastMessage, !msg.isEmpty, msg != lastSeenAssistantMessage {
+                            lastSeenAssistantMessage = msg
+                            liveAssistantMessages.append(msg)
+                        }
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                        Task { await taskHistory.refresh(machineIDs: [machineID]) }
+                    }
+                }
                 .onChange(of: livePayload?.lastMessage) { _, newMsg in
                     guard let msg = newMsg, !msg.isEmpty, msg != lastSeenAssistantMessage else { return }
                     lastSeenAssistantMessage = msg
@@ -348,6 +363,14 @@ struct SessionFeedView: View {
         Task {
             try? await Task.sleep(for: .seconds(3))
             await taskHistory.refresh(machineIDs: [machineID])
+        }
+        // Fallback: if the response has the same lastMessage text as before, onChange(of:lastMessage)
+        // won't fire. Clear the pending bubble after 10s regardless.
+        Task {
+            try? await Task.sleep(for: .seconds(10))
+            if pendingUserTexts.contains(text) {
+                pendingUserTexts.removeAll { $0 == text }
+            }
         }
     }
 }
