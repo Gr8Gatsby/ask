@@ -866,6 +866,7 @@ The diagnostics block is shown at the top of the iOS Log Page for that script.
 
 | Date | Change |
 |---|---|
+| 2026-04-23 | iOS v0.9.2: fix message persistence (sequenceNumber cast dropping CloudKit messages), fix pending bubble stuck on identical Codex responses, permission card latches until explicit user action |
 | 2026-04-17 | iOS v0.8.0: multi-machine home screen, A2A task feed with threads and markdown artifacts, action queue with urgency sorting, machine management in Settings, swipe-to-delete tasks |
 | 2026-04-17 | Mac v0.9.0: A2A task protocol, CloudKit history feed, web-traffic script, multi-machine home screen, UI inspector + screenshot tools, claudecode-controller and brew-monitor reliability improvements |
 | 2026-04-07 | Mac v0.8.0: script catalog with remote browse/install/update from GitHub, script card redesign, rollback backup, system script protection, diagnostics block |
