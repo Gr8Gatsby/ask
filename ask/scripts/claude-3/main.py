@@ -492,7 +492,7 @@ class Claude3:
             try:
                 await self._call_tool('wait_for_pattern', {
                     'target': session.tmux_target,
-                    'pattern': r'[>?]\s*$',
+                    'pattern': r'[>?❯]\s*$',
                     'timeout': 30.0,
                     'stable_count': 2,
                 }, timeout=35.0)
@@ -1326,36 +1326,44 @@ class Claude3:
             return
 
         if method == 'tools/call':
-            params = msg.get('params', {})
-            name = params.get('name', '')
-            args = params.get('arguments', {})
-            if name == 'start_session':
-                result = await self._tool_start_session(args)
-            elif name == 'reply':
-                result = await self._tool_reply(args)
-            elif name == 'stop_session':
-                result = await self._tool_stop_session(args)
-            elif name == 'migrate_to_tmux':
-                result = await self._tool_migrate_to_tmux(args)
-            else:
-                result = {'error': f'Unknown tool: {name}'}
-            self._write({
-                'jsonrpc': '2.0',
-                'id': rpc_id,
-                'result': {'content': [{'type': 'text', 'text': json.dumps(result)}]},
-            })
+            # Spawn as background task so _read_stdin immediately reads the next
+            # line — critical because tool handlers call _rpc, whose responses
+            # arrive via stdin and must not be blocked waiting for this handler.
+            asyncio.create_task(self._dispatch_tool_call(rpc_id, msg.get('params', {})))
             return
 
         if method == 'notifications/message':
-            data = msg.get('params', {}).get('data', {})
-            msg_type = data.get('type', '')
-            if msg_type == 'user_response':
-                await self._handle_block_response(data.get('blockId', ''), data.get('value', ''))
-            elif msg_type == 'chat_message':
-                await self._tool_reply({
-                    'session_id': data.get('sessionId', ''),
-                    'message': data.get('text', ''),
-                })
+            # Same: block responses and chat messages call _rpc internally.
+            asyncio.create_task(self._dispatch_notification(msg.get('params', {}).get('data', {})))
+
+    async def _dispatch_tool_call(self, rpc_id, params: dict):
+        name = params.get('name', '')
+        args = params.get('arguments', {})
+        if name == 'start_session':
+            result = await self._tool_start_session(args)
+        elif name == 'reply':
+            result = await self._tool_reply(args)
+        elif name == 'stop_session':
+            result = await self._tool_stop_session(args)
+        elif name == 'migrate_to_tmux':
+            result = await self._tool_migrate_to_tmux(args)
+        else:
+            result = {'error': f'Unknown tool: {name}'}
+        self._write({
+            'jsonrpc': '2.0',
+            'id': rpc_id,
+            'result': {'content': [{'type': 'text', 'text': json.dumps(result)}]},
+        })
+
+    async def _dispatch_notification(self, data: dict):
+        msg_type = data.get('type', '')
+        if msg_type == 'user_response':
+            await self._handle_block_response(data.get('blockId', ''), data.get('value', ''))
+        elif msg_type == 'chat_message':
+            await self._tool_reply({
+                'session_id': data.get('sessionId', ''),
+                'message': data.get('text', ''),
+            })
 
     async def _read_stdin(self):
         loop = asyncio.get_running_loop()
@@ -1363,7 +1371,10 @@ class Claude3:
             line = await loop.run_in_executor(None, sys.stdin.readline)
             if not line:
                 break
-            await self._handle_rpc_line(line)
+            # Don't await — _handle_rpc_line must return quickly for slow handlers
+            # so this loop can immediately start reading the next line (e.g. _rpc
+            # responses that arrive while a handler is running).
+            asyncio.create_task(self._handle_rpc_line(line))
 
     # ------------------------------------------------------------------
     # Entry point

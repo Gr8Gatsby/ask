@@ -178,3 +178,4 @@ Daemon ──── tmux send-keys ──► tmux pane (Claude Code)
 |------|--------|
 | 2026-04-26 | Initial draft |
 | 2026-04-26 | Implemented: tmux launch path, fire-and-forget permissions, migrate_to_tmux, is_tmux session flag, tmux liveness check in heartbeat (claude-3 v0.3.0) |
+| 2026-04-26 | Fixed stdin deadlock: _read_stdin now fires _handle_rpc_line as background task; extracted _dispatch_tool_call and _dispatch_notification. Fixed wait_for_pattern pattern to include ❯ (U+276F). (claude-3 v0.3.1) |
