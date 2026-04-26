@@ -16,41 +16,6 @@ function parsePayload<T>(json: string): T | null {
 
 interface Part { type: string; text?: string; name?: string; input?: unknown; content?: unknown; source?: unknown; thinking?: string }
 
-function renderPart(p: Part, i: number) {
-  if (p.type === 'text' && p.text) {
-    return <Markdown key={i}>{p.text}</Markdown>
-  }
-  if (p.type === 'tool_use') {
-    return (
-      <span key={i} className="text-[10px] font-mono text-ask-secondary/70 bg-ask-card2 px-1.5 py-0.5 rounded">
-        ⚙ {p.name}
-      </span>
-    )
-  }
-  if (p.type === 'tool_result') {
-    const text = typeof p.content === 'string' ? p.content : ''
-    return (
-      <span key={i} className="text-[10px] font-mono text-ask-secondary/60 line-clamp-2">
-        {text.slice(0, 120)}
-      </span>
-    )
-  }
-  if (p.type === 'thinking' && p.thinking) {
-    return (
-      <span key={i} className="text-[10px] italic text-ask-secondary/50">
-        {p.thinking.slice(0, 80)}…
-      </span>
-    )
-  }
-  if (p.type === 'image') {
-    return <span key={i} className="text-[10px] text-ask-secondary">[image]</span>
-  }
-  if (p.type === 'document') {
-    return <span key={i} className="text-[10px] text-ask-secondary">[document]</span>
-  }
-  return null
-}
-
 // ---- Tool status line ----
 
 const TOOL_ICONS: Record<string, string> = {
@@ -164,6 +129,21 @@ function PendingConfirmationBar({
   )
 }
 
+// ---- Local message model ----
+
+interface LocalMessage {
+  key: string
+  role: 'user' | 'assistant'
+  text: string
+}
+
+function extractText(partsJSON: string): string {
+  try {
+    const parts = JSON.parse(partsJSON) as Part[]
+    return parts.filter(p => p.type === 'text' && p.text).map(p => p.text!).join('\n')
+  } catch { return '' }
+}
+
 // ---- Screen ----
 
 export default function SessionChatScreen() {
@@ -176,7 +156,8 @@ export default function SessionChatScreen() {
   const { blocks: allBlocks, respond } = useBlocks()
   const [reply, setReply] = useState('')
   const [sending, setSending] = useState(false)
-  const [messages, setMessages] = useState<TaskMessage[]>([])
+  const [localMessages, setLocalMessages] = useState<LocalMessage[]>([])
+  const lastAssistantText = useRef('')
   const bottomRef = useRef<HTMLDivElement>(null)
 
   const sessionBlock = allBlocks.find(b => {
@@ -194,20 +175,42 @@ export default function SessionChatScreen() {
     return () => setAppBrandColor(null)
   }, [accentColor, theme.isAndroid]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load chat history from task messages
+  // Seed history from CloudKit task messages on mount / task_id change
   useEffect(() => {
     if (!payload?.task_id) return
-    getTaskMessages(payload.task_id).then(setMessages)
-  }, [payload?.task_id])
+    getTaskMessages(payload.task_id).then((msgs: TaskMessage[]) => {
+      const loaded: LocalMessage[] = msgs
+        .map(m => ({ key: m.messageID, role: m.role, text: extractText(m.partsJSON) }))
+        .filter(m => m.text)
+      setLocalMessages(loaded)
+      // Track last assistant text so we don't re-append it from last_message
+      const lastAsst = [...loaded].reverse().find(m => m.role === 'assistant')
+      if (lastAsst) lastAssistantText.current = lastAsst.text
+    })
+  }, [payload?.task_id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Append new assistant message when last_message changes
+  useEffect(() => {
+    const msg = payload?.last_message
+    if (!msg || msg === lastAssistantText.current) return
+    lastAssistantText.current = msg
+    setLocalMessages(prev => {
+      const last = prev[prev.length - 1]
+      if (last?.role === 'assistant' && last.text === msg) return prev
+      return [...prev, { key: `live-${Date.now()}`, role: 'assistant', text: msg }]
+    })
+  }, [payload?.last_message])
 
   // Scroll to bottom on new messages
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, payload?.last_message])
+  }, [localMessages.length, payload?.is_working])
 
   const handleSend = async (text: string) => {
     if (!text.trim() || !sessionBlock || sending) return
     setSending(true)
+    // Optimistically add user message so it appears immediately
+    setLocalMessages(prev => [...prev, { key: `user-${Date.now()}`, role: 'user', text: text.trim() }])
     await respond(sessionBlock.blockID, text.trim())
     setReply('')
     setSending(false)
@@ -304,65 +307,58 @@ export default function SessionChatScreen() {
         <div className="flex items-center justify-center h-24 text-ask-secondary text-sm">Session ended</div>
       ) : (
         <>
-          {messages.map(msg => {
-            let parts: Part[] = []
-            try { parts = JSON.parse(msg.partsJSON) } catch { /* */ }
-            const textParts = parts.filter(p => p.type === 'text' && p.text)
-            if (textParts.length === 0 && parts.some(p => p.type === 'tool_use' || p.type === 'tool_result')) {
-              return null
-            }
+          {localMessages.map(msg => {
             if (msg.role === 'user') {
               return (
-                <div key={msg.messageID} className="flex justify-end">
+                <div key={msg.key} className="flex justify-end">
                   <div className="max-w-[80%] rounded-[20px] rounded-br-[5px] px-3.5 py-2.5 bg-ask-blue text-white text-[15px] leading-snug">
-                    {parts.map((p, i) => renderPart(p, i))}
+                    {msg.text}
                   </div>
                 </div>
               )
             }
             return (
-              <div key={msg.messageID} className="text-ask-text text-[15px]">
-                {parts.map((p, i) => renderPart(p, i))}
+              <div key={msg.key} className="text-ask-text text-[15px]">
+                <Markdown>{msg.text}</Markdown>
               </div>
             )
           })}
 
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-center gap-1.5">
-              <div
-                className="w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold text-white flex-shrink-0"
-                style={{ backgroundColor: accentColor }}
-              >
-                {(payload?.agent_name ?? 'C')[0]}
-              </div>
-              <span className="text-[11px] font-semibold text-ask-secondary">
-                {payload?.agent_name ?? 'Claude Code'}
-              </span>
-            </div>
-            {payload?.is_working ? (
-              <div className="flex flex-col gap-1.5 pl-0.5">
-                {payload.tool_history && payload.tool_history.length > 0 && (
-                  <ToolHistoryTimeline entries={payload.tool_history.slice(-5)} color={accentColor} />
-                )}
-                {payload.current_tool && (
-                  <ToolStatusLine tool={payload.current_tool} preview={payload.current_preview} color={accentColor} />
-                )}
-                <div className="flex items-center gap-2">
-                  {[0, 1, 2].map(i => (
-                    <div key={i} className="w-1.5 h-1.5 rounded-full animate-bounce"
-                      style={{ backgroundColor: accentColor, animationDelay: `${i * 0.15}s` }} />
-                  ))}
-                  <span className="text-xs text-ask-secondary ml-1">Working…</span>
+          {/* Agent name + working indicator (only shown while working or on empty state) */}
+          {(payload?.is_working || localMessages.length === 0) && (
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-1.5">
+                <div
+                  className="w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold text-white flex-shrink-0"
+                  style={{ backgroundColor: accentColor }}
+                >
+                  {(payload?.agent_name ?? 'C')[0]}
                 </div>
+                <span className="text-[11px] font-semibold text-ask-secondary">
+                  {payload?.agent_name ?? 'Claude Code'}
+                </span>
               </div>
-            ) : payload?.last_message ? (
-              <div className="text-[15px] text-ask-text">
-                <Markdown>{payload.last_message}</Markdown>
-              </div>
-            ) : (
-              <span className="text-xs text-ask-secondary">Session started</span>
-            )}
-          </div>
+              {payload?.is_working ? (
+                <div className="flex flex-col gap-1.5 pl-0.5">
+                  {payload.tool_history && payload.tool_history.length > 0 && (
+                    <ToolHistoryTimeline entries={payload.tool_history.slice(-5)} color={accentColor} />
+                  )}
+                  {payload.current_tool && (
+                    <ToolStatusLine tool={payload.current_tool} preview={payload.current_preview} color={accentColor} />
+                  )}
+                  <div className="flex items-center gap-2">
+                    {[0, 1, 2].map(i => (
+                      <div key={i} className="w-1.5 h-1.5 rounded-full animate-bounce"
+                        style={{ backgroundColor: accentColor, animationDelay: `${i * 0.15}s` }} />
+                    ))}
+                    <span className="text-xs text-ask-secondary ml-1">Working…</span>
+                  </div>
+                </div>
+              ) : (
+                <span className="text-xs text-ask-secondary">Session started</span>
+              )}
+            </div>
+          )}
           <div ref={bottomRef} />
         </>
       )}

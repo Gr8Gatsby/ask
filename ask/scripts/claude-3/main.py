@@ -1046,7 +1046,6 @@ class Claude3:
             ok = await self._route_text(session, value)
             _log(f'reply session={session.session_id!r} ok={ok} text={value[:80]!r}')
             if ok:
-                self._fire_a2a(self.append_message(session.task_id, 'user', value))
                 session.state = 'running_tool'
                 session.preview = value[:200]
                 self._fire_a2a(self._set_task_status(session, 'working'))
@@ -1074,7 +1073,6 @@ class Claude3:
         ok = await self._route_text(session, text)
         if not ok:
             return {'error': 'session is not routable'}
-        await self.append_message(session.task_id, 'user', text)
         session.state = 'running_tool'
         session.preview = text[:200]
         await self._set_task_status(session, 'working')
