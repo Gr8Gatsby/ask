@@ -64,14 +64,6 @@ struct MacScriptsView: View {
                 .fixedSize()
                 .help(activeTab.label)
             }
-            if activeTab == .scripts {
-                ToolbarItem(placement: .automatic) {
-                    Button { scriptManager.reload() } label: {
-                        Label("Reload Scripts", systemImage: "arrow.clockwise")
-                    }
-                    .help("Scan for new scripts and start any that aren't running yet")
-                }
-            }
         }
         .sheet(item: Binding(
             get: { scriptManager.scriptPendingConsent },
@@ -1466,6 +1458,16 @@ private struct ScriptsTabView: View {
                     systemImage: "terminal",
                     description: Text("Choose a script from the sidebar to view its active blocks.")
                 )
+            }
+        }
+        .toolbar {
+            if !showCatalog {
+                ToolbarItem(placement: .automatic) {
+                    Button { scriptManager.reload() } label: {
+                        Label("Reload Scripts", systemImage: "arrow.clockwise")
+                    }
+                    .help("Scan for new scripts and start any that aren't running yet")
+                }
             }
         }
         .onAppear {
