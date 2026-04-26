@@ -369,6 +369,19 @@ final class ScriptInstaller {
 
         skipped.append(contentsOf: installationErrors)
 
+        // Copy ask_sdk.py to the vault root if the archive included it.
+        // Scripts that use setup.py depend on `import ask_sdk`, and the vault root
+        // is always on their PYTHONPATH — without this file, setup.py fails silently
+        // on machines that have never had scripts deployed via the dev tool.
+        if let tmp = tempDir {
+            let sdkSrc = tmp.appendingPathComponent("ask_sdk.py")
+            let sdkDest = vaultURL.appendingPathComponent("ask_sdk.py")
+            if fm.fileExists(atPath: sdkSrc.path) {
+                try? fm.removeItem(at: sdkDest)
+                try? fm.copyItem(at: sdkSrc, to: sdkDest)
+            }
+        }
+
         // Mark all pending scripts as known+enabled so the reload triggered by endInstall()
         // starts them immediately. Scripts that failed to copy won't have a valid manifest
         // in the vault, so the reload simply won't find them.
