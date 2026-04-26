@@ -177,3 +177,4 @@ Daemon ──── tmux send-keys ──► tmux pane (Claude Code)
 | Date | Change |
 |------|--------|
 | 2026-04-26 | Initial draft |
+| 2026-04-26 | Implemented: tmux launch path, fire-and-forget permissions, migrate_to_tmux, is_tmux session flag, tmux liveness check in heartbeat (claude-3 v0.3.0) |

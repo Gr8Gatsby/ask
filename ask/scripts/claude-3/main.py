@@ -19,6 +19,7 @@ import os
 import sys
 import tempfile
 import uuid
+from typing import Optional
 
 from registry import PendingPermission, SessionRecord, SessionRegistry
 from transport import discover_claude_processes, find_repos, parse_tmux_prompt, tty_is_live
@@ -189,6 +190,7 @@ class Claude3:
         self._pending_permissions: dict[str, asyncio.Future] = {}
         self._start_choices: dict[str, dict] = {}
         self._tty_monitors: set[str] = set()  # session_ids with running monitors
+        self._pending_tmux_by_cwd: dict[str, str] = {}  # cwd → tmux_target for in-flight launches
         self._initialized = False
         self._emitted_payloads: dict[str, str] = {}  # block_id → last serialized payload
 
@@ -328,6 +330,7 @@ class Claude3:
         await self.emit_block(START_BLOCK_ID, 'start_session', payload, ttl=600)
 
     async def _emit_session_block(self, session: SessionRecord):
+        is_tmux = bool(session.tmux_target)
         payload = {
             'session_id': session.session_id,
             'task_id': session.task_id,
@@ -338,8 +341,10 @@ class Claude3:
             'cwd': session.cwd,
             'is_working': session.state in ('starting', 'awaiting_user', 'running_tool', 'waiting_permission'),
             'is_headless': False,
+            'is_tmux': is_tmux,
             'permission_mode': _load_permission_mode(),
             'tty': session.tty,
+            'tmux_target': session.tmux_target or None,
             'current_tool': session.current_tool or None,
             'current_preview': session.preview or None,
             'last_message': session.last_message or None,
@@ -353,7 +358,10 @@ class Claude3:
                 'body': session.pending_permission.preview,
                 'options': session.pending_permission.options,
             }
-        _log(f'_emit_session_block: {session.session_id} state={session.state} tty={session.tty!r}')
+        # Offer migrate action for terminal-observed sessions that have a raw_id
+        if not is_tmux and session.raw_id:
+            payload['actions'] = [{'id': '__migrate_to_tmux__', 'label': 'Move to tmux'}]
+        _log(f'_emit_session_block: {session.session_id} state={session.state} tty={session.tty!r} tmux={session.tmux_target!r}')
         await self.emit_block(
             self._session_block_id(session.session_id),
             'agent_session',
@@ -423,6 +431,13 @@ class Claude3:
             return False
 
     async def _tm_send_interrupt(self, session: SessionRecord) -> bool:
+        if session.tmux_target:
+            try:
+                await self._call_tool('send_interrupt', {'target': session.tmux_target}, timeout=5.0)
+                return True
+            except Exception as e:
+                _log(f'send_interrupt(tmux) failed for {session.session_id}: {e}', 'WARN')
+                return False
         if not session.raw_id:
             return False
         try:
@@ -451,7 +466,9 @@ class Claude3:
 
     async def _tm_register(self, session: SessionRecord):
         """Register this session with terminal-manager so inject_tty/send_text work."""
-        if not session.raw_id or not session.tty:
+        if not session.raw_id:
+            return
+        if not session.tty and not session.tmux_target:
             return
         try:
             await self._rpc('tools/call', {
@@ -460,22 +477,33 @@ class Claude3:
                     'session_id': session.raw_id,
                     'app_id': 'claude-3',
                     'tty': session.tty,
-                    'tmux_target': '',
+                    'tmux_target': session.tmux_target,
                 },
             }, timeout=4.0)
-            _log(f'tm_register {session.session_id[:12]} tty={session.tty!r}')
+            _log(f'tm_register {session.session_id[:12]} tty={session.tty!r} tmux={session.tmux_target!r}')
         except Exception as e:
             _log(f'tm_register failed: {e}', 'WARN')
 
     async def _route_text(self, session: SessionRecord, text: str) -> bool:
-        """Send user text to a session via inject_tty, with send_text fallback for sessions with no TTY."""
+        """Send user text to a session. Uses tmux send-keys for managed sessions,
+        inject_tty/send_text fallback for terminal-observed sessions."""
+        if session.tmux_target:
+            # Wait for idle prompt, then send
+            try:
+                await self._call_tool('wait_for_pattern', {
+                    'target': session.tmux_target,
+                    'pattern': r'[>?]\s*$',
+                    'timeout': 30.0,
+                    'stable_count': 2,
+                }, timeout=35.0)
+            except Exception as e:
+                _log(f'wait_for_pattern timed out for {session.session_id}: {e}', 'WARN')
+            return await self._tm_send_text(session, text)
+
         text_with_newline = text if text.endswith('\n') else text + '\n'
         had_tty = bool(session.tty)
         ok = await self._tm_inject_tty(session, text_with_newline)
         if had_tty:
-            # TTY was known before the call. A timeout most likely means AskMac was slow
-            # to ack — the text was probably delivered. Do NOT fall through to send_text,
-            # which would inject a second copy.
             return ok
         # TTY was unknown — try to discover it, re-register, and retry once.
         if session.cwd:
@@ -531,6 +559,40 @@ class Claude3:
         await self.clear_block(START_BLOCK_ID)
         _log(f'Launched Claude Code in {project}')
 
+    async def _launch_in_tmux(self, repo_path: str) -> Optional[str]:
+        """Launch Claude Code inside a tmux window owned by the daemon.
+
+        Returns the tmux target string ('ask:<project>') or None on failure.
+        """
+        repo_path = os.path.expanduser(repo_path)
+        project = os.path.basename(repo_path.rstrip('/'))
+        socket_quoted = SOCKET_PATH.replace("'", "'\\''")
+        env_cmd = f"ASK_SOCKET_PATH='{socket_quoted}' claude"
+        try:
+            result = await self._call_tool('create_window', {
+                'session': 'ask',
+                'window_name': project,
+                'command': env_cmd,
+                'cwd': repo_path,
+            }, timeout=15.0)
+            tmux_target = result.get('target', f'ask:{project}') if isinstance(result, dict) else f'ask:{project}'
+        except Exception as e:
+            _log(f'launch_in_tmux failed for {project}: {e}', 'WARN')
+            return None
+
+        # Track the cwd→target so _handle_session_start can backfill tmux_target
+        self._pending_tmux_by_cwd[repo_path] = tmux_target
+
+        settings_path = os.path.expanduser('~/.ask/claude3-settings.json')
+        settings = _load_json(settings_path, {'recent_repos': []})
+        recent = [repo_path] + [p for p in settings.get('recent_repos', []) if p != repo_path]
+        settings['recent_repos'] = recent[:5]
+        _save_json(settings_path, settings)
+
+        await self.clear_block(START_BLOCK_ID)
+        _log(f'Launched Claude Code in tmux for {project}: {tmux_target}')
+        return tmux_target
+
     # ------------------------------------------------------------------
     # Hook event handlers
     # ------------------------------------------------------------------
@@ -556,6 +618,14 @@ class Claude3:
         session = self._registry.ensure(raw_id=raw_id, tty=tty, cwd=cwd, project=project)
         session.state = 'idle'
         session.permission_mode = _load_permission_mode()
+
+        # Backfill tmux_target if this session was launched via _launch_in_tmux
+        if not session.tmux_target and cwd:
+            tmux_target = self._pending_tmux_by_cwd.pop(cwd, '')
+            if tmux_target:
+                session.tmux_target = tmux_target
+                _log(f'backfilled tmux_target={tmux_target!r} for raw_id={raw_id[:8]}')
+
         await self._set_task_status(session, 'working')
         await self._append_structured_message(session, 'Session started', f'Launched in `{session.project}`.')
         await self._tm_register(session)
@@ -563,7 +633,7 @@ class Claude3:
         await self._emit_tile()
         await self._emit_start_session_block()
         _save_registry(self._registry)
-        _log(f'session_start raw_id={raw_id[:8]} tty={tty} project={project}')
+        _log(f'session_start raw_id={raw_id[:8]} tty={tty} tmux={session.tmux_target!r} project={project}')
 
         # Start TTY monitor for interactive prompt detection
         if session.session_id not in self._tty_monitors:
@@ -665,14 +735,16 @@ class Claude3:
         self._fire_a2a(self._append_structured_message(session, 'Context compacted', summary))
         _log(f'post_compact raw_id={raw_id[:8]} summary={summary[:60]}')
 
-    async def _handle_permission_request(self, msg: dict) -> str:
+    async def _handle_permission_request(self, msg: dict):
+        """Surface a permission request on iPhone and return immediately.
+
+        The hook has already exited — Claude Code shows its native terminal
+        prompt. If the user responds on iPhone, _inject_permission_response
+        injects the answer via tmux send-keys. If they respond in the terminal,
+        Claude Code resolves natively and the TTY monitor clears the card.
+        """
         mode = _load_permission_mode()
         preview = msg.get('preview', '')
-
-        if mode == 'full-auto':
-            return 'Allow'
-        if _is_allowlisted(preview):
-            return 'Allow'
 
         raw_id = msg.get('session_id', '')
         session = self._registry.ensure(
@@ -681,6 +753,13 @@ class Claude3:
             cwd=msg.get('cwd', ''),
             project=os.path.basename((msg.get('cwd', '') or '').rstrip('/')) if msg.get('cwd') else '',
         )
+
+        if mode == 'full-auto' or _is_allowlisted(preview):
+            # Auto-approve: inject 'y\n' directly for tmux sessions
+            if session.tmux_target:
+                asyncio.create_task(self._inject_permission_response(session, 'Allow', ['Allow', 'Deny']))
+            return
+
         options = list(msg.get('options', ['Allow', 'Deny']))
         suggestions = msg.get('suggestions', {})
         request = PendingPermission(
@@ -710,15 +789,28 @@ class Claude3:
         await self._emit_tile()
         _save_registry(self._registry)
 
+        # Background: wait for iPhone response and inject it into the tmux pane
+        asyncio.create_task(self._await_and_inject_permission(session, request, fut))
+
+    async def _await_and_inject_permission(self, session: SessionRecord,
+                                           request: PendingPermission, fut: asyncio.Future):
+        """Wait for iPhone permission response and inject it into the terminal."""
         try:
             value = await asyncio.wait_for(fut, timeout=PERMISSION_TIMEOUT)
         except asyncio.TimeoutError:
-            value = 'Deny'
+            value = None
         finally:
             self._pending_permissions.pop(request.request_id, None)
 
-        self._fire_a2a(self._append_structured_message(session, 'Permission resolved', value))
         session.pending_permission = None
+
+        if value is None:
+            # Timeout — leave Claude Code to resolve natively (user at terminal)
+            session.state = 'idle'
+            await self._emit_session_block(session)
+            return
+
+        self._fire_a2a(self._append_structured_message(session, 'Permission resolved', value))
         session.state = 'running_tool' if value in ('Allow', 'Always Allow', 'executed') else 'idle'
         self._fire_a2a(self._set_task_status(session, 'working'))
         await self._emit_session_block(session)
@@ -726,9 +818,34 @@ class Claude3:
         _save_registry(self._registry)
 
         if value == 'Always Allow':
-            _append_allowlist(preview)
+            _append_allowlist(request.preview)
 
-        return value
+        # Inject response into tmux pane so the native terminal prompt resolves
+        if session.tmux_target and value not in ('executed',):
+            await self._inject_permission_response(session, value, request.options)
+
+    async def _inject_permission_response(self, session: SessionRecord,
+                                          value: str, options: list):
+        """Inject a permission response into the tmux pane to answer the native prompt."""
+        if not session.tmux_target:
+            return
+        # Map to the keystrokes that satisfy Claude Code's numbered permission prompt
+        if value in ('Allow', 'Yes'):
+            text = 'y'
+        elif value in ('Deny', 'No'):
+            text = 'n'
+        elif value in options:
+            idx = options.index(value)
+            text = str(idx + 1)
+        else:
+            text = 'y'
+        try:
+            await self._call_tool('send_text', {
+                'session_id': session.raw_id,
+                'text': text,
+            }, timeout=5.0)
+        except Exception as e:
+            _log(f'inject_permission_response failed for {session.session_id}: {e}', 'WARN')
 
     # ------------------------------------------------------------------
     # TTY monitoring — interactive prompt detection
@@ -869,7 +986,7 @@ class Claude3:
             choice = self._start_choices.get(value, {})
             repo_path = choice.get('repo_path', value)
             if repo_path:
-                asyncio.create_task(self._launch(repo_path))
+                asyncio.create_task(self._launch_in_tmux(repo_path))
             return
 
         session = next(
@@ -899,6 +1016,11 @@ class Claude3:
             _save_registry(self._registry)
             return
 
+        # Migrate terminal session to tmux
+        if value == '__migrate_to_tmux__':
+            asyncio.create_task(self._do_migrate_to_tmux(session))
+            return
+
         # Close session
         if value == '__close_session__':
             await self._tm_inject_tty(session, '/quit\n')
@@ -913,6 +1035,10 @@ class Claude3:
             fut = self._pending_permissions.get(session.pending_permission.request_id)
             if fut and not fut.done():
                 fut.set_result(value)
+            # For non-tmux sessions (TTY prompt), inject directly here
+            elif session.tmux_target and session.pending_permission:
+                asyncio.create_task(self._inject_permission_response(
+                    session, value, session.pending_permission.options))
             return
 
         # Free-text reply
@@ -934,7 +1060,7 @@ class Claude3:
     async def _tool_start_session(self, args: dict) -> dict:
         repo_path = args.get('repo_path', '').strip()
         if repo_path:
-            asyncio.create_task(self._launch(repo_path))
+            asyncio.create_task(self._launch_in_tmux(repo_path))
         else:
             await self._emit_start_session_block()
         return {'ok': True}
@@ -969,6 +1095,37 @@ class Claude3:
         _save_registry(self._registry)
         return {'ok': True}
 
+    async def _do_migrate_to_tmux(self, session: SessionRecord):
+        """Migrate a terminal-observed session into a tmux window."""
+        if not session.raw_id:
+            return
+        try:
+            result = await self._call_tool('migrate_to_tmux', {
+                'session_id': session.raw_id,
+                'session': 'ask',
+                'window_name': session.project,
+            }, timeout=20.0)
+            if isinstance(result, dict) and result.get('tmux_target'):
+                session.tmux_target = result['tmux_target']
+                await self._tm_register(session)
+                self._fire_a2a(self._append_structured_message(
+                    session, 'Moved to tmux', f'Session now running in `{session.tmux_target}`.'))
+                await self._emit_session_block(session)
+                _save_registry(self._registry)
+                _log(f'migrated {session.session_id} to tmux: {session.tmux_target}')
+            else:
+                _log(f'migrate_to_tmux returned unexpected result: {result}', 'WARN')
+        except Exception as e:
+            _log(f'migrate_to_tmux failed for {session.session_id}: {e}', 'WARN')
+
+    async def _tool_migrate_to_tmux(self, args: dict) -> dict:
+        session_id = args.get('session_id', '')
+        session = self._registry.sessions.get(session_id)
+        if not session:
+            return {'error': 'unknown session'}
+        await self._do_migrate_to_tmux(session)
+        return {'ok': True, 'tmux_target': session.tmux_target}
+
     # ------------------------------------------------------------------
     # Heartbeat — session liveness and block refresh
     # ------------------------------------------------------------------
@@ -978,11 +1135,29 @@ class Claude3:
             if session.state == 'stopped':
                 continue
             # Re-register with terminal-manager on each cycle (it loses state on restart)
-            if session.raw_id and session.tty:
+            if session.raw_id and (session.tty or session.tmux_target):
                 asyncio.create_task(self._tm_register(session))
-            # Only evict if we have a known TTY and it is confirmed dead.
+            # For tmux sessions, check pane liveness
+            if session.tmux_target:
+                try:
+                    result = await self._call_tool('pane_alive', {'target': session.tmux_target}, timeout=5.0)
+                    if isinstance(result, dict) and not result.get('alive', True):
+                        _log(f'tmux pane gone for {session.session_id} — marking stopped')
+                        session.state = 'stopped'
+                        session.stopped_at = datetime.datetime.now().timestamp()
+                        self._registry.remove(session.session_id)
+                        try:
+                            await self._append_structured_message(session, 'Session ended', 'tmux pane exited.')
+                            await self._set_task_status(session, 'completed')
+                            await self.clear_block(self._session_block_id(session.session_id))
+                        except Exception as exc:
+                            _log(f'tmux-gone cleanup error for {session.session_id}: {exc}', 'WARN')
+                        continue
+                except Exception:
+                    pass
+            # Only evict TTY sessions if the TTY is confirmed dead.
             # An empty TTY means we haven't resolved routing yet — keep the session alive.
-            if session.tty and not tty_is_live(session.tty):
+            if not session.tmux_target and session.tty and not tty_is_live(session.tty):
                 _log(f'session {session.session_id} TTY gone — marking stopped')
                 session.state = 'stopped'
                 session.stopped_at = datetime.datetime.now().timestamp()
@@ -1037,13 +1212,12 @@ class Claude3:
             elif msg_type == 'post_compact':
                 await self._handle_post_compact(msg)
             elif msg_type == 'permission_request':
-                if not self._initialized:
-                    writer.write(json.dumps({'value': ''}).encode())
-                    await writer.drain()
-                    return
-                value = await self._handle_permission_request(msg)
-                writer.write(json.dumps({'value': value}).encode())
+                # Acknowledge immediately — hook exits, Claude Code shows native prompt.
+                # iPhone card is surfaced in the background; response injected via tmux.
+                writer.write(json.dumps({'value': ''}).encode())
                 await writer.drain()
+                if self._initialized:
+                    asyncio.create_task(self._handle_permission_request(msg))
             elif msg_type == 'ui_respond':
                 # Response from MockAskMac web UI (dev tool) — treat like iPhone response
                 sid = msg.get('session_id', '')
@@ -1138,6 +1312,15 @@ class Claude3:
                         'required': ['session_id'],
                     },
                 },
+                {
+                    'name': 'migrate_to_tmux',
+                    'description': 'Move a terminal-observed session into a tmux window for full control',
+                    'inputSchema': {
+                        'type': 'object',
+                        'properties': {'session_id': {'type': 'string'}},
+                        'required': ['session_id'],
+                    },
+                },
             ]
             self._write({'jsonrpc': '2.0', 'id': rpc_id, 'result': {'tools': tools}})
             return
@@ -1152,6 +1335,8 @@ class Claude3:
                 result = await self._tool_reply(args)
             elif name == 'stop_session':
                 result = await self._tool_stop_session(args)
+            elif name == 'migrate_to_tmux':
+                result = await self._tool_migrate_to_tmux(args)
             else:
                 result = {'error': f'Unknown tool: {name}'}
             self._write({

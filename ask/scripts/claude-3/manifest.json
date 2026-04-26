@@ -1,7 +1,7 @@
 {
   "id": "claude-3",
   "name": "Claude 3",
-  "version": "0.2.12",
+  "version": "0.3.0",
   "setup": "setup.py",
   "description": "Feed-first Claude Code session supervisor — routes permissions and session history to iPhone",
   "entry": "main.py",
@@ -27,6 +27,13 @@
     {
       "name": "stop_session",
       "description": "Interrupt a live Claude Code session.",
+      "params": [
+        { "name": "session_id", "type": "string", "required": true }
+      ]
+    },
+    {
+      "name": "migrate_to_tmux",
+      "description": "Move a terminal-observed session into a tmux window for full bidirectional control.",
       "params": [
         { "name": "session_id", "type": "string", "required": true }
       ]
