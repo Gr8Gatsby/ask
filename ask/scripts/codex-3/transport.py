@@ -26,11 +26,84 @@ def find_tmux_bin() -> str:
 TMUX = find_tmux_bin()
 
 
-def _is_codex_pane(current_command: str, start_command: str, title: str) -> bool:
-    for value in (current_command or '', start_command or '', title or ''):
+def _is_codex_pane(current_command: str, start_command: str, title: str, session_name: str = '') -> bool:
+    for value in (current_command or '', start_command or '', title or '', session_name or ''):
         if 'codex' in value.lower():
             return True
     return False
+
+
+def find_tmux_target_for_tty(tty: str) -> dict:
+    """Return pane info dict for a given TTY, or {} if not in tmux.
+
+    Keys: tmux_target, cwd, project
+    """
+    full_tty = f'/dev/{tty}' if not tty.startswith('/') else tty
+    try:
+        result = subprocess.run(
+            [TMUX, 'list-panes', '-a', '-F',
+             '#{session_name}:#{window_name}.#{pane_index}\t#{pane_tty}\t#{pane_current_path}\t#{window_name}'],
+            capture_output=True, text=True, timeout=3,
+        )
+        if result.returncode != 0:
+            return {}
+        for line in result.stdout.splitlines():
+            parts = line.split('\t')
+            if len(parts) == 4 and parts[1] == full_tty:
+                target, _, cwd, window_name = parts
+                project = os.path.basename(cwd.rstrip('/')) if cwd else window_name
+                return {'tmux_target': target, 'cwd': cwd, 'project': project}
+    except Exception:
+        pass
+    return {}
+
+
+def _get_process_cwd(pid: int) -> str:
+    try:
+        result = subprocess.run(
+            ['lsof', '-p', str(pid), '-d', 'cwd', '-Fn'],
+            capture_output=True, text=True, timeout=3,
+        )
+        for line in result.stdout.splitlines():
+            if line.startswith('n'):
+                return line[1:]
+    except Exception:
+        pass
+    return ''
+
+
+def discover_codex_processes() -> list[dict]:
+    """Scan running processes for live Codex instances in non-tmux TTYs."""
+    try:
+        result = subprocess.run(
+            ['ps', '-eo', 'pid,tty,comm'],
+            capture_output=True, text=True, timeout=5,
+        )
+    except Exception:
+        return []
+    processes = []
+    for line in result.stdout.splitlines()[1:]:
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        pid_str, tty, comm = parts
+        if tty == '??' or not pid_str.strip().isdigit():
+            continue
+        if 'codex' not in comm.lower():
+            continue
+        pid = int(pid_str.strip())
+        cwd = _get_process_cwd(pid)
+        processes.append({
+            'pid': pid,
+            'tty': tty,
+            'cwd': cwd,
+            'project': os.path.basename(cwd.rstrip('/')) if cwd else f'codex-{tty}',
+        })
+    return processes
+
+
+def tty_exists(tty: str) -> bool:
+    return os.path.exists(f'/dev/{tty}')
 
 
 def discover_codex_panes(exclude_targets: Optional[Set[str]] = None) -> list[dict]:
@@ -62,7 +135,8 @@ def discover_codex_panes(exclude_targets: Optional[Set[str]] = None) -> list[dic
         target, cwd, current_command, pid, title, start_command = parts
         if target in exclude_targets or target in seen:
             continue
-        if not _is_codex_pane(current_command, start_command, title):
+        session_name = target.split(':')[0] if ':' in target else ''
+        if not _is_codex_pane(current_command, start_command, title, session_name):
             continue
         seen.add(target)
         panes.append({

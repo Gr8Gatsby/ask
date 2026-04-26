@@ -146,15 +146,19 @@ final class TaskMessage {
 
     convenience init?(ckRecord: CKRecord) {
         guard
-            let messageID      = ckRecord[CKSchema.AskTaskMessage.messageID]      as? String,
-            let taskID         = ckRecord[CKSchema.AskTaskMessage.taskID]         as? String,
-            let machineID      = ckRecord[CKSchema.AskTaskMessage.machineID]      as? String,
-            let scriptID       = ckRecord[CKSchema.AskTaskMessage.scriptID]       as? String,
-            let role           = ckRecord[CKSchema.AskTaskMessage.role]           as? String,
-            let partsJSON      = ckRecord[CKSchema.AskTaskMessage.partsJSON]      as? String,
-            let timestamp      = ckRecord[CKSchema.AskTaskMessage.timestamp]      as? Date,
-            let sequenceNumber = ckRecord[CKSchema.AskTaskMessage.sequenceNumber] as? Int64
+            let messageID = ckRecord[CKSchema.AskTaskMessage.messageID]  as? String,
+            let taskID    = ckRecord[CKSchema.AskTaskMessage.taskID]      as? String,
+            let machineID = ckRecord[CKSchema.AskTaskMessage.machineID]   as? String,
+            let scriptID  = ckRecord[CKSchema.AskTaskMessage.scriptID]    as? String,
+            let role      = ckRecord[CKSchema.AskTaskMessage.role]        as? String,
+            let partsJSON = ckRecord[CKSchema.AskTaskMessage.partsJSON]   as? String,
+            let timestamp = ckRecord[CKSchema.AskTaskMessage.timestamp]   as? Date
         else { return nil }
+
+        // sequenceNumber is saved as Int on Mac; accept Int or Int64 to avoid silent cast failures
+        let sequenceNumber = (ckRecord[CKSchema.AskTaskMessage.sequenceNumber] as? Int)
+            ?? (ckRecord[CKSchema.AskTaskMessage.sequenceNumber] as? Int64).map(Int.init)
+            ?? 0
 
         self.init(
             messageID: messageID,
@@ -164,7 +168,7 @@ final class TaskMessage {
             role: role,
             partsJSON: partsJSON,
             timestamp: timestamp,
-            sequenceNumber: Int(sequenceNumber)
+            sequenceNumber: sequenceNumber
         )
     }
 

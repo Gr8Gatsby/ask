@@ -218,8 +218,8 @@ class Claude3:
             self._pending_calls.pop(rpc_id, None)
             raise
 
-    async def _call_tool(self, name: str, arguments: dict = None):
-        result = await self._rpc('tools/call', {'name': name, 'arguments': arguments or {}})
+    async def _call_tool(self, name: str, arguments: dict = None, timeout: float = 15.0):
+        result = await self._rpc('tools/call', {'name': name, 'arguments': arguments or {}}, timeout=timeout)
         if isinstance(result, dict) and 'content' not in result:
             return result
         try:
@@ -236,26 +236,40 @@ class Claude3:
         serialized = json.dumps(payload, sort_keys=True)
         if self._emitted_payloads.get(block_id) == serialized:
             return  # nothing changed — skip the emit
-        self._emitted_payloads[block_id] = serialized
         args = {'blockId': block_id, 'blockType': block_type, 'payload': payload}
         if ttl is not None:
             args['ttl'] = ttl
         if inbox:
             args['inbox'] = True
         await self._call_tool('emit_block', args)
+        self._emitted_payloads[block_id] = serialized  # only cache after successful emit
 
     async def clear_block(self, block_id: str):
         await self._call_tool('clear_block', {'blockId': block_id})
 
+    # A2A calls involve CloudKit writes and can be slow.  Give them a generous
+    # timeout and fire them as background tasks so handlers never block on them.
+    _A2A_TIMEOUT = 60.0
+
+    def _fire_a2a(self, coro) -> None:
+        """Schedule an A2A write as a background task; the caller continues immediately."""
+        async def _run():
+            try:
+                await coro
+            except Exception as exc:
+                _log(f'a2a write failed: {exc}', 'WARN')
+        asyncio.create_task(_run())
+
     async def open_task(self, task_id: str, title: str, status: str):
-        await self._call_tool('open_task', {'taskId': task_id, 'title': title, 'status': status})
+        await self._call_tool('open_task', {'taskId': task_id, 'title': title, 'status': status},
+                              timeout=self._A2A_TIMEOUT)
 
     async def append_message(self, task_id: str, role: str, text: str):
         await self._call_tool('append_message', {
             'taskId': task_id,
             'role': role,
             'parts': [{'type': 'text', 'text': text}],
-        })
+        }, timeout=self._A2A_TIMEOUT)
 
     async def put_artifact(self, task_id: str, artifact_id: str, filename: str,
                            mime_type: str, description: str, file_path: str):
@@ -266,7 +280,7 @@ class Claude3:
             'mimeType': mime_type,
             'description': description,
             'filePath': file_path,
-        })
+        }, timeout=self._A2A_TIMEOUT)
 
     # ------------------------------------------------------------------
     # Block IDs
@@ -389,7 +403,7 @@ class Claude3:
             await self._rpc('tools/call', {
                 'name': 'inject_tty',
                 'arguments': {'session_id': session.raw_id, 'text': text},
-            }, timeout=5.0)
+            }, timeout=20.0)
             return True
         except Exception as e:
             _log(f'inject_tty failed for {session.session_id}: {e}', 'WARN')
@@ -402,7 +416,7 @@ class Claude3:
             await self._rpc('tools/call', {
                 'name': 'send_text',
                 'arguments': {'session_id': session.raw_id, 'text': text},
-            }, timeout=5.0)
+            }, timeout=20.0)
             return True
         except Exception as e:
             _log(f'send_text failed for {session.session_id}: {e}', 'WARN')
@@ -454,21 +468,25 @@ class Claude3:
             _log(f'tm_register failed: {e}', 'WARN')
 
     async def _route_text(self, session: SessionRecord, text: str) -> bool:
-        """Send user text to a session. Try inject_tty first, fall back to send_text."""
+        """Send user text to a session via inject_tty, with send_text fallback for sessions with no TTY."""
         text_with_newline = text if text.endswith('\n') else text + '\n'
+        had_tty = bool(session.tty)
         ok = await self._tm_inject_tty(session, text_with_newline)
-        if not ok:
-            # If TTY is still unknown, try to discover it now from the process list.
-            if not session.tty and session.cwd:
-                for proc in discover_claude_processes():
-                    if proc.get('cwd') == session.cwd and proc.get('tty'):
-                        session.tty = proc['tty']
-                        self._registry._index_aliases(session)
-                        _log(f'late-discovered tty={session.tty!r} for session {session.session_id}')
-                        break
-            # Re-register and retry once
-            await self._tm_register(session)
-            ok = await self._tm_inject_tty(session, text_with_newline)
+        if had_tty:
+            # TTY was known before the call. A timeout most likely means AskMac was slow
+            # to ack — the text was probably delivered. Do NOT fall through to send_text,
+            # which would inject a second copy.
+            return ok
+        # TTY was unknown — try to discover it, re-register, and retry once.
+        if session.cwd:
+            for proc in discover_claude_processes():
+                if proc.get('cwd') == session.cwd and proc.get('tty'):
+                    session.tty = proc['tty']
+                    self._registry._index_aliases(session)
+                    _log(f'late-discovered tty={session.tty!r} for session {session.session_id}')
+                    break
+        await self._tm_register(session)
+        ok = await self._tm_inject_tty(session, text_with_newline)
         if not ok:
             ok = await self._tm_send_text(session, text)
         return ok
@@ -608,8 +626,8 @@ class Claude3:
         session.preview = prompt[:200]
         session.last_prompt = prompt
         if prompt:
-            await self.append_message(session.task_id, 'user', prompt)
-        await self._set_task_status(session, 'working')
+            self._fire_a2a(self.append_message(session.task_id, 'user', prompt))
+        self._fire_a2a(self._set_task_status(session, 'working'))
         await self._emit_session_block(session)
         await self._emit_tile()
         _save_registry(self._registry)
@@ -626,8 +644,8 @@ class Claude3:
         last_msg = (msg.get('last_message', '') or '').strip()
         if last_msg and last_msg != session.last_message:
             session.last_message = last_msg
-            await self.append_message(session.task_id, 'assistant', last_msg)
-            await self._append_artifact_if_large(session, 'Final response', last_msg)
+            self._fire_a2a(self.append_message(session.task_id, 'assistant', last_msg))
+            self._fire_a2a(self._append_artifact_if_large(session, 'Final response', last_msg))
         # session_stop fires at end of every turn — keep the session alive so it
         # remains visible in the UI while Claude is waiting for the next user message.
         session.state = 'idle'
@@ -644,7 +662,7 @@ class Claude3:
         if not raw_id or not summary:
             return
         session = self._registry.ensure(raw_id=raw_id, cwd=msg.get('cwd', ''))
-        await self._append_structured_message(session, 'Context compacted', summary)
+        self._fire_a2a(self._append_structured_message(session, 'Context compacted', summary))
         _log(f'post_compact raw_id={raw_id[:8]} summary={summary[:60]}')
 
     async def _handle_permission_request(self, msg: dict) -> str:
@@ -682,12 +700,12 @@ class Claude3:
         fut = asyncio.get_running_loop().create_future()
         self._pending_permissions[request.request_id] = fut
 
-        await self._set_task_status(session, 'working')
-        await self._append_structured_message(
+        self._fire_a2a(self._set_task_status(session, 'working'))
+        self._fire_a2a(self._append_structured_message(
             session,
             'Permission needed',
             f'`{request.tool}` wants to run:\n\n```\n{preview}\n```',
-        )
+        ))
         await self._emit_session_block(session)
         await self._emit_tile()
         _save_registry(self._registry)
@@ -699,10 +717,10 @@ class Claude3:
         finally:
             self._pending_permissions.pop(request.request_id, None)
 
-        await self._append_structured_message(session, 'Permission resolved', value)
+        self._fire_a2a(self._append_structured_message(session, 'Permission resolved', value))
         session.pending_permission = None
         session.state = 'running_tool' if value in ('Allow', 'Always Allow', 'executed') else 'idle'
-        await self._set_task_status(session, 'working')
+        self._fire_a2a(self._set_task_status(session, 'working'))
         await self._emit_session_block(session)
         await self._emit_tile()
         _save_registry(self._registry)
@@ -875,7 +893,7 @@ class Claude3:
         if value == '__interrupt__':
             ok = await self._tm_send_interrupt(session)
             _log(f'interrupt session={session.session_id!r} ok={ok}')
-            await self._append_structured_message(session, 'Interrupted', 'Sent Ctrl-C to the session.')
+            self._fire_a2a(self._append_structured_message(session, 'Interrupted', 'Sent Ctrl-C to the session.'))
             session.state = 'idle'
             await self._emit_session_block(session)
             _save_registry(self._registry)
@@ -884,7 +902,7 @@ class Claude3:
         # Close session
         if value == '__close_session__':
             await self._tm_inject_tty(session, '/quit\n')
-            await self._append_structured_message(session, 'Stop requested', 'Sent quit to Claude Code.')
+            self._fire_a2a(self._append_structured_message(session, 'Stop requested', 'Sent quit to Claude Code.'))
             session.state = 'stopping'
             await self._emit_session_block(session)
             _save_registry(self._registry)
@@ -902,10 +920,10 @@ class Claude3:
             ok = await self._route_text(session, value)
             _log(f'reply session={session.session_id!r} ok={ok} text={value[:80]!r}')
             if ok:
-                await self.append_message(session.task_id, 'user', value)
+                self._fire_a2a(self.append_message(session.task_id, 'user', value))
                 session.state = 'running_tool'
                 session.preview = value[:200]
-                await self._set_task_status(session, 'working')
+                self._fire_a2a(self._set_task_status(session, 'working'))
                 await self._emit_session_block(session)
                 _save_registry(self._registry)
 
@@ -966,13 +984,16 @@ class Claude3:
             # An empty TTY means we haven't resolved routing yet — keep the session alive.
             if session.tty and not tty_is_live(session.tty):
                 _log(f'session {session.session_id} TTY gone — marking stopped')
-                await self._append_structured_message(
-                    session, 'Session ended', 'Terminal closed.')
                 session.state = 'stopped'
                 session.stopped_at = datetime.datetime.now().timestamp()
-                await self._set_task_status(session, 'completed')
-                await self.clear_block(self._session_block_id(session.session_id))
                 self._registry.remove(session.session_id)
+                try:
+                    await self._append_structured_message(
+                        session, 'Session ended', 'Terminal closed.')
+                    await self._set_task_status(session, 'completed')
+                    await self.clear_block(self._session_block_id(session.session_id))
+                except Exception as exc:
+                    _log(f'TTY-gone cleanup error for {session.session_id}: {exc}', 'WARN')
             else:
                 # Reset transient working states on refresh so sessions don't get
                 # stuck showing "Running Tool" after a daemon restart.

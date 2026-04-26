@@ -113,8 +113,9 @@ struct RKClaudeMessagePayload: Codable {
     }
 }
 
-struct RKPendingConfirmation: Codable {
+struct RKPendingConfirmation: Codable, Equatable {
     let title: String
+    let body: String?
     let options: [String]
 }
 

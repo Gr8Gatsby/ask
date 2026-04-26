@@ -9,6 +9,7 @@ struct SessionFeedView: View {
     let onRespond: (RKBlock, String) async -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(TaskHistoryStore.self) private var taskHistory
 
     @Query private var messages: [TaskMessage]
     @Query private var artifacts: [ArtifactRecord]
@@ -16,6 +17,17 @@ struct SessionFeedView: View {
     @State private var draft = ""
     @State private var isSending = false
     @State private var showStopConfirm = false
+    /// Optimistic user messages shown immediately on send, removed once real records arrive.
+    @State private var pendingUserTexts: [String] = []
+    /// Live assistant messages captured from livePayload.lastMessage onChange; cleared when CloudKit records arrive.
+    @State private var liveAssistantMessages: [String] = []
+    @State private var lastSeenAssistantMessage: String = ""
+    /// Latched permission confirmation: once shown, kept visible until the user responds.
+    /// Cleared only when the user taps Yes/Deny (not when the live block updates).
+    @State private var latchedConfirmation: RKPendingConfirmation? = nil
+    @State private var latchedBlock: RKBlock? = nil
+    /// Set when user taps a permission option; hides the bar immediately for up to 5s.
+    @State private var permissionRespondedAt: Date? = nil
 
     private let sessionId: String
     private let initialProject: String
@@ -79,19 +91,75 @@ struct SessionFeedView: View {
                         ForEach(unattachedArtifacts, id: \.recordName) { artifact in
                             SessionFeedArtifactRow(artifact: artifact)
                         }
+                        ForEach(liveAssistantMessages, id: \.self) { text in
+                            SessionFeedMarkdownView(text: text)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 2)
+                                .opacity(0.85)
+                        }
+                        ForEach(pendingUserTexts, id: \.self) { text in
+                            PendingUserBubble(text: text)
+                        }
                         Color.clear.frame(height: 8).id("bottom")
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 12)
                 }
-                .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+                .onAppear {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                    if let msg = livePayload?.lastMessage, !msg.isEmpty, msg != lastSeenAssistantMessage {
+                        lastSeenAssistantMessage = msg
+                        liveAssistantMessages = [msg]
+                    }
+                    if let pc = livePayload?.pendingConfirmation, latchedConfirmation == nil {
+                        latchedConfirmation = pc
+                        latchedBlock = liveBlock
+                    }
+                }
                 .onChange(of: messages.count) { _, _ in
+                    pendingUserTexts.removeAll()
+                    liveAssistantMessages.removeAll()
                     withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
                 }
+                .onChange(of: livePayload?.pendingConfirmation) { _, newVal in
+                    if let pc = newVal {
+                        // New confirmation arrived — latch it so it survives block TTL gaps
+                        latchedConfirmation = pc
+                        latchedBlock = liveBlock
+                        permissionRespondedAt = nil
+                    }
+                    // Do NOT clear latchedConfirmation when newVal == nil; only cleared on user action.
+                }
+                .onChange(of: livePayload?.isWorking) { _, isWorking in
+                    // Codex finished — clear any pending bubble regardless of whether lastMessage changed.
+                    // This handles the case where Codex responds with identical text (onChange(of:lastMessage) won't fire).
+                    if isWorking == false {
+                        pendingUserTexts.removeAll()
+                        if let msg = livePayload?.lastMessage, !msg.isEmpty, msg != lastSeenAssistantMessage {
+                            lastSeenAssistantMessage = msg
+                            liveAssistantMessages.append(msg)
+                        }
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                        Task { await taskHistory.refresh(machineIDs: [machineID]) }
+                    }
+                }
+                .onChange(of: livePayload?.lastMessage) { _, newMsg in
+                    guard let msg = newMsg, !msg.isEmpty, msg != lastSeenAssistantMessage else { return }
+                    lastSeenAssistantMessage = msg
+                    pendingUserTexts.removeAll()
+                    liveAssistantMessages.append(msg)
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                    Task { await taskHistory.refresh(machineIDs: [machineID]) }
+                }
             }
-            if isActive, let pending = livePayload?.pendingConfirmation, let block = liveBlock {
+            if let pending = latchedConfirmation, let block = latchedBlock ?? liveBlock,
+               !isOptimisticallyDismissed {
                 pendingConfirmationBar(pending, block: block)
             }
             Divider()
@@ -101,6 +169,14 @@ struct SessionFeedView: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            await taskHistory.refresh(machineIDs: [machineID])
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled else { break }
+                await taskHistory.refresh(machineIDs: [machineID])
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {
@@ -190,28 +266,28 @@ struct SessionFeedView: View {
         .opacity(isActive ? 1.0 : 0.5)
     }
 
+    /// True for up to 5s after the user taps a permission option, so the bar dismisses immediately
+    /// without waiting for the CloudKit round-trip that clears pendingConfirmation.
+    private var isOptimisticallyDismissed: Bool {
+        guard let t = permissionRespondedAt else { return false }
+        return Date().timeIntervalSince(t) < 5
+    }
+
     @ViewBuilder
     private func pendingConfirmationBar(_ confirmation: RKPendingConfirmation, block: RKBlock) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(confirmation.title)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(confirmation.options, id: \.self) { option in
-                        Button(option) {
-                            Task { await onRespond(block, option) }
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.orange)
-                        .font(.footnote)
-                    }
+        PermissionApprovalBar(
+            title: confirmation.title,
+            preview: confirmation.body ?? livePayload?.currentPreview,
+            options: confirmation.options,
+            showBackground: false,
+            onRespond: { option in
+                withAnimation(.easeOut(duration: 0.2)) {
+                    permissionRespondedAt = Date()
+                    latchedConfirmation = nil
                 }
-                .padding(.horizontal)
+                Task { await onRespond(block, option) }
             }
-        }
-        .padding(.vertical, 10)
+        )
         .background(.ultraThinMaterial)
     }
 
@@ -281,8 +357,21 @@ struct SessionFeedView: View {
         guard !text.isEmpty, !isSending else { return }
         isSending = true
         draft = ""
+        pendingUserTexts.append(text)
         await onRespond(block, text)
         isSending = false
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            await taskHistory.refresh(machineIDs: [machineID])
+        }
+        // Fallback: if the response has the same lastMessage text as before, onChange(of:lastMessage)
+        // won't fire. Clear the pending bubble after 10s regardless.
+        Task {
+            try? await Task.sleep(for: .seconds(10))
+            if pendingUserTexts.contains(text) {
+                pendingUserTexts.removeAll { $0 == text }
+            }
+        }
     }
 }
 
@@ -350,6 +439,24 @@ private struct SessionFeedArtifactRow: View {
         .padding(.vertical, 10)
         .background(Color(.secondarySystemGroupedBackground))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+private struct PendingUserBubble: View {
+    let text: String
+    var body: some View {
+        HStack {
+            Spacer(minLength: 60)
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.accentColor.opacity(0.6))
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.vertical, 2)
     }
 }
 

@@ -194,6 +194,8 @@ struct HomeView: View {
     @State private var lastHeartbeatAt: Date = .distantPast
     @State private var notifiedBlockIDs: Set<String> = []
     @State private var burstPollingUntil: Date = .distantPast
+    /// Set when CloudKit returns a throttle/rate-limit error with a Retry-After value.
+    @State private var throttledUntil: Date = .distantPast
     /// Cached script icons — available immediately on launch for the loading scene.
     @State private var iconCache = ScriptIconCache()
     /// Controls the loading icon overlay — kept true briefly after hasLoaded
@@ -464,7 +466,8 @@ struct HomeView: View {
                                 ActionQueueCardView(
                                     group: group,
                                     onTap: { selectedScriptID = group.scriptID },
-                                    onRespond: { value in await respondToGroup(group, value: value) }
+                                    onRespond: { value in await respondToGroup(group, value: value) },
+                                    onRespondToBlock: { block, value in await respondToBlock(block, value: value) }
                                 )
                                 .accessibilityElement(children: .contain)
                                 .accessibilityIdentifier("script-group-\(group.scriptID)")
@@ -768,13 +771,21 @@ struct HomeView: View {
     }
 
     private var fetchFailedState: some View {
-        ContentUnavailableView {
-            Label("iCloud Unavailable", systemImage: "icloud.slash")
+        let isThrottled = Date() < throttledUntil
+        return ContentUnavailableView {
+            Label(isThrottled ? "iCloud Rate Limited" : "iCloud Unavailable",
+                  systemImage: isThrottled ? "clock.arrow.circlepath" : "icloud.slash")
         } description: {
-            Text("Could not reach iCloud. This is usually temporary — please try again in a moment.")
+            if isThrottled {
+                Text("CloudKit is temporarily rate limiting this app. This clears automatically — no action needed.")
+            } else {
+                Text("Could not reach iCloud. This is usually temporary — please try again in a moment.")
+            }
         } actions: {
-            Button("Try Again") { Task { await load() } }
-                .buttonStyle(.borderedProminent)
+            if !isThrottled {
+                Button("Try Again") { Task { await load() } }
+                    .buttonStyle(.borderedProminent)
+            }
         }
     }
 
@@ -796,8 +807,12 @@ struct HomeView: View {
             let fresh = try await cloudKit.fetchMachines()
             machines = MachineTombstoneStore.apply(to: fresh)
             fetchFailed = false
+            throttledUntil = .distantPast
         } catch {
             print("[HomeView] Failed to fetch machines: \(error)")
+            if let ckError = error as? CKError, let retryAfter = ckError.retryAfterSeconds {
+                throttledUntil = Date().addingTimeInterval(retryAfter)
+            }
             fetchFailed = machines.isEmpty
         }
 
@@ -886,13 +901,22 @@ struct HomeView: View {
             // Prevents a blank UI during the Mac restart window while scripts re-emit.
             var consecutiveEmpty = 0
             while !Task.isCancelled {
-                let interval: Double = Date() < burstPollingUntil ? 1.0 : 15.0
+                // Respect CloudKit Retry-After; fall back to burst/normal cadence.
+                let now = Date()
+                let throttleWait = max(0, throttledUntil.timeIntervalSince(now))
+                let interval: Double = throttleWait > 0 ? throttleWait : (now < burstPollingUntil ? 1.0 : 15.0)
                 try? await Task.sleep(for: .seconds(interval))
                 guard !Task.isCancelled else { break }
 
-                if let fresh = try? await cloudKit.fetchMachines(), !fresh.isEmpty {
-                    machines = fresh
+                do {
+                    let fresh = try await cloudKit.fetchMachines()
+                    if !fresh.isEmpty { machines = MachineTombstoneStore.apply(to: fresh) }
                     fetchFailed = false
+                    throttledUntil = .distantPast
+                } catch {
+                    if let ckError = error as? CKError, let retryAfter = ckError.retryAfterSeconds {
+                        throttledUntil = Date().addingTimeInterval(retryAfter)
+                    }
                 }
 
                 // Detect any machine coming back online — show queue review if needed.
@@ -1200,6 +1224,7 @@ private struct ActionQueueCardView: View {
     let group: ScriptGroup
     let onTap: () -> Void
     let onRespond: (String) async -> Void
+    let onRespondToBlock: (RKBlock, String) async -> Void
 
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("useBrandColors") private var useBrandColors: Bool = true
@@ -1214,6 +1239,13 @@ private struct ActionQueueCardView: View {
                 if aRank != bRank { return aRank > bRank }   // lower rank = higher priority
                 return a.createdAt < b.createdAt
             }
+    }
+
+    /// Agent session block with a pending confirmation, if any.
+    private var pendingAgentSessionBlock: RKBlock? {
+        group.blocks.first {
+            $0.blockType == .agentSession && $0.agentSessionPayload?.pendingConfirmation != nil
+        }
     }
 
     private var effectiveBackground: Color {
@@ -1300,6 +1332,56 @@ private struct ActionQueueCardView: View {
                     .padding(.horizontal, 14)
                     .padding(.bottom, 10)
             }
+
+            // Inline permission approval for agent sessions awaiting confirmation
+            if let block = pendingAgentSessionBlock,
+               let sessionPayload = block.agentSessionPayload,
+               let pc = sessionPayload.pendingConfirmation {
+                Divider().padding(.horizontal, 14)
+
+                // Session status row: current tool + supervised pill + Stop
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(Color.secondary.opacity(0.35))
+                        .frame(width: 6, height: 6)
+                    Text(sessionStatusText(sessionPayload))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(sessionPayload.permissionMode == "full-auto" ? "full-auto" : "supervised")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .overlay(Capsule().stroke(Color.secondary.opacity(0.35), lineWidth: 1))
+                    Button("Feed") { onTap() }
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Color.accentColor)
+                        .buttonStyle(.plain)
+                    Button("Stop") { Task { await onRespondToBlock(block, "__close_session__") } }
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.red)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .overlay(Capsule().stroke(Color.red.opacity(0.4), lineWidth: 1))
+                        .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+
+                Divider().padding(.horizontal, 14)
+
+                PermissionApprovalBar(
+                    title: pc.title,
+                    preview: pc.body ?? sessionPayload.currentPreview,
+                    options: pc.options,
+                    prominent: true,
+                    showBackground: false,
+                    onRespond: { option in Task { await onRespondToBlock(block, option) } }
+                )
+                .padding(.bottom, 4)
+            }
         }
         .background(effectiveBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -1320,6 +1402,19 @@ private struct ActionQueueCardView: View {
         case .info:    return Color(.separator)
         case nil:      return .orange
         }
+    }
+
+    private func sessionStatusText(_ payload: RKAgentSessionPayload) -> String {
+        if let tool = payload.currentTool {
+            if let preview = payload.currentPreview, !preview.isEmpty {
+                return "\(tool): \(preview)"
+            }
+            return tool
+        }
+        if let msg = payload.lastMessage {
+            return msg.components(separatedBy: "\n").first(where: { !$0.isEmpty }) ?? msg
+        }
+        return "Running…"
     }
 }
 
@@ -1522,29 +1617,6 @@ struct ScriptDetailView: View {
     }
 
     @ViewBuilder
-    private func sessionPendingConfirmationRow(pc: RKPendingConfirmation, block: RKBlock) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(pc.title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(pc.options, id: \.self) { option in
-                    Button {
-                        Task { await onRespond(block, option) }
-                    } label: {
-                        Text(option)
-                            .font(.caption)
-                            .multilineTextAlignment(.leading)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.orange)
-                }
-            }
-        }
-    }
 
     /// Persists an assistant message into ChatEntry so history is available even when
     /// SessionChatView was not open when the message arrived.
@@ -1625,9 +1697,14 @@ struct ScriptDetailView: View {
                                 // Inline pending_confirmation from agent_session payload
                                 // (shown when there are no linked .confirmation blocks)
                                 if confs.isEmpty, let pc = payload.pendingConfirmation {
-                                    sessionPendingConfirmationRow(pc: pc, block: block)
-                                        .listRowBackground(Color.orange.opacity(0.05))
-                                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                                    PermissionApprovalBar(
+                                        title: pc.title,
+                                        preview: pc.body ?? payload.currentPreview,
+                                        options: pc.options,
+                                        onRespond: { option in Task { await onRespond(block, option) } }
+                                    )
+                                    .listRowBackground(Color.orange.opacity(0.05))
+                                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
                                 }
                             }
                         }

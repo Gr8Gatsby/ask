@@ -115,8 +115,18 @@ class SessionRegistry:
         for alias in self._alias_values(raw_id, tmux_target, tty):
             if alias in self.aliases:
                 return self.aliases[alias]
-        if cwd and not (raw_id or tmux_target or tty):
-            matches = [sid for sid, session in self.sessions.items() if session.cwd == cwd and session.state != 'stopped']
+        # Fall back to cwd when alias lookup fails, so hook events (which carry
+        # codex's raw_id but not the tmux target) link to the tmux-discovered
+        # session instead of creating a ghost session.
+        # Only consider sessions that don't already have a conflicting raw_id,
+        # so two distinct sessions in the same directory stay separate.
+        if cwd:
+            matches = [
+                sid for sid, session in self.sessions.items()
+                if session.cwd == cwd
+                and session.state != 'stopped'
+                and (not raw_id or not session.raw_id)
+            ]
             if len(matches) == 1:
                 return matches[0]
         return ''

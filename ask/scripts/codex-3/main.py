@@ -11,13 +11,16 @@ from registry import PendingPermission, SessionRegistry
 from transport import (
     TMUX,
     discover_codex_panes,
+    discover_codex_processes,
     find_repos,
+    find_tmux_target_for_tty,
     get_pane_pid,
     launch_codex,
     pane_exists,
     send_interrupt,
     send_quit,
     send_text,
+    tty_exists,
 )
 
 sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1, closefd=False)
@@ -159,7 +162,9 @@ class Codex3:
         sys.stdout.write(json.dumps(obj, ensure_ascii=False) + '\n')
         sys.stdout.flush()
 
-    async def _rpc(self, method: str, params: dict = None):
+    _A2A_TIMEOUT = 60.0
+
+    async def _rpc(self, method: str, params: dict = None, timeout: float = 15.0):
         rpc_id = self._id()
         fut = asyncio.get_running_loop().create_future()
         self._pending_calls[rpc_id] = fut
@@ -167,16 +172,25 @@ class Codex3:
         if params:
             msg['params'] = params
         self._write(msg)
-        return await asyncio.wait_for(fut, timeout=15.0)
+        return await asyncio.wait_for(fut, timeout=timeout)
 
-    async def _call_tool(self, name: str, arguments: dict = None):
-        result = await self._rpc('tools/call', {'name': name, 'arguments': arguments or {}})
+    async def _call_tool(self, name: str, arguments: dict = None, timeout: float = 15.0):
+        result = await self._rpc('tools/call', {'name': name, 'arguments': arguments or {}}, timeout=timeout)
         if isinstance(result, dict) and 'content' not in result:
             return result
         try:
             return json.loads(result['content'][0]['text'])
         except Exception:
             return result
+
+    def _fire_a2a(self, coro) -> None:
+        """Schedule a CloudKit write in the background — never blocks the caller."""
+        async def _run():
+            try:
+                await coro
+            except Exception as exc:
+                _log(f'a2a write failed: {exc}', 'WARN')
+        asyncio.create_task(_run())
 
     async def emit_block(self, block_id: str, block_type: str, payload: dict, ttl: int = None, inbox: bool = False):
         serialized = json.dumps(payload, sort_keys=True)
@@ -194,14 +208,16 @@ class Codex3:
         await self._call_tool('clear_block', {'blockId': block_id})
 
     async def open_task(self, task_id: str, title: str, status: str):
-        await self._call_tool('open_task', {'taskId': task_id, 'title': title, 'status': status})
+        await self._call_tool('open_task', {'taskId': task_id, 'title': title, 'status': status}, timeout=self._A2A_TIMEOUT)
+        _log(f'open_task ok task_id={task_id!r} status={status!r}')
 
     async def append_message(self, task_id: str, role: str, text: str):
         await self._call_tool('append_message', {
             'taskId': task_id,
             'role': role,
             'parts': [{'type': 'text', 'text': text}],
-        })
+        }, timeout=self._A2A_TIMEOUT)
+        _log(f'append_message ok task_id={task_id!r} role={role!r}')
 
     async def put_artifact(self, task_id: str, artifact_id: str, filename: str, mime_type: str, description: str, file_path: str):
         await self._call_tool('put_artifact', {
@@ -211,7 +227,63 @@ class Codex3:
             'mimeType': mime_type,
             'description': description,
             'filePath': file_path,
-        })
+        }, timeout=self._A2A_TIMEOUT)
+
+    # ------------------------------------------------------------------
+    # Terminal-manager routing (TTY-based sessions)
+    # ------------------------------------------------------------------
+
+    async def _tm_register(self, session) -> None:
+        if not session.raw_id or not session.tty:
+            return
+        try:
+            await self._rpc('tools/call', {
+                'name': 'register_session',
+                'arguments': {
+                    'session_id': session.raw_id,
+                    'app_id': 'codex-3',
+                    'tty': session.tty,
+                    'tmux_target': '',
+                },
+            })
+            _log(f'tm_register {session.session_id[:12]} tty={session.tty!r}')
+        except Exception as exc:
+            _log(f'tm_register failed: {exc}', 'WARN')
+
+    async def _tm_inject_tty(self, session, text: str) -> bool:
+        if not session.raw_id:
+            return False
+        try:
+            await self._rpc('tools/call', {
+                'name': 'inject_tty',
+                'arguments': {'session_id': session.raw_id, 'text': text},
+            })
+            return True
+        except Exception as exc:
+            _log(f'inject_tty failed for {session.session_id}: {exc}', 'WARN')
+            return False
+
+    async def _tm_send_interrupt(self, session) -> bool:
+        if not session.raw_id:
+            return False
+        try:
+            await self._rpc('tools/call', {
+                'name': 'inject_tty',
+                'arguments': {'session_id': session.raw_id, 'text': '\x03'},
+            })
+            return True
+        except Exception as exc:
+            _log(f'tm_send_interrupt failed: {exc}', 'WARN')
+            return False
+
+    async def _route_text(self, session, text: str) -> bool:
+        if session.tmux_target:
+            return send_text(session.tmux_target, text)
+        if session.tty:
+            return await self._tm_inject_tty(session, text + '\n')
+        return False
+
+    # ------------------------------------------------------------------
 
     def _session_block_id(self, session_id: str) -> str:
         return f'codex3-session-{session_id.split(":")[-1]}'
@@ -292,6 +364,7 @@ class Codex3:
     async def _emit_session_block(self, session):
         payload = {
             'session_id': session.session_id,
+            'task_id': session.task_id,
             'agent_name': 'Codex 3',
             'brand_color': '#111111',
             'placeholder': 'Message Codex 3…',
@@ -315,19 +388,96 @@ class Codex3:
             }
         await self.emit_block(self._session_block_id(session.session_id), 'agent_session', payload, ttl=SESSION_TTL)
 
-    async def _refresh_sessions(self):
-        for session in list(self._registry.sessions.values()):
-            if session.tmux_target and pane_exists(session.tmux_target):
+    async def _discover_active_processes(self):
+        """Auto-register TTY codex processes not yet tracked by the registry."""
+        processes = discover_codex_processes()
+        for proc in processes:
+            tty = proc['tty']
+            cwd = proc.get('cwd', '')
+            pid = proc['pid']
+
+            existing_sid = self._registry.resolve(tty=tty)
+            if existing_sid:
+                session = self._registry.sessions[existing_sid]
+                # Backfill tmux target and project if missing
+                if not session.tmux_target:
+                    pane_info = find_tmux_target_for_tty(tty)
+                    if pane_info.get('tmux_target'):
+                        session.tmux_target = pane_info['tmux_target']
+                        self._registry._index_aliases(session)
+                        _log(f'backfilled tmux_target={session.tmux_target!r} for {existing_sid}')
+                    if pane_info.get('project'):
+                        session.project = pane_info['project']
+                    if pane_info.get('cwd') and not session.cwd:
+                        session.cwd = pane_info['cwd']
                 await self._emit_session_block(session)
-            elif session.state != 'stopped':
-                session.state = 'stopped'
-                session.stopped_at = datetime.datetime.now().timestamp()
-                await self._set_task_status(session, 'completed')
-                await self._append_structured_message(session, 'Session stopped', 'The tmux pane closed.')
-                await self.clear_block(self._session_block_id(session.session_id))
-                self._registry.remove(session.session_id)
+                continue
+
+            if cwd:
+                sid = self._registry.resolve(cwd=cwd)
+                if sid:
+                    session = self._registry.sessions[sid]
+                    if not session.tty:
+                        session.tty = tty
+                        if not session.raw_id:
+                            session.raw_id = str(pid)
+                        self._registry._index_aliases(session)
+                        _log(f'linked tty={tty} to session {sid} via cwd={cwd!r}')
+                        asyncio.create_task(self._tm_register(session))
+                    await self._emit_session_block(session)
+                    continue
+
+            # Auto-adopt unknown process; prefer tmux routing when the TTY is a tmux pane
+            pane_info = find_tmux_target_for_tty(tty)
+            tmux_target = pane_info.get('tmux_target', '')
+            effective_cwd = pane_info.get('cwd', '') or cwd
+            effective_project = pane_info.get('project', '') or proc.get('project', '')
+            _log(f'auto-adopting pid={pid} tty={tty} tmux={tmux_target!r} project={effective_project!r}')
+            session = self._registry.ensure(
+                raw_id=str(pid),
+                tty=tty,
+                tmux_target=tmux_target,
+                cwd=effective_cwd,
+                project=effective_project,
+            )
+            if tmux_target:
+                session.tmux_target = tmux_target
+            session.state = 'idle'
+            session.touch()
+            if session.tty and not session.tmux_target:
+                asyncio.create_task(self._tm_register(session))
+            asyncio.create_task(self._set_task_status(session, 'working'))
+            await self._emit_session_block(session)
+
         _save_registry(self._registry)
         await self._emit_tile()
+
+    async def _refresh_sessions(self):
+        for session in list(self._registry.sessions.values()):
+            if session.state == 'stopped':
+                continue
+            alive = False
+            if session.tmux_target:
+                alive = pane_exists(session.tmux_target)
+            elif session.tty:
+                alive = tty_exists(session.tty)
+            if alive:
+                if session.tty:
+                    asyncio.create_task(self._tm_register(session))
+                self._fire_a2a(self._set_task_status(session, 'working'))
+                await self._emit_session_block(session)
+            else:
+                session.state = 'stopped'
+                session.stopped_at = datetime.datetime.now().timestamp()
+                self._registry.remove(session.session_id)
+                try:
+                    await self._set_task_status(session, 'completed')
+                    await self._append_structured_message(session, 'Session stopped', 'The session closed.')
+                    await self.clear_block(self._session_block_id(session.session_id))
+                except Exception as exc:
+                    _log(f'refresh cleanup error: {exc}', 'WARN')
+        _save_registry(self._registry)
+        await self._discover_active_processes()
 
     async def _heartbeat(self):
         while True:
@@ -357,7 +507,7 @@ class Codex3:
             session.preview = ''
         elif session.state == 'starting':
             session.state = 'idle'
-        await self._set_task_status(session, 'working')
+        self._fire_a2a(self._set_task_status(session, 'working'))
         await self._emit_session_block(session)
         await self._emit_tile()
         _save_registry(self._registry)
@@ -374,9 +524,9 @@ class Codex3:
         session.state = 'awaiting_user'
         session.preview = prompt[:200]
         session.last_prompt = prompt
-        await self._set_task_status(session, 'working')
+        self._fire_a2a(self._set_task_status(session, 'working'))
         if prompt:
-            await self.append_message(session.task_id, 'user', prompt)
+            self._fire_a2a(self.append_message(session.task_id, 'user', prompt))
         await self._emit_session_block(session)
         await self._emit_tile()
         _save_registry(self._registry)
@@ -393,14 +543,14 @@ class Codex3:
         last_message = (msg.get('last_message') or '').strip()
         if last_message and last_message != session.last_message:
             session.last_message = last_message
-            await self.append_message(session.task_id, 'assistant', last_message)
-            await self._append_output_artifact_if_large(session, 'Assistant output', last_message)
+            self._fire_a2a(self.append_message(session.task_id, 'assistant', last_message))
+            self._fire_a2a(self._append_output_artifact_if_large(session, 'Assistant output', last_message))
         if session.pending_permission and session.pending_permission.tool == session.current_tool:
             fut = self._pending_permission_futures.pop(session.pending_permission.request_id, None)
             if fut and not fut.done():
                 fut.set_result('executed')
             session.pending_permission = None
-        await self._set_task_status(session, 'working')
+        self._fire_a2a(self._set_task_status(session, 'working'))
         await self._emit_session_block(session)
         await self._emit_tile()
         _save_registry(self._registry)
@@ -418,9 +568,9 @@ class Codex3:
         last_message = (msg.get('last_message') or '').strip()
         if last_message and last_message != session.last_message:
             session.last_message = last_message
-            await self.append_message(session.task_id, 'assistant', last_message)
-            await self._append_output_artifact_if_large(session, 'Assistant output', last_message)
-        await self._set_task_status(session, 'working')
+            self._fire_a2a(self.append_message(session.task_id, 'assistant', last_message))
+            self._fire_a2a(self._append_output_artifact_if_large(session, 'Assistant output', last_message))
+        self._fire_a2a(self._set_task_status(session, 'working'))
         await self._emit_session_block(session)
         await self._emit_tile()
         _save_registry(self._registry)
@@ -452,12 +602,12 @@ class Codex3:
         fut = asyncio.get_running_loop().create_future()
         self._pending_permission_futures[request.request_id] = fut
 
-        await self._set_task_status(session, 'working')
-        await self._append_structured_message(
+        self._fire_a2a(self._set_task_status(session, 'working'))
+        self._fire_a2a(self._append_structured_message(
             session,
             'Permission needed',
             f'`{request.tool}` wants to run:\n\n```\n{request.preview}\n```',
-        )
+        ))
         await self._emit_session_block(session)
         await self._emit_tile()
         _save_registry(self._registry)
@@ -468,10 +618,10 @@ class Codex3:
         finally:
             self._pending_permission_futures.pop(request.request_id, None)
 
-        await self._append_structured_message(session, 'Permission resolved', value)
+        self._fire_a2a(self._append_structured_message(session, 'Permission resolved', value))
         session.pending_permission = None
         session.state = 'running_tool' if value in ('Allow', 'Always Allow', 'executed') else 'idle'
-        await self._set_task_status(session, 'working')
+        self._fire_a2a(self._set_task_status(session, 'working'))
         await self._emit_session_block(session)
         await self._emit_tile()
         _save_registry(self._registry)
@@ -536,7 +686,7 @@ class Codex3:
         text = args.get('message', '').strip()
         if not session or not text:
             return {'error': 'unknown session'}
-        ok = send_text(session.tmux_target, text)
+        ok = await self._route_text(session, text)
         if not ok:
             return {'error': 'session is not routable'}
         await self.append_message(session.task_id, 'user', text)
@@ -551,12 +701,15 @@ class Codex3:
         session = self._registry.sessions.get(args.get('session_id', ''))
         if not session:
             return {'error': 'unknown session'}
-        ok = send_interrupt(session.tmux_target)
+        if session.tmux_target:
+            ok = send_interrupt(session.tmux_target)
+        else:
+            ok = await self._tm_send_interrupt(session)
         if not ok:
             return {'error': 'session is not routable'}
-        await self._append_structured_message(session, 'Interrupted', 'Sent Ctrl-C to the session.')
+        self._fire_a2a(self._append_structured_message(session, 'Interrupted', 'Sent Ctrl-C to the session.'))
         session.state = 'idle'
-        await self._set_task_status(session, 'working')
+        self._fire_a2a(self._set_task_status(session, 'working'))
         await self._emit_session_block(session)
         _save_registry(self._registry)
         return {'ok': True}
@@ -589,17 +742,23 @@ class Codex3:
                 await self._emit_session_block(current)
             return
         if value == '__interrupt__':
-            ok = send_interrupt(session.tmux_target)
-            _log(f'interrupt session={session.session_id!r} tmux={session.tmux_target!r} ok={ok}')
-            await self._append_structured_message(session, 'Interrupted', 'Sent Ctrl-C to the session.')
+            if session.tmux_target:
+                ok = send_interrupt(session.tmux_target)
+            else:
+                ok = await self._tm_send_interrupt(session)
+            _log(f'interrupt session={session.session_id!r} ok={ok}')
+            self._fire_a2a(self._append_structured_message(session, 'Interrupted', 'Sent Ctrl-C to the session.'))
             session.state = 'idle'
             await self._emit_session_block(session)
             _save_registry(self._registry)
             return
         if value == '__close_session__':
-            ok = send_quit(session.tmux_target)
-            _log(f'close session={session.session_id!r} tmux={session.tmux_target!r} ok={ok}')
-            await self._append_structured_message(session, 'Stop requested', 'Sent quit sequence to Codex.')
+            if session.tmux_target:
+                ok = send_quit(session.tmux_target)
+            else:
+                ok = await self._tm_inject_tty(session, '/quit\n')
+            _log(f'close session={session.session_id!r} ok={ok}')
+            self._fire_a2a(self._append_structured_message(session, 'Stop requested', 'Sent quit sequence to Codex.'))
             session.state = 'stopping'
             await self._emit_session_block(session)
             _save_registry(self._registry)
@@ -610,13 +769,13 @@ class Codex3:
                 fut.set_result(value)
             return
         if value:
-            ok = send_text(session.tmux_target, value)
-            _log(f'reply session={session.session_id!r} tmux={session.tmux_target!r} ok={ok} text={value[:80]!r}')
+            ok = await self._route_text(session, value)
+            _log(f'reply session={session.session_id!r} ok={ok} text={value[:80]!r}')
             if ok:
-                await self.append_message(session.task_id, 'user', value)
+                self._fire_a2a(self.append_message(session.task_id, 'user', value))
                 session.state = 'running_tool'
                 session.preview = value[:200]
-                await self._set_task_status(session, 'working')
+                self._fire_a2a(self._set_task_status(session, 'working'))
                 await self._emit_session_block(session)
                 _save_registry(self._registry)
 
@@ -668,10 +827,13 @@ class Codex3:
             msg = json.loads(line)
         except json.JSONDecodeError:
             return
-        if 'result' in msg and 'id' in msg and msg['id'] in self._pending_calls:
+        if 'id' in msg and msg['id'] in self._pending_calls:
             fut = self._pending_calls.pop(msg['id'])
             if not fut.done():
-                fut.set_result(msg['result'])
+                if 'result' in msg:
+                    fut.set_result(msg['result'])
+                elif 'error' in msg:
+                    fut.set_exception(Exception(str(msg['error'])))
             return
         method = msg.get('method', '')
         rpc_id = msg.get('id')
@@ -727,7 +889,16 @@ class Codex3:
             line = await loop.run_in_executor(None, sys.stdin.readline)
             if not line:
                 break
+            # Dispatch as a task so the readline loop continues immediately —
+            # this prevents deadlocks when a handler needs to call _call_tool
+            # (which writes to stdout and waits for the response on stdin).
+            asyncio.create_task(self._safe_handle_rpc_line(line))
+
+    async def _safe_handle_rpc_line(self, line: str):
+        try:
             await self._handle_rpc_line(line)
+        except Exception as exc:
+            _log(f'rpc handler error: {exc}', 'WARN')
 
     async def run(self):
         _log('codex-3 starting')

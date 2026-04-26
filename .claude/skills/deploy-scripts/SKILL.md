@@ -27,10 +27,16 @@ Scripts are never edited in either vault directly. The repo is the single source
 git -C "$(pwd)" rev-parse --show-toplevel
 ```
 
-3. Before deploying all scripts, check for any scripts that exist in the prod vault but no longer exist in the repo source. These are being deleted — run their uninstall script first so they can clean up system state (hooks, config, etc.):
+3. Before deploying all scripts, purge any `.previous` backup directories AskMac may have left in the vault — they contain stale setup scripts that will wrongly uninstall active hooks if left in place:
+```bash
+rm -rf ~/.ask/scripts/*.previous ~/.ask/dev-vault/*.previous
+```
+
+Then check for any scripts that exist in the prod vault but no longer exist in the repo source. These are legitimately deleted scripts — run their uninstall script first so they can clean up system state (hooks, config, etc.). Skip directories whose names contain a dot (they are AskMac backup artifacts, not real scripts):
 ```bash
 for dir in ~/.ask/scripts/*/; do
   id=$(basename "$dir")
+  [[ "$id" == *.* ]] && continue   # skip .previous and other AskMac backup dirs
   if [ ! -d "<repo-root>/ask/scripts/$id" ]; then
     setup="$dir/setup.py"
     if [ -f "$setup" ]; then
