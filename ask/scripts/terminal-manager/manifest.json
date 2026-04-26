@@ -2,7 +2,7 @@
   "id": "terminal-manager",
   "name": "Terminal Manager",
   "type": "system",
-  "version": "1.6.0",
+  "version": "2.0.0",
   "description": "Local terminal session registry and TUI detector. Tools are available to all scripts via AskMac MCP — not exposed to iPhone.",
   "entry": "main.py",
   "tools": [
@@ -92,6 +92,106 @@
         { "name": "prompt_pattern", "type": "string",  "required": false },
         { "name": "poll_interval",  "type": "number",  "required": false },
         { "name": "stable_count",   "type": "integer", "required": false }
+      ]
+    },
+    {
+      "name": "create_window",
+      "description": "Create a named tmux window in a session. Ensures the session exists first. Optionally runs a command inside the new window and sets its working directory. Returns the target string (session:window_name) you can pass to other tools.",
+      "params": [
+        { "name": "session",     "type": "string", "required": false },
+        { "name": "window_name", "type": "string", "required": true },
+        { "name": "command",     "type": "string", "required": false },
+        { "name": "cwd",         "type": "string", "required": false }
+      ]
+    },
+    {
+      "name": "destroy_window",
+      "description": "Kill a tmux window by target string. Sends Ctrl+C first unless force=true, then runs kill-window. Also unregisters any registered session whose tmux_target matches.",
+      "params": [
+        { "name": "target", "type": "string",  "required": true },
+        { "name": "force",  "type": "boolean", "required": false }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "description": "List all windows in a tmux session. Returns index, name, target, active flag, current command, and whether the pane is alive. Returns an empty list if the session doesn't exist.",
+      "params": [
+        { "name": "session", "type": "string", "required": false }
+      ]
+    },
+    {
+      "name": "rename_window",
+      "description": "Rename a tmux window. Pass the current target (session:name or session:index) and the new name. Raises an error if the window doesn't exist.",
+      "params": [
+        { "name": "target",   "type": "string", "required": true },
+        { "name": "new_name", "type": "string", "required": true }
+      ]
+    },
+    {
+      "name": "split_pane",
+      "description": "Split a tmux pane into two. direction='horizontal' places the new pane side-by-side; direction='vertical' stacks it above/below. Optionally runs a command in the new pane. Returns both the original target and the new pane's target string.",
+      "params": [
+        { "name": "target",    "type": "string",  "required": true },
+        { "name": "direction", "type": "string",  "required": false },
+        { "name": "command",   "type": "string",  "required": false },
+        { "name": "cwd",       "type": "string",  "required": false },
+        { "name": "percent",   "type": "integer", "required": false }
+      ]
+    },
+    {
+      "name": "pane_alive",
+      "description": "Check whether a tmux pane is still running. Returns alive=true/false. Use this to poll after launching a command to know when it exits.",
+      "params": [
+        { "name": "target", "type": "string", "required": true }
+      ]
+    },
+    {
+      "name": "get_pane_info",
+      "description": "Return full metadata for a tmux pane: pid, current command, alive state, width, height, tty, window name, and session name.",
+      "params": [
+        { "name": "target", "type": "string", "required": true }
+      ]
+    },
+    {
+      "name": "send_interrupt",
+      "description": "Send Ctrl+C to a tmux pane to interrupt the running process. Accepts either a direct tmux target string or a registered session_id (at least one is required).",
+      "params": [
+        { "name": "target",     "type": "string", "required": false },
+        { "name": "session_id", "type": "string", "required": false }
+      ]
+    },
+    {
+      "name": "wait_for_pattern",
+      "description": "Poll a tmux pane until a regex pattern matches in the recent output, then return the output. Use stable_count to require multiple consecutive matching reads before returning. Accepts target or session_id.",
+      "params": [
+        { "name": "target",         "type": "string",  "required": false },
+        { "name": "session_id",     "type": "string",  "required": false },
+        { "name": "pattern",        "type": "string",  "required": true },
+        { "name": "timeout",        "type": "number",  "required": false },
+        { "name": "poll_interval",  "type": "number",  "required": false },
+        { "name": "stable_count",   "type": "integer", "required": false },
+        { "name": "lines",          "type": "integer", "required": false }
+      ]
+    },
+    {
+      "name": "run_command",
+      "description": "Run a shell command in an ephemeral tmux window, wait for it to finish (shell prompt or pane exit), then return the full output. Set keep_window=true to leave the window open after the command completes.",
+      "params": [
+        { "name": "command",     "type": "string",  "required": true },
+        { "name": "session",     "type": "string",  "required": false },
+        { "name": "window_name", "type": "string",  "required": false },
+        { "name": "cwd",         "type": "string",  "required": false },
+        { "name": "timeout",     "type": "number",  "required": false },
+        { "name": "keep_window", "type": "boolean", "required": false }
+      ]
+    },
+    {
+      "name": "screenshot",
+      "description": "Capture the current state of a tmux pane as text (always) and optionally as a base64-encoded PNG image of the terminal window (format='image' or 'auto'). Accepts target or session_id.",
+      "params": [
+        { "name": "target",     "type": "string", "required": false },
+        { "name": "session_id", "type": "string", "required": false },
+        { "name": "format",     "type": "string", "required": false }
       ]
     }
   ]
