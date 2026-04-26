@@ -2,7 +2,7 @@
   "id": "terminal-manager",
   "name": "Terminal Manager",
   "type": "system",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Local terminal session registry and TUI detector. Tools are available to all scripts via AskMac MCP — not exposed to iPhone.",
   "entry": "main.py",
   "tools": [
@@ -192,6 +192,18 @@
         { "name": "target",     "type": "string", "required": false },
         { "name": "session_id", "type": "string", "required": false },
         { "name": "format",     "type": "string", "required": false }
+      ]
+    },
+    {
+      "name": "migrate_to_tmux",
+      "description": "Migrate a running terminal session (TTY) into a tmux-owned window. Detects the shell's cwd automatically, creates a named tmux window there, and updates the session record so all subsequent tool calls use tmux. Optionally runs a command in the new window (e.g. 'claude' to resume a Claude Code session). Pass session_id for a registered session, or tty directly for an unregistered one.",
+      "params": [
+        { "name": "session_id",  "type": "string", "required": false },
+        { "name": "tty",         "type": "string", "required": false },
+        { "name": "cwd",         "type": "string", "required": false },
+        { "name": "session",     "type": "string", "required": false },
+        { "name": "window_name", "type": "string", "required": false },
+        { "name": "command",     "type": "string", "required": false }
       ]
     }
   ]

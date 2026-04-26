@@ -1910,6 +1910,121 @@ class TerminalManager:
             _log(f'WARN _capture_terminal_image: {exc}')
             return None
 
+    async def _get_tty_cwd(self, tty: str) -> str:
+        """Return the cwd of the foreground shell process on a TTY, via lsof."""
+        short = tty.replace('/dev/', '')
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'ps', '-t', short, '-o', 'pid=,comm=',
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        except Exception:
+            return ''
+
+        shell_names = {'bash', 'zsh', 'fish', 'sh', 'tcsh', 'csh'}
+        shell_pid = None
+        first_pid = None
+        for line in stdout.decode().splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) < 2:
+                continue
+            pid_str, comm = parts
+            comm_base = comm.split('/')[-1].lstrip('-')
+            if first_pid is None:
+                first_pid = pid_str
+            if comm_base in shell_names and shell_pid is None:
+                shell_pid = pid_str
+
+        target_pid = shell_pid or first_pid
+        if not target_pid:
+            return ''
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'lsof', '-p', target_pid, '-d', 'cwd', '-Fn',
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            for line in stdout.decode().splitlines():
+                if line.startswith('n') and line[1:].startswith('/'):
+                    return line[1:]
+        except Exception:
+            pass
+        return ''
+
+    async def _tool_migrate_to_tmux(self, params: dict) -> dict:
+        """Migrate a terminal session (TTY) to a tmux-owned window.
+
+        Detects the cwd of the shell on the TTY, creates a new tmux window
+        there, and updates (or creates) the session record to point at tmux.
+        The original TTY entry is cleared so all subsequent tool calls use
+        the tmux path automatically.
+
+        params:
+          session_id   — registered session to migrate (provides tty automatically)
+          tty          — TTY device path, e.g. /dev/ttys003 (used when no session_id)
+          cwd          — override cwd detection
+          session      — tmux session name (default 'ask')
+          window_name  — tmux window name (default: basename of cwd)
+          command      — command to run in the new window (e.g. 'claude')
+        """
+        session_id = params.get('session_id', '')
+        tty = params.get('tty', '')
+        cwd = params.get('cwd', '')
+        tmux_session = params.get('session', 'ask')
+        command = params.get('command', '')
+        window_name = params.get('window_name', '')
+
+        source = None
+        if session_id:
+            source = self._sessions.get(session_id)
+            if not source:
+                raise ValueError(f'Unknown session: {session_id!r}')
+            tty = tty or source.tty
+
+        if not tty:
+            raise ValueError('session_id (with a registered tty) or tty required')
+
+        if not cwd:
+            cwd = await self._get_tty_cwd(tty)
+            _log(f'migrate_to_tmux: detected cwd={cwd!r} from tty={tty!r}')
+
+        if not window_name:
+            window_name = os.path.basename(cwd.rstrip('/')) if cwd else 'terminal'
+
+        result = await self._tool_create_window({
+            'session': tmux_session,
+            'window_name': window_name,
+            'command': command,
+            'cwd': cwd,
+        })
+        target = result['target']
+
+        if source:
+            source.tty = ''
+            source.tmux_target = target
+            source.session_type = 'tmux'
+            source.terminal_app = ''
+        else:
+            new_sid = f'migrated:{os.path.basename(tty)}'
+            self._sessions[new_sid] = Session(
+                session_id=new_sid,
+                app_id='migrated',
+                tty='',
+                tmux_target=target,
+            )
+            session_id = new_sid
+
+        _log(f'migrate_to_tmux: {tty!r} → {target!r} cwd={cwd!r}')
+        return {
+            'target': target,
+            'session_id': session_id,
+            'cwd': cwd,
+            'window': window_name,
+            'tmux_session': tmux_session,
+        }
+
     # -----------------------------------------------------------------------
     # I/O dispatch
     # -----------------------------------------------------------------------
