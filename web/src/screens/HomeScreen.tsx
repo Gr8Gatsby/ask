@@ -346,6 +346,7 @@ function AlertChip({ blocks, onClick }: { blocks: Block[]; onClick: () => void }
 export default function HomeScreen() {
   const navigate = useNavigate()
   const { scriptGroups, loading, error, respond } = useBlocks()
+  const { selectedMachineID, hiddenMachineIDs } = useSettings()
   const theme = useTheme()
 
   if (loading) {
@@ -360,7 +361,21 @@ export default function HomeScreen() {
     )
   }
 
-  const entries = Object.entries(scriptGroups)
+  const visibleGroups: Record<string, Block[]> = (selectedMachineID || hiddenMachineIDs.size > 0)
+    ? Object.fromEntries(
+        Object.entries(scriptGroups)
+          .map(([id, blocks]): [string, Block[]] => [
+            id,
+            blocks.filter(b =>
+              (!selectedMachineID || b.machineID === selectedMachineID) &&
+              !hiddenMachineIDs.has(b.machineID)
+            ),
+          ])
+          .filter(([, blocks]) => blocks.length > 0)
+      )
+    : scriptGroups
+
+  const entries = Object.entries(visibleGroups)
   const needsResponseGroups = entries
     .filter(([, blocks]) => blocks.some(b => b.showsInInbox === 1) || !!pendingAgentSession(blocks))
     .sort(([, a], [, b]) => {

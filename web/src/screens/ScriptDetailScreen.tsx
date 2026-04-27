@@ -71,7 +71,7 @@ export default function ScriptDetailScreen() {
   const isLight = themeMode === 'light'
   const { blocks: allBlocks, respond } = useBlocks()
   const { setAction } = useStartSession()
-  const { useBrandColors } = useSettings()
+  const { useBrandColors, showBlockDebugInfo } = useSettings()
   const { setBrandColor: setAppBrandColor } = useBrandColor()
   const blocks = allBlocks.filter(b => b.scriptID === scriptID)
   const first = blocks[0]
@@ -129,7 +129,7 @@ export default function ScriptDetailScreen() {
           {/* Header blocks */}
           {headerBlocks.map(block => (
             <div key={block.blockID} className="px-4 py-3 border-b border-ask-sep">
-              <BlockRenderer block={block} onRespond={respond} />
+              <BlockRenderer block={block} onRespond={respond} showDebugInfo={showBlockDebugInfo} />
             </div>
           ))}
 
@@ -167,7 +167,7 @@ export default function ScriptDetailScreen() {
                         <div key={conf.blockID}>
                           <div className={theme.isAndroid ? 'border-t border-ask-sep' : 'h-px bg-ask-sep/50 ml-8'} />
                           <div className="pl-8 pr-4 py-3 bg-ask-orange/5">
-                            <BlockRenderer block={conf} onRespond={respond} />
+                            <BlockRenderer block={conf} onRespond={respond} showDebugInfo={showBlockDebugInfo} />
                           </div>
                         </div>
                       ))}
