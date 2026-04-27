@@ -318,6 +318,7 @@ def main():
     print('  r                — detect_tui')
     print('  R                — read_output (last 30 lines)')
     print('  ls               — list_sessions')
+    print('  lw [session]     — list_windows (default: ask)')
     print('  sw               — switch terminal')
     print('  k <key>          — send_key (up/down/enter/escape/ctrl_c/ctrl_u)')
     print('  t <text>         — send_text (Ctrl+U, type, Enter)')
@@ -325,6 +326,15 @@ def main():
     print('  inj <text>       — inject_tty (TIOCSTI, no clipboard/focus)')
     print('  fw               — focus_window')
     print('  w [timeout]      — wait_for_idle (default 30s)')
+    print('  wp <pat> [sec]   — wait_for_pattern <regex> [timeout]')
+    print('  alive <target>   — pane_alive check')
+    print('  info <target>    — get_pane_info')
+    print('  new <name> [cmd] — create_window in ask: session')
+    print('  del <target>     — destroy_window')
+    print('  run <cmd>        — run_command (ephemeral window)')
+    print('  int <target>     — send_interrupt')
+    print('  snap [target]    — screenshot (text; image if terminal window found)')
+    print('  mig              — migrate_to_tmux (current session)')
     print('  q                — quit')
     print()
 
@@ -415,6 +425,116 @@ def main():
                 print(result.get('output', ''))
             else:
                 print('  → Timed out — session not idle')
+            print()
+
+        elif cmd.startswith('lw'):
+            parts = cmd.split()
+            sess = parts[1] if len(parts) > 1 else 'ask'
+            result = client.call('list_windows', {'session': sess})
+            wins = result.get('windows', [])
+            if not wins:
+                print(f'  → No windows in session {sess!r} (or session does not exist)')
+            else:
+                for w in wins:
+                    alive = '✓' if w.get('alive') else '✗'
+                    active = '▶' if w.get('active') else ' '
+                    print(f'  {active} {alive} {w["target"]}  cmd={w["command"]}')
+            print()
+
+        elif cmd.startswith('alive '):
+            target = cmd[6:].strip()
+            result = client.call('pane_alive', {'target': target})
+            print(f'  → {pretty(result)}')
+            print()
+
+        elif cmd.startswith('info '):
+            target = cmd[5:].strip()
+            result = client.call('get_pane_info', {'target': target})
+            print(f'  → {pretty(result)}')
+            print()
+
+        elif cmd.startswith('new '):
+            parts = cmd[4:].split(None, 1)
+            name = parts[0]
+            command = parts[1] if len(parts) > 1 else ''
+            result = client.call('create_window', {
+                'session': 'ask', 'window_name': name,
+                'command': command,
+                'cwd': os.getcwd(),
+            })
+            print(f'  → {pretty(result)}')
+            print()
+
+        elif cmd.startswith('del '):
+            target = cmd[4:].strip()
+            result = client.call('destroy_window', {'target': target})
+            print(f'  → {pretty(result)}')
+            print()
+
+        elif cmd.startswith('run '):
+            command = cmd[4:]
+            print(f'  Running in ephemeral window: {command!r}')
+            result = client.call('run_command', {
+                'command': command,
+                'cwd': os.getcwd(),
+                'timeout': 30,
+            })
+            print(f'  elapsed={result.get("elapsed"):.1f}s  timed_out={result.get("timed_out")}')
+            print('─── output ───')
+            print(result.get('output', ''))
+            print()
+
+        elif cmd.startswith('int '):
+            target = cmd[4:].strip()
+            result = client.call('send_interrupt', {'target': target})
+            print(f'  → {pretty(result)}')
+            print()
+
+        elif cmd.startswith('snap'):
+            parts = cmd.split(None, 1)
+            target_arg = parts[1].strip() if len(parts) > 1 else None
+            call_args = {'format': 'auto'}
+            if target_arg:
+                call_args['target'] = target_arg
+            else:
+                call_args['session_id'] = session_id
+            result = client.call('screenshot', call_args)
+            has_image = 'image' in result
+            text = result.get('text', '')
+            print(f'  → target={result.get("target")}  has_image={has_image}')
+            print('─── text snapshot ───')
+            for line in text.splitlines()[-20:]:
+                print(f'  {line}')
+            if has_image:
+                img = result['image']
+                print(f'  image: {img["format"]} {img["encoding"]} ({len(img["data"])} chars)')
+            print()
+
+        elif cmd.startswith('wp '):
+            parts = cmd[3:].split(None, 1)
+            pattern = parts[0]
+            timeout = int(parts[1]) if len(parts) > 1 else 15
+            print(f'  Waiting up to {timeout}s for pattern {pattern!r}...')
+            result = client.call('wait_for_pattern', {
+                'session_id': session_id,
+                'pattern': pattern,
+                'timeout': timeout,
+                'stable_count': 1,
+            })
+            print(f'  → matched={result.get("matched")} timed_out={result.get("timed_out")}')
+            if result.get('matched'):
+                print(result.get('output', '')[-500:])
+            print()
+
+        elif cmd == 'mig':
+            result = client.call('migrate_to_tmux', {
+                'session_id': session_id,
+                'session': 'ask',
+            })
+            print(f'  → {pretty(result)}')
+            if 'target' in result:
+                print(f'  Session is now tmux-managed: {result["target"]}')
+                print(f'  cwd detected: {result.get("cwd")}')
             print()
 
         else:

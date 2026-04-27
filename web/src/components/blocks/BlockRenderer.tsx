@@ -18,6 +18,7 @@ import FeedItemBlock from './FeedItemBlock'
 import QuickReplyBlock from './QuickReplyBlock'
 import SessionEventBlock from './SessionEventBlock'
 import ActivityFeedBlock from './ActivityFeedBlock'
+import ImageBlock from './ImageBlock'
 
 interface Props {
   block: Block
@@ -55,6 +56,7 @@ export default function BlockRenderer({ block, onRespond }: Props) {
     case 'quick_reply':    return wrap(block.blockID, block.blockType, <QuickReplyBlock      block={block} payload={p as never} onRespond={onRespond} />)
     case 'session_event':  return wrap(block.blockID, block.blockType, <SessionEventBlock    payload={p as never} />)
     case 'activity_feed':  return wrap(block.blockID, block.blockType, <ActivityFeedBlock    payload={p as never} />)
+    case 'image':         return wrap(block.blockID, block.blockType, <ImageBlock          payload={p as never} />)
     case 'tile':           return null  // Tile blocks render only as home-screen tiles, not in block list
     default:
       return wrap(block.blockID, block.blockType,

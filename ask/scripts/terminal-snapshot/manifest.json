@@ -1,0 +1,21 @@
+{
+  "id": "terminal-snapshot",
+  "name": "Terminal Snapshot",
+  "version": "1.0.0",
+  "type": "tile",
+  "entry": "main.py",
+  "setup": "setup.py",
+  "description": "Capture the current state of any tmux terminal pane — text and image",
+  "icon": "terminal",
+  "icon_file": "icon.svg",
+  "script_dependencies": ["terminal-manager"],
+  "tools": [
+    {
+      "name": "snapshot",
+      "description": "Capture the current text and image of a tmux pane.",
+      "params": [
+        { "name": "target", "type": "string", "required": true }
+      ]
+    }
+  ]
+}
