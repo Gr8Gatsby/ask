@@ -328,7 +328,10 @@ class Claude3:
             self._start_choices[path] = {'repo_path': path}
             choices.append({'name': name, 'path': path, 'value': path})
         payload = {'repos': choices or [{'name': '(no repos found)', 'path': '', 'value': ''}]}
-        await self.emit_block(START_BLOCK_ID, 'start_session', payload, ttl=600)
+        # Clear dedup cache so TTL refreshes on every emit (block expires if not refreshed)
+        self._emitted_payloads.pop(START_BLOCK_ID, None)
+        await self.emit_block(START_BLOCK_ID, 'start_session', payload, ttl=3600)
+        _log(f'emitted start_session block with {len(choices)} repos')
 
     async def _emit_session_block(self, session: SessionRecord):
         is_tmux = bool(session.tmux_target)
@@ -1182,6 +1185,7 @@ class Claude3:
         self._post_restart_reset_done = True
         _save_registry(self._registry)
         await self._emit_tile()
+        await self._emit_start_session_block()
 
     async def _heartbeat(self):
         while True:
