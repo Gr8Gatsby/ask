@@ -71,14 +71,17 @@ class TerminalSnapshot:
     # ------------------------------------------------------------------
 
     async def _put_block(self, block_id: str, block_type: str, payload: dict,
-                         requires_response: bool = False, ttl: int = 3600):
-        await self._call_tool('put_block', {
-            'blockId': block_id,
-            'blockType': block_type,
-            'payload': json.dumps(payload),
-            'requiresResponse': requires_response,
-            'ttl': ttl,
-        })
+                         inbox: bool = False, ttl: int = None):
+        args = {'blockId': block_id, 'blockType': block_type, 'payload': payload}
+        if ttl is not None:
+            args['ttl'] = ttl
+        if inbox:
+            args['inbox'] = True
+        try:
+            await self._call_tool('emit_block', args)
+            _log(f'emit_block OK: {block_id} ({block_type})')
+        except Exception as e:
+            _log(f'emit_block FAILED: {block_id} ({block_type}): {e}', 'ERROR')
 
     async def _clear_block(self, block_id: str):
         try:
@@ -116,7 +119,7 @@ class TerminalSnapshot:
         await self._put_block(PICKER_ID, 'quick_reply', {
             'title': 'Select a pane to snapshot',
             'options': panes,
-        }, requires_response=True)
+        })
 
     # ------------------------------------------------------------------
     # Snapshot
@@ -168,7 +171,7 @@ class TerminalSnapshot:
                 'title': f'{target} — terminal output',
                 'body': '\n'.join(lines),
                 'actions': ['Refresh'],
-            }, requires_response=True, ttl=600)
+            }, ttl=600)
 
         # Re-show picker so user can capture another pane
         await self._emit_picker(self._panes)
@@ -271,19 +274,27 @@ class TerminalSnapshot:
     # ------------------------------------------------------------------
 
     async def run(self):
+        _log('starting up')
+        stdin_task = asyncio.create_task(self._read_stdin())
+
+        _log('sending initialize')
         await self._rpc('initialize', {
             'protocolVersion': '2024-11-05',
             'clientInfo': {'name': 'terminal-snapshot', 'version': '1.0.0'},
             'capabilities': {},
         })
+        _log('initialize OK')
         self._write({'jsonrpc': '2.0', 'method': 'notifications/initialized', 'params': {}})
 
         panes = await self._refresh_panes()
+        _log(f'panes: {panes}')
         await self._emit_tile(panes)
+        _log('tile emitted')
         await self._emit_picker(panes)
+        _log('picker emitted')
 
         asyncio.create_task(self._heartbeat())
-        await self._read_stdin()
+        await stdin_task
 
 
 if __name__ == '__main__':

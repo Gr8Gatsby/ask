@@ -134,19 +134,23 @@ async def _detect_terminal_for_tty(tty: str) -> str:
         if len(checked) > 40:
             break
         try:
+            # Use 'pid=,ppid=,command=' — 'comm=' truncates long paths on macOS
             r = subprocess.run(
-                ['ps', '-p', str(pid), '-o', 'comm=,ppid='],
+                ['ps', '-p', str(pid), '-o', 'pid=,ppid=,command='],
                 capture_output=True, text=True, timeout=1,
             )
-            parts = r.stdout.strip().split()
-            if not parts:
+            line = r.stdout.strip()
+            if not line:
                 continue
-            comm = parts[0].split('/')[-1]
+            parts = line.split(None, 2)  # [pid, ppid, command]
+            if len(parts) < 3:
+                continue
+            comm = parts[2].split('/')[-1].split()[0]  # basename, drop args
+            ppid = int(parts[1]) if parts[1].isdigit() else 0
             for app in TERMINAL_APP_NAMES:
                 if comm.lower() == app.lower() or comm.lower().startswith(app.lower()):
                     _dbg(f'  [detect_terminal] tty={tty} → {app} (pid={pid} comm={comm!r})')
                     return app
-            ppid = int(parts[-1]) if len(parts) >= 2 and parts[-1].isdigit() else 0
             if ppid > 1:
                 to_check.append(ppid)
         except Exception:
@@ -1856,29 +1860,26 @@ class TerminalManager:
     async def _capture_terminal_image(self, target: str):
         """Capture a PNG screenshot of the terminal window hosting the given tmux pane."""
         try:
-            # Step 1: get pane TTY
+            # Step 1: find terminal app via tmux client TTYs (pane TTY leads to tmux server,
+            # not the terminal emulator — client TTY leads to iTerm2/Terminal.app)
             proc = await asyncio.create_subprocess_exec(
-                TMUX, 'display-message', '-t', target, '-p', '#{pane_tty}',
+                TMUX, 'list-clients', '-F', '#{client_tty}',
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
-            tty = stdout.decode().strip()
-            if not tty:
-                return None
-            # Step 2: detect terminal app
-            app = await _detect_terminal_for_tty(tty)
+            client_ttys = [t.strip() for t in stdout.decode().splitlines() if t.strip()]
+
+            app = 'unknown'
+            for tty in client_ttys:
+                detected = await _detect_terminal_for_tty(tty)
+                if detected != 'unknown':
+                    app = detected
+                    break
             if app == 'unknown':
                 return None
-            # Step 3: get window ID via osascript
-            script = (
-                f'tell application "System Events"\n'
-                f'    if not (exists process "{app}") then return ""\n'
-                f'    tell process "{app}"\n'
-                f'        if (count of windows) = 0 then return ""\n'
-                f'        return id of front window\n'
-                f'    end tell\n'
-                f'end tell'
-            )
+            # Step 3: get CGWindowID by asking the app directly (System Events
+            # can't return CGWindowID for some apps like Terminal.app)
+            script = f'tell application "{app}" to return id of front window'
             proc = await asyncio.create_subprocess_exec(
                 'osascript', '-e', script,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,

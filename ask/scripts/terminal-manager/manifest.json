@@ -2,7 +2,7 @@
   "id": "terminal-manager",
   "name": "Terminal Manager",
   "type": "system",
-  "version": "2.1.0",
+  "version": "2.1.3",
   "description": "Local terminal session registry and TUI detector. Tools are available to all scripts via AskMac MCP — not exposed to iPhone.",
   "entry": "main.py",
   "tools": [
