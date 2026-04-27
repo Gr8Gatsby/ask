@@ -1185,7 +1185,10 @@ class Claude3:
         self._post_restart_reset_done = True
         _save_registry(self._registry)
         await self._emit_tile()
-        await self._emit_start_session_block()
+        try:
+            await self._emit_start_session_block()
+        except Exception as exc:
+            _log(f'start_session emit error: {exc}', 'WARN')
 
     async def _heartbeat(self):
         while True:
