@@ -193,6 +193,7 @@ class Claude3:
         self._pending_tmux_by_cwd: dict[str, str] = {}  # cwd → tmux_target for in-flight launches
         self._initialized = False
         self._emitted_payloads: dict[str, str] = {}  # block_id → last serialized payload
+        self._post_restart_reset_done = False  # reset transient states once after restart
 
     # ------------------------------------------------------------------
     # MCP JSON-RPC primitives
@@ -589,7 +590,9 @@ class Claude3:
         settings['recent_repos'] = recent[:5]
         _save_json(settings_path, settings)
 
-        await self.clear_block(START_BLOCK_ID)
+        # Don't clear START_BLOCK_ID here — _handle_session_start re-emits it once
+        # the session connects. If we clear it now and the hook is delayed, the "+"
+        # button disappears permanently.
         _log(f'Launched Claude Code in tmux for {project}: {tmux_target}')
         return tmux_target
 
@@ -1168,13 +1171,15 @@ class Claude3:
                 except Exception as exc:
                     _log(f'TTY-gone cleanup error for {session.session_id}: {exc}', 'WARN')
             else:
-                # Reset transient working states on refresh so sessions don't get
-                # stuck showing "Running Tool" after a daemon restart.
-                if session.state in ('running_tool', 'awaiting_user') and not session.tty:
-                    session.state = 'idle'
-                    session.current_tool = ''
-                    session.preview = ''
+                # On the first refresh after a daemon restart, reset all transient
+                # working states — they can't be re-hydrated from saved state alone.
+                if not self._post_restart_reset_done:
+                    if session.state in ('running_tool', 'awaiting_user', 'starting'):
+                        session.state = 'idle'
+                        session.current_tool = ''
+                        session.preview = ''
                 await self._emit_session_block(session)
+        self._post_restart_reset_done = True
         _save_registry(self._registry)
         await self._emit_tile()
 
