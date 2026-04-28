@@ -9,6 +9,7 @@ import SessionChatScreen from './screens/SessionChatScreen'
 import TaskFeedScreen from './screens/TaskFeedScreen'
 import TaskThreadScreen from './screens/TaskThreadScreen'
 import SettingsScreen from './screens/SettingsScreen'
+import DebugScreen from './screens/DebugScreen'
 
 export default function App() {
   return (
@@ -25,6 +26,7 @@ export default function App() {
             <Route path="/tasks" element={<TaskFeedScreen />} />
             <Route path="/tasks/:taskID" element={<TaskThreadScreen />} />
             <Route path="/settings" element={<SettingsScreen />} />
+            <Route path="/debug" element={<DebugScreen />} />
           </Routes>
         </AppShell>
       </BrowserRouter>

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { usePlatform } from '../lib/PlatformContext'
 import { useSettings } from '../lib/SettingsContext'
 import { getMachines } from '../lib/api'
@@ -216,6 +217,7 @@ function ComputerFilterSheet({
 // ---- Screen ----
 
 export default function SettingsScreen() {
+  const navigate = useNavigate()
   const { platform, themeMode } = usePlatform()
   const isAndroid = platform === 'android'
 
@@ -298,6 +300,11 @@ export default function SettingsScreen() {
         <AndroidCategoryHeader label="Developer" />
         <AndroidPref title="Show Debug Info on Cards" summary="Show block ID, type, and timestamp on cards" last={false}>
           <AndroidToggle on={showBlockDebugInfo} onToggle={() => setShowBlockDebugInfo(!showBlockDebugInfo)} />
+        </AndroidPref>
+        <AndroidPref title="Debug Console" summary="Live event log, blocks, and sessions" onTap={() => navigate('/debug')}>
+          <svg width="8" height="13" viewBox="0 0 8 13" fill="none" className="text-ask-secondary/50">
+            <path d="M1 1l6 5.5L1 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
         </AndroidPref>
         <AndroidPref title="CloudKit Environment" summary="Development" />
         <AndroidPref title="App Version" summary="0.1.0 (1)" last />
@@ -397,6 +404,8 @@ export default function SettingsScreen() {
             <IOSRow label="Show Debug Info on Cards">
               <IOSToggle on={showBlockDebugInfo} onToggle={() => setShowBlockDebugInfo(!showBlockDebugInfo)} />
             </IOSRow>
+            <IOSSep />
+            <IOSRow label="Debug Console" chevron onTap={() => navigate('/debug')} />
             <IOSSep />
             <IOSRow label="CloudKit Environment" value="Development" />
             <IOSSep />

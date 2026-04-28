@@ -37,6 +37,7 @@ function readSnapshotBlocks(): Block[] {
 
 let blocks: Block[] = readSnapshotBlocks()
 let sseClients: ServerResponse[] = []
+let debugClients: ServerResponse[] = []
 let feedSeq = 100
 
 function rebuildBlocks() {
@@ -58,6 +59,7 @@ function rebuildBlocks() {
 
   blocks = newBlocks
   console.log(`[MockAskMac] snapshot refreshed — ${blocks.length} block(s)`)
+  broadcastDebug('snapshot_reload', { blockCount: String(blocks.length) })
 }
 
 // Watch the snapshot file for live AskMac updates
@@ -124,10 +126,16 @@ async function respondDaemon(scriptID: string, sessionID: string, value: string)
   const socketPath = SOCKETS[scriptID]
   if (!socketPath) {
     console.warn(`[MockAskMac] no socket path for script ${scriptID}`)
+    broadcastDebug('socket_error', { scriptID, sessionID, error: 'no socket path configured' })
     return
   }
   console.log(`[MockAskMac] ui_respond scriptID=${scriptID} session=${sessionID} value="${value}"`)
-  await sendToSocket(socketPath, { type: 'ui_respond', session_id: sessionID, value })
+  broadcastDebug('socket_sent', { scriptID, sessionID, value })
+  try {
+    await sendToSocket(socketPath, { type: 'ui_respond', session_id: sessionID, value })
+  } catch (e) {
+    broadcastDebug('socket_error', { scriptID, sessionID, error: String(e) })
+  }
 }
 
 // ── Brew fixture simulation (kept for brew-quick-reply testing) ───────────────
@@ -232,6 +240,13 @@ function broadcast(eventName: string, data: unknown) {
   })
 }
 
+function broadcastDebug(type: string, data: Record<string, string>) {
+  const payload = `event: debug\ndata: ${JSON.stringify({ type, data })}\n\n`
+  debugClients = debugClients.filter(client => {
+    try { client.write(payload); return true } catch { return false }
+  })
+}
+
 function setCORS(res: ServerResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
@@ -274,6 +289,18 @@ const server = http.createServer(async (req, res) => {
     return
   }
 
+  if (req.method === 'GET' && p === '/debug/events') {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    })
+    res.write(': debug connected\n\n')
+    debugClients.push(res)
+    req.on('close', () => { debugClients = debugClients.filter(c => c !== res) })
+    return
+  }
+
   const respondMatch = p.match(/^\/respond\/(.+)$/)
   if (req.method === 'POST' && respondMatch) {
     const blockID = respondMatch[1]
@@ -284,6 +311,7 @@ const server = http.createServer(async (req, res) => {
     // Find the block to determine its scriptID, then route to the right daemon
     const block = blocks.find(b => b.blockID === blockID)
     const scriptID = block?.scriptID ?? ''
+    broadcastDebug('respond_received', { blockID, value, scriptID })
 
     if (scriptID in SOCKETS) {
       // Forward to live daemon, then clear if it was a stop request
