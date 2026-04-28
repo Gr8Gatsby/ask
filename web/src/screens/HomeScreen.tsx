@@ -87,7 +87,7 @@ function useCountdownDisplay(isoTime: string | undefined): string | null {
 function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; blocks: Block[]; onRespond: (id: string, v: string) => void }) {
   const navigate = useNavigate()
   const theme = useTheme()
-  const { useBrandColors } = useSettings()
+  const { useBrandColors, showBlockDebugInfo } = useSettings()
   const first = blocks[0]
   const { color, label, body } = tileStatus(blocks)
   const inboxBlocks = blocks.filter(b => b.showsInInbox === 1)
@@ -171,6 +171,13 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
       {agentSession && agentPayload && (
         <>
           <div className="h-px bg-ask-sep mx-3.5" />
+          {showBlockDebugInfo && (
+            <div className="px-3.5 pt-1.5 pb-0 flex items-center gap-2 flex-wrap">
+              <span className="font-mono text-[9px] text-ask-secondary/60">{agentPayload.session_id}</span>
+              {agentPayload.tmux_target && <span className="font-mono text-[9px] text-ask-secondary/60">{agentPayload.tmux_target}</span>}
+              {agentPayload.tty && <span className="font-mono text-[9px] text-ask-secondary/60">{agentPayload.tty}</span>}
+            </div>
+          )}
           <div
             className="flex items-center gap-2 px-3.5 py-2"
             data-block-id={agentSession.blockID}

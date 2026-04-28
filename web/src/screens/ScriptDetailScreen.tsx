@@ -27,6 +27,7 @@ function SessionRow({
   isAndroid: boolean
 }) {
   const payload = parsePayload<AgentSessionPayload>(block.payload)
+  const { showBlockDebugInfo } = useSettings()
   if (!payload) return null
 
   return (
@@ -46,6 +47,11 @@ function SessionRow({
             ? `${payload.agent_name ?? 'Claude'} is working…`
             : (payload.last_message?.split('\n').find(l => l.trim()) ?? 'Session started')}
         </p>
+        {showBlockDebugInfo && (
+          <p className="font-mono text-[9px] text-ask-secondary/50 truncate">
+            {payload.session_id}{payload.tmux_target ? ` · ${payload.tmux_target}` : ''}{payload.tty ? ` · ${payload.tty}` : ''}
+          </p>
+        )}
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
         {confirmationCount > 0 && (
