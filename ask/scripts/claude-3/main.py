@@ -16,6 +16,7 @@ import asyncio
 import datetime
 import json
 import os
+import shlex
 import sys
 import tempfile
 import uuid
@@ -570,15 +571,20 @@ class Claude3:
         """
         repo_path = os.path.expanduser(repo_path)
         project = os.path.basename(repo_path.rstrip('/'))
-        socket_quoted = SOCKET_PATH.replace("'", "'\\''")
-        env_cmd = f"ASK_SOCKET_PATH='{socket_quoted}' claude"
+        shell = os.environ.get('SHELL', '/bin/zsh')
+        shell_cmd = (
+            f'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; '
+            f'export ASK_SOCKET_PATH={shlex.quote(SOCKET_PATH)}; '
+            f'cd {shlex.quote(repo_path)} && exec claude'
+        )
+        env_cmd = f'{shell} -l -c {shlex.quote(shell_cmd)}'
         try:
             result = await self._call_tool('create_window', {
                 'session': 'ask',
                 'window_name': project,
                 'command': env_cmd,
                 'cwd': repo_path,
-            }, timeout=15.0)
+            }, timeout=30.0)
             tmux_target = result.get('target', f'ask:{project}') if isinstance(result, dict) else f'ask:{project}'
         except Exception as e:
             _log(f'launch_in_tmux failed for {project}: {e}', 'WARN')
@@ -1236,6 +1242,9 @@ class Claude3:
                 if session:
                     block_id = self._session_block_id(sid)
                     await self._handle_block_response(block_id, value)
+                else:
+                    # sid may be a block_id directly (e.g. claude3-start for start_session)
+                    await self._handle_block_response(sid, value)
                 writer.write(json.dumps({'ok': True}).encode())
                 await writer.drain()
         except Exception as exc:

@@ -348,6 +348,7 @@ export default function HomeScreen() {
   const { scriptGroups, loading, error, respond } = useBlocks()
   const { selectedMachineID, hiddenMachineIDs } = useSettings()
   const theme = useTheme()
+  const { themeMode } = usePlatform()
 
   if (loading) {
     return <div className="flex items-center justify-center h-full text-ask-secondary text-sm">Connecting…</div>
@@ -361,7 +362,7 @@ export default function HomeScreen() {
     )
   }
 
-  const visibleGroups: Record<string, Block[]> = (selectedMachineID || hiddenMachineIDs.size > 0)
+  const filteredGroups: Record<string, Block[]> = (selectedMachineID || hiddenMachineIDs.size > 0)
     ? Object.fromEntries(
         Object.entries(scriptGroups)
           .map(([id, blocks]): [string, Block[]] => [
@@ -374,6 +375,10 @@ export default function HomeScreen() {
           .filter(([, blocks]) => blocks.length > 0)
       )
     : scriptGroups
+  // If filters produce no results but there are actual blocks, fall back to unfiltered
+  const visibleGroups = (Object.keys(filteredGroups).length === 0 && Object.keys(scriptGroups).length > 0)
+    ? scriptGroups
+    : filteredGroups
 
   const entries = Object.entries(visibleGroups)
   const needsResponseGroups = entries
@@ -388,7 +393,6 @@ export default function HomeScreen() {
     !blocks.some(b => b.showsInInbox === 1) && !pendingAgentSession(blocks)
   )
 
-  const { themeMode } = usePlatform()
   const isLight = themeMode === 'light'
   const scrollContent = (
     <>
