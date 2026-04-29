@@ -11,7 +11,6 @@
       <sparkle:version>1777482991</sparkle:version>
       <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <sparkle:channel>beta</sparkle:channel>
       <pubDate>Wed, 29 Apr 2026 17:19:22 +0000</pubDate>
       <enclosure
         url="https://github.com/Gr8Gatsby/ask/releases/download/v1.1.0/AskMac-1.1.0.dmg"
