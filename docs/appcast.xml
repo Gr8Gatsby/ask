@@ -13,10 +13,10 @@
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <pubDate>Wed, 29 Apr 2026 17:19:22 +0000</pubDate>
       <enclosure
-        url="https://github.com/Gr8Gatsby/ask/releases/download/v1.1.0/AskMac-1.1.0.dmg"
-        length="3755609"
-        type="application/octet-stream"
-        sparkle:edSignature="3sdvVqD+tMc02tXPNCAM1KCdlNK/hS4piop8/Z99oIVweYPAGVLLSXPAeCHzea9UI56ZYHL5gkUSh/h3WF/ICw=="
+        url="https://github.com/Gr8Gatsby/ask/releases/download/v1.1.0/AskMac-1.1.0.app.zip"
+        length="3849662"
+        type="application/zip"
+        sparkle:edSignature="KyKGgM3tctM2ffPtYSCZ2Ja+Eg6ew4wsVOV8OHEx1RFD7cm8YJn4TJOsEaPSX8xf2orBJxAgEgM8T5JjbsH9Aw=="
       />
     </item>
     <item>
