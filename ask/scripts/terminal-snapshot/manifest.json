@@ -1,7 +1,7 @@
 {
   "id": "terminal-snapshot",
   "name": "Terminal Snapshot",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "type": "tile",
   "entry": "main.py",
   "setup": "setup.py",

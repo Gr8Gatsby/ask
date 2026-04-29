@@ -1377,7 +1377,13 @@ class TerminalManager:
 
     async def _tool_send_text(self, args: dict) -> dict:
         sid = args.get('session_id', '')
+        target = args.get('target', '')
         text = args.get('text', '')
+        # Direct tmux target (no session_id needed) — same pattern as send_interrupt
+        if not sid and target:
+            _log(f'send_text target={target!r} text={text!r}')
+            ok = await _tmux_send_text(target, text)
+            return {'ok': ok}
         session = self._sessions.get(sid)
         if not session:
             raise ValueError(f'Unknown session: {sid}')
@@ -1557,16 +1563,19 @@ class TerminalManager:
         command = params.get('command', '')
         cwd = params.get('cwd', '')
         await self._tmux_ensure_session(session, cwd)
-        cmd = [TMUX, 'new-window', '-t', session, '-n', window_name]
+        # Use -P -F to capture the new window's unique ID so the target is
+        # unambiguous even when multiple windows share the same name.
+        cmd = [TMUX, 'new-window', '-t', session, '-n', window_name,
+               '-P', '-F', f'{session}:@#{{window_id}}']
         if cwd:
             cmd += ['-c', cwd]
         if command:
             cmd.append(command)
         proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
         )
-        await asyncio.wait_for(proc.communicate(), timeout=10)
-        target = f'{session}:{window_name}'
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        target = stdout.decode().strip() or f'{session}:{window_name}'
         _log(f'_tool_create_window: created {target!r}')
         return {'target': target, 'session': session, 'window': window_name}
 
@@ -1673,11 +1682,22 @@ class TerminalManager:
         return {'ok': True, 'target': target, 'new_pane': new_target, 'direction': direction}
 
     async def _tool_pane_alive(self, params: dict) -> dict:
-        """Check whether a tmux pane is still running (not dead)."""
+        """Check whether a tmux pane is still running (not dead).
+
+        tmux display-message silently falls back to the active window when the
+        target doesn't exist (exit 0, no error). We guard against that by also
+        verifying the returned window name/ID matches the requested target.
+        """
         target = params['target']
+        # Format: 'session:window_ref' where window_ref is a name or '@<id>'
+        colon = target.find(':')
+        window_ref = target[colon + 1:] if colon != -1 else target
+        is_id_target = window_ref.startswith('@')
+        # Fetch both pane_dead and the actual window identifier in one call
+        fmt = '#{pane_dead}\t#{window_id}' if is_id_target else '#{pane_dead}\t#{window_name}'
         try:
             proc = await asyncio.create_subprocess_exec(
-                TMUX, 'display-message', '-t', target, '-p', '#{pane_dead}',
+                TMUX, 'display-message', '-t', target, '-p', fmt,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
@@ -1687,7 +1707,18 @@ class TerminalManager:
             return {'alive': False, 'target': target, 'reason': 'not_found'}
         if proc.returncode != 0:
             return {'alive': False, 'target': target, 'reason': 'not_found'}
-        dead = stdout.decode().strip()
+        parts = stdout.decode().strip().split('\t', 1)
+        dead = parts[0]
+        actual = parts[1] if len(parts) > 1 else ''
+        # Verify tmux actually resolved to the window we asked for (not a fallback)
+        if is_id_target:
+            # window_ref='@30', actual from #{window_id} is '@30'
+            if actual != window_ref:
+                return {'alive': False, 'target': target, 'reason': 'not_found'}
+        else:
+            # name-based: verify the returned window name matches
+            if actual != window_ref:
+                return {'alive': False, 'target': target, 'reason': 'not_found'}
         return {'alive': dead != '1', 'target': target}
 
     async def _tool_get_pane_info(self, params: dict) -> dict:

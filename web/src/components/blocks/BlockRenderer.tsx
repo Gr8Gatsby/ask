@@ -29,11 +29,11 @@ interface Props {
 function DebugBar({ block }: { block: Block }) {
   const ts = new Date(block.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   return (
-    <div className="flex flex-wrap gap-x-3 gap-y-0.5 px-2 py-1 bg-black/60 text-[10px] font-mono text-ask-secondary border-b border-ask-sep/20">
-      <span><span className="text-ask-secondary/50">id </span>{block.blockID.slice(0, 8)}…</span>
-      <span><span className="text-ask-secondary/50">type </span>{block.blockType}</span>
-      <span><span className="text-ask-secondary/50">machine </span>{block.machineID.slice(0, 8)}…</span>
-      <span><span className="text-ask-secondary/50">at </span>{ts}</span>
+    <div className="flex flex-wrap gap-x-3 gap-y-0.5 px-2 py-1 bg-black/60 text-[10px] font-mono text-white/70 border-b border-white/10">
+      <span><span className="text-white/40">id </span>{block.blockID.slice(0, 8)}…</span>
+      <span><span className="text-white/40">type </span>{block.blockType}</span>
+      <span><span className="text-white/40">machine </span>{block.machineID.slice(0, 8)}…</span>
+      <span><span className="text-white/40">at </span>{ts}</span>
     </div>
   )
 }

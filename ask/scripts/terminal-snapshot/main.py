@@ -161,7 +161,7 @@ class TerminalSnapshot:
         else:
             await self._put_block(IMAGE_ID, 'status', {
                 'label': f'{target} — text only',
-                'detail': 'Screenshot unavailable (terminal app not detected)',
+                'detail': 'Screenshot unavailable (no tmux client attached)',
                 'color': 'blue',
             })
 

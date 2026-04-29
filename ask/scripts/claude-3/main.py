@@ -1035,7 +1035,19 @@ class Claude3:
 
         # Close session
         if value == '__close_session__':
-            await self._tm_inject_tty(session, '/quit\n')
+            if session.tmux_target:
+                # Interrupt any running tool first (works even mid-run), then quit
+                try:
+                    await self._call_tool('send_interrupt', {'target': session.tmux_target}, timeout=5.0)
+                except Exception as e:
+                    _log(f'send_interrupt for close failed: {e}', 'WARN')
+                await asyncio.sleep(0.5)
+                try:
+                    await self._call_tool('send_text', {'target': session.tmux_target, 'text': '/quit'}, timeout=5.0)
+                except Exception as e:
+                    _log(f'send_text /quit for close failed: {e}', 'WARN')
+            else:
+                await self._tm_inject_tty(session, '/quit\n')
             self._fire_a2a(self._append_structured_message(session, 'Stop requested', 'Sent quit to Claude Code.'))
             session.state = 'stopping'
             await self._emit_session_block(session)
