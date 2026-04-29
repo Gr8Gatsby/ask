@@ -469,7 +469,6 @@ class Codex3:
             if alive:
                 if session.tty:
                     asyncio.create_task(self._tm_register(session))
-                self._fire_a2a(self._set_task_status(session, 'working'))
                 if not self._post_restart_reset_done:
                     if session.state in ('running_tool', 'awaiting_user', 'starting'):
                         session.state = 'idle'
