@@ -378,7 +378,7 @@ struct RKBlock: Identifiable {
         switch blockType {
         case .confirmation, .prompt, .chatPrompt, .picker, .list, .detail, .agentSession, .startSession, .quickReply: return true
         case .alert, .status, .infoCard, .iconCard, .claudeMessage, .tile, .countdown, .feedItem,
-             .activityFeed, .compactSummary, .sessionEvent, .diagnostics: return false
+             .activityFeed, .compactSummary, .sessionEvent, .diagnostics, .image: return false
         }
     }
 
