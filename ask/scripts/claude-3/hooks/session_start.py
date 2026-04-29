@@ -57,6 +57,26 @@ def _get_tty():
     return None
 
 
+def _get_tmux_target() -> str:
+    """Return the tmux target for the pane running this hook, e.g. 'ask:@31'.
+
+    tmux sets TMUX_PANE (e.g. '%12') when running inside a tmux pane.
+    We resolve that to the session:@window_id format the daemon uses.
+    """
+    pane_id = os.environ.get('TMUX_PANE', '')
+    if not pane_id:
+        return ''
+    try:
+        r = subprocess.run(
+            ['tmux', 'display-message', '-t', pane_id, '-p',
+             '#{session_name}:#{window_id}'],
+            capture_output=True, text=True, timeout=2,
+        )
+        return r.stdout.strip()
+    except Exception:
+        return ''
+
+
 data = json.load(sys.stdin)
 session_id = data.get('session_id', '')
 cwd = os.getcwd()
@@ -66,6 +86,7 @@ if not session_id:
     sys.exit(0)
 
 tty = _get_tty()
+tmux_target = _get_tmux_target()
 
 try:
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -77,6 +98,7 @@ try:
         'cwd': cwd,
         'project': project,
         'tty': tty,
+        'tmux_target': tmux_target,
     }).encode())
     sock.close()
 except Exception:

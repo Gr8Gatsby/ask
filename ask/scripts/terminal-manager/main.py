@@ -1566,7 +1566,7 @@ class TerminalManager:
         # Use -P -F to capture the new window's unique ID so the target is
         # unambiguous even when multiple windows share the same name.
         cmd = [TMUX, 'new-window', '-t', session, '-n', window_name,
-               '-P', '-F', f'{session}:@#{{window_id}}']
+               '-P', '-F', f'{session}:#{{window_id}}']
         if cwd:
             cmd += ['-c', cwd]
         if command:

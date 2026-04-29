@@ -631,9 +631,9 @@ class Claude3:
         session.state = 'idle'
         session.permission_mode = _load_permission_mode()
 
-        # Backfill tmux_target if this session was launched via _launch_in_tmux
-        if not session.tmux_target and cwd:
-            tmux_target = self._pending_tmux_by_cwd.pop(cwd, '')
+        # Backfill tmux_target from the hook (preferred) or _pending_tmux_by_cwd fallback
+        if not session.tmux_target:
+            tmux_target = msg.get('tmux_target', '') or (self._pending_tmux_by_cwd.pop(cwd, '') if cwd else '')
             if tmux_target:
                 session.tmux_target = tmux_target
                 _log(f'backfilled tmux_target={tmux_target!r} for raw_id={raw_id[:8]}')
