@@ -39,6 +39,7 @@ class SessionRecord:
     project: str
     cwd: str = ''
     tty: str = ''
+    tmux_target: str = ''   # 'ask:<project>' when daemon owns the terminal
     state: str = 'starting'
     current_tool: str = ''
     preview: str = ''
@@ -68,6 +69,7 @@ class SessionRecord:
             project=raw.get('project', raw['session_id'][:8]),
             cwd=raw.get('cwd', ''),
             tty=raw.get('tty', ''),
+            tmux_target=raw.get('tmux_target', ''),
             state=raw.get('state', 'starting'),
             current_tool=raw.get('current_tool', ''),
             preview=raw.get('preview', ''),

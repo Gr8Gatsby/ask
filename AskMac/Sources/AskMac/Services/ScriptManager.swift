@@ -259,8 +259,32 @@ final class ScriptManager: @unchecked Sendable {
 
     func start() {
         discoverAndLaunch()
+        ensureSDKInVault()
         purgeBlocksForDisabledScripts()
         startVaultWatcher()
+    }
+
+    /// Copy ask_sdk.py from the app bundle to the vault root if it isn't already there.
+    /// Scripts that use setup.py import ask_sdk; without this the import fails on fresh machines.
+    func ensureSDKInVault() {
+        guard let vaultURL = settings.vaultPath,
+              let bundleSDK = Bundle.main.resourceURL?.appendingPathComponent("Scripts/ask_sdk.py"),
+              FileManager.default.fileExists(atPath: bundleSDK.path) else { return }
+        let dest = vaultURL.appendingPathComponent("ask_sdk.py")
+        guard !FileManager.default.fileExists(atPath: dest.path) else { return }
+        try? FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+        try? FileManager.default.copyItem(at: bundleSDK, to: dest)
+    }
+
+    /// Copy ask_sdk.py from the app bundle to the vault, replacing any existing version.
+    func reinstallSDKInVault() {
+        guard let vaultURL = settings.vaultPath,
+              let bundleSDK = Bundle.main.resourceURL?.appendingPathComponent("Scripts/ask_sdk.py"),
+              FileManager.default.fileExists(atPath: bundleSDK.path) else { return }
+        let dest = vaultURL.appendingPathComponent("ask_sdk.py")
+        try? FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(at: dest)
+        try? FileManager.default.copyItem(at: bundleSDK, to: dest)
     }
 
     /// Deletes CloudKit blocks for any scripts that are currently disabled.

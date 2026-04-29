@@ -292,6 +292,18 @@ final class ScriptInstaller {
         showSheet = false
         scriptManager.beginInstall()
 
+        // Prime the vault and copy ask_sdk.py from the app bundle before any setup.py runs.
+        // Catalog zips don't include ask_sdk.py at their root, so without this, setup.py
+        // fails with ModuleNotFoundError on machines that never had scripts deployed via dev tools.
+        let fm = FileManager.default
+        try? fm.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+        let sdkDest = vaultURL.appendingPathComponent("ask_sdk.py")
+        if let bundleSDK = Bundle.main.resourceURL?.appendingPathComponent("Scripts/ask_sdk.py"),
+           fm.fileExists(atPath: bundleSDK.path) {
+            try? fm.removeItem(at: sdkDest)
+            try? fm.copyItem(at: bundleSDK, to: sdkDest)
+        }
+
         // Resolve script dependencies: install any missing deps silently before main scripts.
         if let catalog {
             let installedIDs = Set(scriptManager.scripts.map(\.id))
@@ -321,8 +333,6 @@ final class ScriptInstaller {
             }
         }
 
-        let fm = FileManager.default
-        try? fm.createDirectory(at: vaultURL, withIntermediateDirectories: true)
         var installationErrors: [SkippedScript] = []
 
         for script in pending {
@@ -369,13 +379,10 @@ final class ScriptInstaller {
 
         skipped.append(contentsOf: installationErrors)
 
-        // Copy ask_sdk.py to the vault root if the archive included it.
-        // Scripts that use setup.py depend on `import ask_sdk`, and the vault root
-        // is always on their PYTHONPATH — without this file, setup.py fails silently
-        // on machines that have never had scripts deployed via the dev tool.
+        // If the zip archive included ask_sdk.py at its root, copy it over the bundle version.
+        // This allows custom zips to ship an updated SDK alongside their scripts.
         if let tmp = tempDir {
             let sdkSrc = tmp.appendingPathComponent("ask_sdk.py")
-            let sdkDest = vaultURL.appendingPathComponent("ask_sdk.py")
             if fm.fileExists(atPath: sdkSrc.path) {
                 try? fm.removeItem(at: sdkDest)
                 try? fm.copyItem(at: sdkSrc, to: sdkDest)

@@ -26,6 +26,7 @@ enum RKBlockType: String, Codable {
     case sessionEvent = "session_event"
     case diagnostics
     case quickReply = "quick_reply"
+    case image
 }
 
 // MARK: - Urgency
@@ -252,6 +253,12 @@ struct RKDetailPayload: Codable {
     let actions: [String]?
 }
 
+struct RKImagePayload: Codable {
+    let title: String
+    let data: String    // base64-encoded image bytes
+    let format: String  // "png"
+}
+
 struct RKFeedItemPayload: Codable {
     let headline: String
     let body: String?
@@ -466,6 +473,11 @@ struct RKBlock: Identifiable {
     var detailPayload: RKDetailPayload? {
         guard blockType == .detail else { return nil }
         return try? JSONDecoder().decode(RKDetailPayload.self, from: payloadData)
+    }
+
+    var imagePayload: RKImagePayload? {
+        guard blockType == .image else { return nil }
+        return try? JSONDecoder().decode(RKImagePayload.self, from: payloadData)
     }
 
     var feedItemPayload: RKFeedItemPayload? {

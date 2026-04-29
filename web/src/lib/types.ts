@@ -89,6 +89,9 @@ export interface AgentSessionPayload {
   }
   tool_history?: Array<{ tool: string; preview: string; timestamp: string }>
   is_headless?: boolean
+  is_tmux?: boolean
+  tty?: string
+  tmux_target?: string
 }
 
 export interface StartSessionPayload {

@@ -153,6 +153,7 @@ class Codex3:
         self._start_choices: dict[str, dict] = {}
         self._initialized = False
         self._emitted_payloads: dict[str, str] = {}  # block_id → last serialized payload
+        self._post_restart_reset_done = False
 
     def _id(self):
         self._next_id += 1
@@ -333,7 +334,9 @@ class Codex3:
             choices.append({'name': name, 'path': path, 'value': path})
 
         payload = {'repos': choices or [{'name': '(no repos found)', 'path': '', 'value': ''}]}
-        await self.emit_block(START_SESSION_BLOCK_ID, 'start_session', payload, ttl=600)
+        self._emitted_payloads.pop(START_SESSION_BLOCK_ID, None)
+        await self.emit_block(START_SESSION_BLOCK_ID, 'start_session', payload, ttl=3600)
+        _log(f'emitted start_session block with {len(choices)} repos')
 
     async def _set_task_status(self, session, status: str):
         title = f'Codex · {session.project}'
@@ -372,8 +375,10 @@ class Codex3:
             'cwd': session.cwd,
             'is_working': session.state in ('starting', 'awaiting_user', 'running_tool', 'waiting_permission'),
             'is_headless': session.is_headless,
+            'is_tmux': bool(session.tmux_target),
             'permission_mode': _load_permission_mode(),
             'tty': session.tty,
+            'tmux_target': session.tmux_target or None,
             'current_tool': session.current_tool or None,
             'current_preview': session.preview or None,
             'last_message': session.last_message or None,
@@ -464,7 +469,11 @@ class Codex3:
             if alive:
                 if session.tty:
                     asyncio.create_task(self._tm_register(session))
-                self._fire_a2a(self._set_task_status(session, 'working'))
+                if not self._post_restart_reset_done:
+                    if session.state in ('running_tool', 'awaiting_user', 'starting'):
+                        session.state = 'idle'
+                        session.current_tool = ''
+                        session.preview = ''
                 await self._emit_session_block(session)
             else:
                 session.state = 'stopped'
@@ -476,7 +485,13 @@ class Codex3:
                     await self.clear_block(self._session_block_id(session.session_id))
                 except Exception as exc:
                     _log(f'refresh cleanup error: {exc}', 'WARN')
+        self._post_restart_reset_done = True
         _save_registry(self._registry)
+        await self._emit_tile()
+        try:
+            await self._emit_start_session_block()
+        except Exception as exc:
+            _log(f'start_session emit error: {exc}', 'WARN')
         await self._discover_active_processes()
 
     async def _heartbeat(self):
@@ -640,7 +655,6 @@ class Codex3:
         session.state = 'starting'
         await self._set_task_status(session, 'working')
         await self._append_structured_message(session, 'Session started', f'Launched Codex in `{session.project}`.')
-        await self.clear_block(START_SESSION_BLOCK_ID)
         await self._emit_session_block(session)
         await self._emit_tile()
         _save_registry(self._registry)
@@ -660,7 +674,6 @@ class Codex3:
         session.touch()
         await self._set_task_status(session, 'working')
         await self._append_structured_message(session, 'Session adopted', f'Attached to existing tmux pane `{tmux_target}`.')
-        await self.clear_block(START_SESSION_BLOCK_ID)
         await self._emit_session_block(session)
         await self._emit_tile()
         _save_registry(self._registry)

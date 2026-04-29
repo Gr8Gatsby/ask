@@ -17,6 +17,9 @@ import os
 import re
 import subprocess
 import datetime
+import tempfile
+import base64
+import time as _time
 
 sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1, closefd=False)
 
@@ -131,19 +134,23 @@ async def _detect_terminal_for_tty(tty: str) -> str:
         if len(checked) > 40:
             break
         try:
+            # Use 'pid=,ppid=,command=' — 'comm=' truncates long paths on macOS
             r = subprocess.run(
-                ['ps', '-p', str(pid), '-o', 'comm=,ppid='],
+                ['ps', '-p', str(pid), '-o', 'pid=,ppid=,command='],
                 capture_output=True, text=True, timeout=1,
             )
-            parts = r.stdout.strip().split()
-            if not parts:
+            line = r.stdout.strip()
+            if not line:
                 continue
-            comm = parts[0].split('/')[-1]
+            parts = line.split(None, 2)  # [pid, ppid, command]
+            if len(parts) < 3:
+                continue
+            comm = parts[2].split('/')[-1].split()[0]  # basename, drop args
+            ppid = int(parts[1]) if parts[1].isdigit() else 0
             for app in TERMINAL_APP_NAMES:
                 if comm.lower() == app.lower() or comm.lower().startswith(app.lower()):
                     _dbg(f'  [detect_terminal] tty={tty} → {app} (pid={pid} comm={comm!r})')
                     return app
-            ppid = int(parts[-1]) if len(parts) >= 2 and parts[-1].isdigit() else 0
             if ppid > 1:
                 to_check.append(ppid)
         except Exception:
@@ -1370,7 +1377,13 @@ class TerminalManager:
 
     async def _tool_send_text(self, args: dict) -> dict:
         sid = args.get('session_id', '')
+        target = args.get('target', '')
         text = args.get('text', '')
+        # Direct tmux target (no session_id needed) — same pattern as send_interrupt
+        if not sid and target:
+            _log(f'send_text target={target!r} text={text!r}')
+            ok = await _tmux_send_text(target, text)
+            return {'ok': ok}
         session = self._sessions.get(sid)
         if not session:
             raise ValueError(f'Unknown session: {sid}')
@@ -1519,6 +1532,530 @@ class TerminalManager:
             if l.strip() and not _re.match(r'^[-─━═╌╍\s]+$', l)
         ]
         return '\n'.join(response_lines[-40:]).strip()[:4000]
+
+    # -----------------------------------------------------------------------
+    # tmux lifecycle & advanced tools
+    # -----------------------------------------------------------------------
+
+    async def _tmux_ensure_session(self, session: str, cwd: str = '') -> bool:
+        """Create tmux session if it doesn't exist. Returns True if created, False if already existed."""
+        proc = await asyncio.create_subprocess_exec(
+            TMUX, 'has-session', '-t', session,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(proc.wait(), timeout=3)
+        if proc.returncode == 0:
+            return False
+        cmd = [TMUX, 'new-session', '-d', '-s', session]
+        if cwd:
+            cmd += ['-c', cwd]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(proc.wait(), timeout=10)
+        _log(f'_tmux_ensure_session: created {session!r}')
+        return True
+
+    async def _tool_create_window(self, params: dict) -> dict:
+        """Create a named tmux window, optionally running a command inside it."""
+        session = params.get('session', 'ask')
+        window_name = params['window_name']
+        command = params.get('command', '')
+        cwd = params.get('cwd', '')
+        await self._tmux_ensure_session(session, cwd)
+        # Use -P -F to capture the new window's unique ID so the target is
+        # unambiguous even when multiple windows share the same name.
+        cmd = [TMUX, 'new-window', '-t', session, '-n', window_name,
+               '-P', '-F', f'{session}:#{{window_id}}']
+        if cwd:
+            cmd += ['-c', cwd]
+        if command:
+            cmd.append(command)
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        target = stdout.decode().strip() or f'{session}:{window_name}'
+        _log(f'_tool_create_window: created {target!r}')
+        return {'target': target, 'session': session, 'window': window_name}
+
+    async def _tool_destroy_window(self, params: dict) -> dict:
+        """Kill a tmux window, optionally sending Ctrl+C first. Unregisters any matching session."""
+        target = params['target']
+        force = params.get('force', False)
+        try:
+            if not force:
+                proc = await asyncio.create_subprocess_exec(
+                    TMUX, 'send-keys', '-t', target, 'C-c', '',
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                )
+                await asyncio.wait_for(proc.communicate(), timeout=5)
+                await asyncio.sleep(0.3)
+            proc = await asyncio.create_subprocess_exec(
+                TMUX, 'kill-window', '-t', target,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(proc.communicate(), timeout=10)
+            ok = True
+        except Exception as exc:
+            _log(f'_tool_destroy_window: error killing {target!r}: {exc}')
+            ok = False
+        # Unregister any registered session whose tmux_target matches
+        to_remove = [sid for sid, s in self._sessions.items() if s.tmux_target == target]
+        for sid in to_remove:
+            del self._sessions[sid]
+            _log(f'_tool_destroy_window: unregistered session {sid!r} (target={target!r})')
+        _log(f'_tool_destroy_window: ok={ok} target={target!r}')
+        return {'ok': ok, 'target': target}
+
+    async def _tool_list_windows(self, params: dict) -> dict:
+        """List all windows in a tmux session with index, name, active state, and command."""
+        session = params.get('session', 'ask')
+        fmt = '#{window_index}\t#{window_name}\t#{window_active}\t#{pane_current_command}\t#{pane_dead}'
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                TMUX, 'list-windows', '-t', session, '-F', fmt,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        except Exception:
+            return {'session': session, 'windows': []}
+        if proc.returncode != 0:
+            return {'session': session, 'windows': []}
+        windows = []
+        for line in stdout.decode().splitlines():
+            parts = line.split('\t')
+            if len(parts) < 5:
+                continue
+            index, name, active, command, dead = parts
+            windows.append({
+                'index': index,
+                'name': name,
+                'target': f'{session}:{name}',
+                'active': active == '1',
+                'command': command,
+                'alive': dead != '1',
+            })
+        _log(f'_tool_list_windows: session={session!r} count={len(windows)}')
+        return {'session': session, 'windows': windows}
+
+    async def _tool_rename_window(self, params: dict) -> dict:
+        """Rename a tmux window by target string."""
+        target = params['target']
+        new_name = params['new_name']
+        proc = await asyncio.create_subprocess_exec(
+            TMUX, 'rename-window', '-t', target, new_name,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
+        if proc.returncode != 0:
+            raise RuntimeError(f'rename-window failed: {stderr.decode().strip()}')
+        _log(f'_tool_rename_window: {target!r} -> {new_name!r}')
+        return {'ok': True, 'target': target, 'new_name': new_name}
+
+    async def _tool_split_pane(self, params: dict) -> dict:
+        """Split a tmux pane horizontally or vertically, optionally running a command."""
+        target = params['target']
+        direction = params.get('direction', 'horizontal')
+        command = params.get('command', '')
+        cwd = params.get('cwd', '')
+        percent = params.get('percent', 50)
+        flag = '-h' if direction == 'horizontal' else '-v'
+        cmd = [TMUX, 'split-window', flag, '-t', target, '-p', str(percent)]
+        if cwd:
+            cmd += ['-c', cwd]
+        if command:
+            cmd.append(command)
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=10)
+        # Get new pane target
+        proc2 = await asyncio.create_subprocess_exec(
+            TMUX, 'display-message', '-t', target, '-p',
+            '#{session_name}:#{window_name}.#{pane_index}',
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc2.communicate(), timeout=5)
+        new_target = stdout.decode().strip()
+        _log(f'_tool_split_pane: target={target!r} new_pane={new_target!r} direction={direction!r}')
+        return {'ok': True, 'target': target, 'new_pane': new_target, 'direction': direction}
+
+    async def _tool_pane_alive(self, params: dict) -> dict:
+        """Check whether a tmux pane is still running (not dead).
+
+        tmux display-message silently falls back to the active window when the
+        target doesn't exist (exit 0, no error). We guard against that by also
+        verifying the returned window name/ID matches the requested target.
+        """
+        target = params['target']
+        # Format: 'session:window_ref' where window_ref is a name or '@<id>'
+        colon = target.find(':')
+        window_ref = target[colon + 1:] if colon != -1 else target
+        is_id_target = window_ref.startswith('@')
+        # Fetch both pane_dead and the actual window identifier in one call
+        fmt = '#{pane_dead}\t#{window_id}' if is_id_target else '#{pane_dead}\t#{window_name}'
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                TMUX, 'display-message', '-t', target, '-p', fmt,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        except asyncio.TimeoutError:
+            return {'alive': False, 'target': target, 'reason': 'timeout'}
+        except Exception:
+            return {'alive': False, 'target': target, 'reason': 'not_found'}
+        if proc.returncode != 0:
+            return {'alive': False, 'target': target, 'reason': 'not_found'}
+        parts = stdout.decode().strip().split('\t', 1)
+        dead = parts[0]
+        actual = parts[1] if len(parts) > 1 else ''
+        # Verify tmux actually resolved to the window we asked for (not a fallback)
+        if is_id_target:
+            # window_ref='@30', actual from #{window_id} is '@30'
+            if actual != window_ref:
+                return {'alive': False, 'target': target, 'reason': 'not_found'}
+        else:
+            # name-based: verify the returned window name matches
+            if actual != window_ref:
+                return {'alive': False, 'target': target, 'reason': 'not_found'}
+        return {'alive': dead != '1', 'target': target}
+
+    async def _tool_get_pane_info(self, params: dict) -> dict:
+        """Return full metadata for a tmux pane: pid, command, dimensions, tty, session, window."""
+        target = params['target']
+        fmt = '#{pane_pid}\t#{pane_current_command}\t#{pane_dead}\t#{pane_width}\t#{pane_height}\t#{window_name}\t#{session_name}\t#{pane_tty}'
+        proc = await asyncio.create_subprocess_exec(
+            TMUX, 'display-message', '-t', target, '-p', fmt,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        parts = stdout.decode().strip().split('\t')
+        pid_raw, command, dead, width_raw, height_raw, window, session, tty = (parts + [''] * 8)[:8]
+        try:
+            pid = int(pid_raw)
+        except (ValueError, TypeError):
+            pid = None
+        try:
+            width = int(width_raw)
+        except (ValueError, TypeError):
+            width = 0
+        try:
+            height = int(height_raw)
+        except (ValueError, TypeError):
+            height = 0
+        return {
+            'target': target,
+            'session': session,
+            'window': window,
+            'tty': tty,
+            'pid': pid,
+            'command': command,
+            'alive': dead != '1',
+            'width': width,
+            'height': height,
+        }
+
+    async def _tool_send_interrupt(self, params: dict) -> dict:
+        """Send Ctrl+C to a tmux pane by direct target or registered session_id."""
+        target = params.get('target', '')
+        session_id = params.get('session_id', '')
+        if not target and session_id:
+            session = self._sessions.get(session_id)
+            if session and session.tmux_target:
+                target = session.tmux_target
+        if not target:
+            raise ValueError('send_interrupt requires target or a valid session_id with a tmux_target')
+        proc = await asyncio.create_subprocess_exec(
+            TMUX, 'send-keys', '-t', target, 'C-c', '',
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=5)
+        _log(f'_tool_send_interrupt: sent C-c to {target!r}')
+        return {'ok': True, 'target': target}
+
+    async def _tool_wait_for_pattern(self, params: dict) -> dict:
+        """Poll a tmux pane until a regex pattern matches, with stable-count and timeout support."""
+        target = params.get('target', '')
+        session_id = params.get('session_id', '')
+        pattern = params['pattern']
+        timeout = float(params.get('timeout', 30))
+        poll_interval = float(params.get('poll_interval', 0.5))
+        stable_count = int(params.get('stable_count', 1))
+        lines = int(params.get('lines', 50))
+        if not target and session_id:
+            session = self._sessions.get(session_id)
+            if session and session.tmux_target:
+                target = session.tmux_target
+        if not target:
+            raise ValueError('wait_for_pattern requires target or a valid session_id with a tmux_target')
+        _log(f'_tool_wait_for_pattern: waiting for {pattern!r} on {target!r} timeout={timeout}')
+        deadline = _time.monotonic() + timeout
+        last_content = ''
+        consecutive = 0
+        timed_out = False
+        matched = False
+        while _time.monotonic() < deadline:
+            content = await _tmux_read(target, lines)
+            if re.search(pattern, content, re.MULTILINE):
+                if content == last_content:
+                    consecutive += 1
+                else:
+                    consecutive = 1
+                last_content = content
+                if consecutive >= stable_count:
+                    matched = True
+                    break
+            else:
+                consecutive = 0
+                last_content = content
+            remaining = deadline - _time.monotonic()
+            await asyncio.sleep(min(poll_interval, max(0, remaining)))
+        else:
+            timed_out = True
+        _log(f'_tool_wait_for_pattern: matched={matched} timed_out={timed_out} target={target!r}')
+        return {'matched': matched, 'output': last_content, 'timed_out': timed_out}
+
+    async def _tool_run_command(self, params: dict) -> dict:
+        """Create an ephemeral tmux window, run a command, wait for completion, return output."""
+        command = params['command']
+        session = params.get('session', 'ask')
+        timestamp = int(_time.time())
+        window_name = params.get('window_name', f'run_{timestamp}')
+        cwd = params.get('cwd', '')
+        timeout = float(params.get('timeout', 60))
+        keep_window = params.get('keep_window', False)
+        create_result = await self._tool_create_window({
+            'session': session,
+            'window_name': window_name,
+            'command': command,
+            'cwd': cwd,
+        })
+        target = create_result['target']
+        _prompt_re = re.compile(r'[$#%>]\s*$', re.MULTILINE)
+        start = _time.monotonic()
+        timed_out = False
+        while True:
+            elapsed = _time.monotonic() - start
+            if elapsed >= timeout:
+                timed_out = True
+                break
+            alive_result = await self._tool_pane_alive({'target': target})
+            if not alive_result.get('alive', True):
+                break
+            snippet = await _tmux_read(target, 5)
+            if _prompt_re.search(snippet):
+                break
+            await asyncio.sleep(1)
+        elapsed = _time.monotonic() - start
+        output = await _tmux_read(target, 500)
+        if not keep_window:
+            await self._tool_destroy_window({'target': target, 'force': True})
+            final_target = None
+        else:
+            final_target = target
+        _log(f'_tool_run_command: elapsed={elapsed:.1f}s timed_out={timed_out} target={target!r}')
+        return {'output': output, 'elapsed': elapsed, 'timed_out': timed_out, 'target': final_target}
+
+    async def _tool_screenshot(self, params: dict) -> dict:
+        """Capture the current state of a tmux pane as text and optionally as a PNG image."""
+        target = params.get('target', '')
+        session_id = params.get('session_id', '')
+        fmt = params.get('format', 'auto')
+        if not target and session_id:
+            session = self._sessions.get(session_id)
+            if session and session.tmux_target:
+                target = session.tmux_target
+        if not target:
+            raise ValueError('screenshot requires target or a valid session_id with a tmux_target')
+        # Always capture text
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                TMUX, 'capture-pane', '-p', '-t', target,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+            raw_text = stdout.decode()
+        except Exception:
+            raw_text = ''
+        # Strip ANSI escape codes
+        ansi_re = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b[^[\\]', re.DOTALL)
+        text = ansi_re.sub('', raw_text)
+        result: dict = {'target': target, 'text': text}
+        if fmt in ('image', 'auto'):
+            image_data = await self._capture_terminal_image(target)
+            if image_data is not None:
+                result['image'] = image_data
+        return result
+
+    async def _capture_terminal_image(self, target: str):
+        """Capture a PNG screenshot of the terminal window hosting the given tmux pane."""
+        try:
+            # Step 1: find terminal app via tmux client TTYs (pane TTY leads to tmux server,
+            # not the terminal emulator — client TTY leads to iTerm2/Terminal.app)
+            proc = await asyncio.create_subprocess_exec(
+                TMUX, 'list-clients', '-F', '#{client_tty}',
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            client_ttys = [t.strip() for t in stdout.decode().splitlines() if t.strip()]
+
+            app = 'unknown'
+            for tty in client_ttys:
+                detected = await _detect_terminal_for_tty(tty)
+                if detected != 'unknown':
+                    app = detected
+                    break
+            if app == 'unknown':
+                return None
+            # Step 3: get CGWindowID by asking the app directly (System Events
+            # can't return CGWindowID for some apps like Terminal.app)
+            script = f'tell application "{app}" to return id of front window'
+            proc = await asyncio.create_subprocess_exec(
+                'osascript', '-e', script,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+            window_id = stdout.decode().strip()
+            if not window_id:
+                return None
+            # Step 4: screencapture to temp file
+            tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+            tmp_path = tmp.name
+            tmp.close()
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    'screencapture', '-l', window_id, '-x', '-o', tmp_path,
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                )
+                await asyncio.wait_for(proc.communicate(), timeout=15)
+                with open(tmp_path, 'rb') as f:
+                    data = f.read()
+                b64_string = base64.b64encode(data).decode('ascii')
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+            return {'format': 'png', 'encoding': 'base64', 'data': b64_string}
+        except Exception as exc:
+            _log(f'WARN _capture_terminal_image: {exc}')
+            return None
+
+    async def _get_tty_cwd(self, tty: str) -> str:
+        """Return the cwd of the foreground shell process on a TTY, via lsof."""
+        short = tty.replace('/dev/', '')
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'ps', '-t', short, '-o', 'pid=,comm=',
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        except Exception:
+            return ''
+
+        shell_names = {'bash', 'zsh', 'fish', 'sh', 'tcsh', 'csh'}
+        shell_pid = None
+        first_pid = None
+        for line in stdout.decode().splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) < 2:
+                continue
+            pid_str, comm = parts
+            comm_base = comm.split('/')[-1].lstrip('-')
+            if first_pid is None:
+                first_pid = pid_str
+            if comm_base in shell_names and shell_pid is None:
+                shell_pid = pid_str
+
+        target_pid = shell_pid or first_pid
+        if not target_pid:
+            return ''
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'lsof', '-p', target_pid, '-d', 'cwd', '-Fn',
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            for line in stdout.decode().splitlines():
+                if line.startswith('n') and line[1:].startswith('/'):
+                    return line[1:]
+        except Exception:
+            pass
+        return ''
+
+    async def _tool_migrate_to_tmux(self, params: dict) -> dict:
+        """Migrate a terminal session (TTY) to a tmux-owned window.
+
+        Detects the cwd of the shell on the TTY, creates a new tmux window
+        there, and updates (or creates) the session record to point at tmux.
+        The original TTY entry is cleared so all subsequent tool calls use
+        the tmux path automatically.
+
+        params:
+          session_id   — registered session to migrate (provides tty automatically)
+          tty          — TTY device path, e.g. /dev/ttys003 (used when no session_id)
+          cwd          — override cwd detection
+          session      — tmux session name (default 'ask')
+          window_name  — tmux window name (default: basename of cwd)
+          command      — command to run in the new window (e.g. 'claude')
+        """
+        session_id = params.get('session_id', '')
+        tty = params.get('tty', '')
+        cwd = params.get('cwd', '')
+        tmux_session = params.get('session', 'ask')
+        command = params.get('command', '')
+        window_name = params.get('window_name', '')
+
+        source = None
+        if session_id:
+            source = self._sessions.get(session_id)
+            if not source:
+                raise ValueError(f'Unknown session: {session_id!r}')
+            tty = tty or source.tty
+
+        if not tty:
+            raise ValueError('session_id (with a registered tty) or tty required')
+
+        if not cwd:
+            cwd = await self._get_tty_cwd(tty)
+            _log(f'migrate_to_tmux: detected cwd={cwd!r} from tty={tty!r}')
+
+        if not window_name:
+            window_name = os.path.basename(cwd.rstrip('/')) if cwd else 'terminal'
+
+        result = await self._tool_create_window({
+            'session': tmux_session,
+            'window_name': window_name,
+            'command': command,
+            'cwd': cwd,
+        })
+        target = result['target']
+
+        if source:
+            source.tty = ''
+            source.tmux_target = target
+            source.session_type = 'tmux'
+            source.terminal_app = ''
+        else:
+            new_sid = f'migrated:{os.path.basename(tty)}'
+            self._sessions[new_sid] = Session(
+                session_id=new_sid,
+                app_id='migrated',
+                tty='',
+                tmux_target=target,
+            )
+            session_id = new_sid
+
+        _log(f'migrate_to_tmux: {tty!r} → {target!r} cwd={cwd!r}')
+        return {
+            'target': target,
+            'session_id': session_id,
+            'cwd': cwd,
+            'window': window_name,
+            'tmux_session': tmux_session,
+        }
 
     # -----------------------------------------------------------------------
     # I/O dispatch

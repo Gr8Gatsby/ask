@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Claude Code PermissionRequest hook for claude-3.
-Sends the permission request to the daemon via Unix socket and blocks until
-the user responds on iPhone (or the timeout elapses).
+Sends the permission request to the daemon via Unix socket and exits immediately.
+Claude Code shows its native terminal prompt; the daemon surfaces the card on
+iPhone in parallel. Whichever path the user responds through first wins.
 """
 import sys
 import json
@@ -79,18 +80,9 @@ else:
     options = ['Yes', 'No']
 
 
-def output_decision(decision):
-    print(json.dumps({
-        'hookSpecificOutput': {
-            'hookEventName': 'PermissionRequest',
-            'decision': decision,
-        }
-    }))
-
-
 try:
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(None)   # wait indefinitely — user responds on iPhone
+    sock.settimeout(0.5)
     sock.connect(SOCKET_PATH)
     sock.sendall(json.dumps({
         'type': 'permission_request',
@@ -102,30 +94,10 @@ try:
         'tty': _get_tty(),
     }).encode())
     sock.shutdown(socket.SHUT_WR)
-    chunks = []
-    while True:
-        chunk = sock.recv(4096)
-        if not chunk:
-            break
-        chunks.append(chunk)
     sock.close()
-    response = json.loads(b''.join(chunks).decode())
-    value = response.get('value', '')
 except Exception as e:
-    print(f'[claude-3/permission_request] daemon not running, falling back: {e}', file=sys.stderr)
-    sys.exit(0)
+    print(f'[claude-3/permission_request] daemon not running: {e}', file=sys.stderr)
 
-# Map value to Claude Code decision
-if value in ('Allow', 'Yes'):
-    output_decision({'behavior': 'allow'})
-    sys.exit(0)
-elif value in ('Deny', 'No'):
-    output_decision({'behavior': 'deny', 'message': 'Permission denied by user on iPhone.'})
-    sys.exit(2)
-elif value in suggestions_map:
-    output_decision({'behavior': 'allow', 'updatedPermissions': [suggestions_map[value]]})
-    sys.exit(0)
-else:
-    # Empty string or unknown — allow by default (fall-through)
-    output_decision({'behavior': 'allow'})
-    sys.exit(0)
+# Exit with no decision output — Claude Code shows its native terminal prompt.
+# If the user responds on iPhone, the daemon injects the response via tmux.
+sys.exit(0)

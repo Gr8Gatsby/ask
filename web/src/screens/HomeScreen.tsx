@@ -87,7 +87,7 @@ function useCountdownDisplay(isoTime: string | undefined): string | null {
 function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; blocks: Block[]; onRespond: (id: string, v: string) => void }) {
   const navigate = useNavigate()
   const theme = useTheme()
-  const { useBrandColors } = useSettings()
+  const { useBrandColors, showBlockDebugInfo } = useSettings()
   const first = blocks[0]
   const { color, label, body } = tileStatus(blocks)
   const inboxBlocks = blocks.filter(b => b.showsInInbox === 1)
@@ -171,6 +171,13 @@ function ActionQueueCard({ scriptID, blocks, onRespond }: { scriptID: string; bl
       {agentSession && agentPayload && (
         <>
           <div className="h-px bg-ask-sep mx-3.5" />
+          {showBlockDebugInfo && (
+            <div className="px-3.5 pt-1.5 pb-0 flex items-center gap-2 flex-wrap">
+              <span className="font-mono text-[9px] text-ask-secondary/60">{agentPayload.session_id}</span>
+              {agentPayload.tmux_target && <span className="font-mono text-[9px] text-ask-secondary/60">{agentPayload.tmux_target}</span>}
+              {agentPayload.tty && <span className="font-mono text-[9px] text-ask-secondary/60">{agentPayload.tty}</span>}
+            </div>
+          )}
           <div
             className="flex items-center gap-2 px-3.5 py-2"
             data-block-id={agentSession.blockID}
@@ -346,7 +353,9 @@ function AlertChip({ blocks, onClick }: { blocks: Block[]; onClick: () => void }
 export default function HomeScreen() {
   const navigate = useNavigate()
   const { scriptGroups, loading, error, respond } = useBlocks()
+  const { selectedMachineID, hiddenMachineIDs } = useSettings()
   const theme = useTheme()
+  const { themeMode } = usePlatform()
 
   if (loading) {
     return <div className="flex items-center justify-center h-full text-ask-secondary text-sm">Connecting…</div>
@@ -360,7 +369,25 @@ export default function HomeScreen() {
     )
   }
 
-  const entries = Object.entries(scriptGroups)
+  const filteredGroups: Record<string, Block[]> = (selectedMachineID || hiddenMachineIDs.size > 0)
+    ? Object.fromEntries(
+        Object.entries(scriptGroups)
+          .map(([id, blocks]): [string, Block[]] => [
+            id,
+            blocks.filter(b =>
+              (!selectedMachineID || b.machineID === selectedMachineID) &&
+              !hiddenMachineIDs.has(b.machineID)
+            ),
+          ])
+          .filter(([, blocks]) => blocks.length > 0)
+      )
+    : scriptGroups
+  // If filters produce no results but there are actual blocks, fall back to unfiltered
+  const visibleGroups = (Object.keys(filteredGroups).length === 0 && Object.keys(scriptGroups).length > 0)
+    ? scriptGroups
+    : filteredGroups
+
+  const entries = Object.entries(visibleGroups)
   const needsResponseGroups = entries
     .filter(([, blocks]) => blocks.some(b => b.showsInInbox === 1) || !!pendingAgentSession(blocks))
     .sort(([, a], [, b]) => {
@@ -373,7 +400,6 @@ export default function HomeScreen() {
     !blocks.some(b => b.showsInInbox === 1) && !pendingAgentSession(blocks)
   )
 
-  const { themeMode } = usePlatform()
   const isLight = themeMode === 'light'
   const scrollContent = (
     <>

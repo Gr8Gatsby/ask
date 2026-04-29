@@ -1587,6 +1587,7 @@ private struct ScriptsVaultView: View {
     @State private var vaultPathText: String = ""
     @State private var showVaultPicker = false
     @State private var isDropTargeted = false
+    @State private var sdkInstalled: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1634,6 +1635,32 @@ private struct ScriptsVaultView: View {
                     Text("Scripts Vault")
                 } footer: {
                     Text("Vault scripts override bundle scripts with the same ID.")
+                }
+
+                Section {
+                    HStack(spacing: 10) {
+                        Image(systemName: sdkInstalled ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                            .foregroundStyle(sdkInstalled ? Color.green : Color.orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Script SDK")
+                                .font(.body)
+                            Text(sdkInstalled
+                                 ? "ask_sdk.py is present in the vault"
+                                 : "ask_sdk.py is missing — setup scripts may fail to install")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button(sdkInstalled ? "Reinstall" : "Install") {
+                            scriptManager.reinstallSDKInVault()
+                            refreshSDKStatus()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(settings.vaultPath == nil)
+                    }
+                } header: {
+                    Text("Developer SDK")
                 }
             }
             .formStyle(.grouped)
@@ -1692,7 +1719,9 @@ private struct ScriptsVaultView: View {
         .navigationTitle("Scripts Vault")
         .onAppear {
             vaultPathText = settings.vaultPath?.abbreviatingWithTildeInPath ?? "~/.ask/scripts"
+            refreshSDKStatus()
         }
+        .onChange(of: settings.vaultPath) { refreshSDKStatus() }
         .fileImporter(isPresented: $showVaultPicker, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result {
                 _ = url.startAccessingSecurityScopedResource()
@@ -1707,6 +1736,13 @@ private struct ScriptsVaultView: View {
             ? FileManager.default.homeDirectoryForCurrentUser.path + vaultPathText.dropFirst()
             : vaultPathText
         settings.vaultPath = URL(fileURLWithPath: expanded)
+    }
+
+    private func refreshSDKStatus() {
+        guard let vaultURL = settings.vaultPath else { sdkInstalled = false; return }
+        sdkInstalled = FileManager.default.fileExists(
+            atPath: vaultURL.appendingPathComponent("ask_sdk.py").path
+        )
     }
 }
 

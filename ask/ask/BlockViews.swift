@@ -202,6 +202,10 @@ struct BlockView: View {
             if let p = block.quickReplyPayload {
                 QuickReplyBlockView(payload: p, onRespond: onRespond)
             }
+        case .image:
+            if let p = block.imagePayload {
+                ImageBlockView(payload: p)
+            }
         }
     }
 
@@ -1949,5 +1953,37 @@ struct PermissionApprovalBar: View {
                     .frame(height: 0.5)
             }
         }
+    }
+}
+
+// MARK: - Image Block
+
+struct ImageBlockView: View {
+    let payload: RKImagePayload
+
+    private var uiImage: UIImage? {
+        guard let data = Data(base64Encoded: payload.data, options: .ignoreUnknownCharacters) else { return nil }
+        return UIImage(data: data)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(payload.title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            if let img = uiImage {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .frame(maxWidth: .infinity)
+            } else {
+                Text("Image unavailable")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
     }
 }

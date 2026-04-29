@@ -1,7 +1,7 @@
 {
   "id": "codex-3",
   "name": "Codex 3",
-  "version": "0.2.4",
+  "version": "0.2.7",
   "description": "Feed-first Codex session supervisor with tmux transport and task-backed history",
   "entry": "main.py",
   "icon": "sparkles",

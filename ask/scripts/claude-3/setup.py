@@ -71,6 +71,19 @@ def run_install():
     settings = _load_settings()
     settings.setdefault('hooks', {})
 
+    # Global dedup pass: strip ALL claude-3 hooks across every block and event,
+    # then re-add only this vault's hooks. Prevents prod/dev vault duplicates
+    # regardless of which vault's setup.py runs.
+    for event in list(settings['hooks'].keys()):
+        for block in settings['hooks'][event]:
+            block['hooks'] = [
+                h for h in block.get('hooks', [])
+                if 'claude-3' not in h.get('command', '')
+            ]
+        settings['hooks'][event] = [b for b in settings['hooks'][event] if b.get('hooks')]
+        if not settings['hooks'][event]:
+            del settings['hooks'][event]
+
     registered = []
     skipped = []
 
@@ -79,21 +92,13 @@ def run_install():
         if not os.path.exists(script_path):
             skipped.append(event)
             continue
-        if _hook_registered(settings, event, script_path):
-            skipped.append(event)
-            continue
 
         existing = settings['hooks'].setdefault(event, [])
-        target = next((b for b in existing if b.get('matcher') == ''), None)
+        target = next((b for b in existing if b.get('matcher', '') == ''), None)
         if target is None:
             target = {'matcher': '', 'hooks': []}
             existing.append(target)
         target.setdefault('hooks', [])
-        # Remove any stale claude-3 entries before adding fresh ones
-        target['hooks'] = [
-            h for h in target['hooks']
-            if 'claude-3' not in h.get('command', '')
-        ]
         target['hooks'].append({'type': 'command', 'command': script_path})
         registered.append(event)
 

@@ -27,6 +27,7 @@ function SessionRow({
   isAndroid: boolean
 }) {
   const payload = parsePayload<AgentSessionPayload>(block.payload)
+  const { showBlockDebugInfo } = useSettings()
   if (!payload) return null
 
   return (
@@ -46,6 +47,20 @@ function SessionRow({
             ? `${payload.agent_name ?? 'Claude'} is working…`
             : (payload.last_message?.split('\n').find(l => l.trim()) ?? 'Session started')}
         </p>
+        {showBlockDebugInfo && (
+          <div className="flex items-center gap-1 mt-0.5 min-w-0">
+            <span className={`px-1 py-px rounded text-[8px] font-semibold flex-shrink-0 ${
+              payload.tmux_target ? 'bg-ask-green/15 text-ask-green' :
+              payload.tty        ? 'bg-ask-blue/15 text-ask-blue'   :
+                                   'bg-ask-secondary/15 text-ask-secondary'
+            }`}>
+              {payload.tmux_target ? 'tmux' : payload.tty ? 'terminal' : 'headless'}
+            </span>
+            <span className="font-mono text-[9px] text-ask-secondary/50 truncate">
+              {payload.session_id}{payload.tmux_target ? ` · ${payload.tmux_target}` : ''}{payload.tty ? ` · ${payload.tty}` : ''}
+            </span>
+          </div>
+        )}
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
         {confirmationCount > 0 && (
@@ -71,7 +86,7 @@ export default function ScriptDetailScreen() {
   const isLight = themeMode === 'light'
   const { blocks: allBlocks, respond } = useBlocks()
   const { setAction } = useStartSession()
-  const { useBrandColors } = useSettings()
+  const { useBrandColors, showBlockDebugInfo } = useSettings()
   const { setBrandColor: setAppBrandColor } = useBrandColor()
   const blocks = allBlocks.filter(b => b.scriptID === scriptID)
   const first = blocks[0]
@@ -129,7 +144,7 @@ export default function ScriptDetailScreen() {
           {/* Header blocks */}
           {headerBlocks.map(block => (
             <div key={block.blockID} className="px-4 py-3 border-b border-ask-sep">
-              <BlockRenderer block={block} onRespond={respond} />
+              <BlockRenderer block={block} onRespond={respond} showDebugInfo={showBlockDebugInfo} />
             </div>
           ))}
 
@@ -167,7 +182,7 @@ export default function ScriptDetailScreen() {
                         <div key={conf.blockID}>
                           <div className={theme.isAndroid ? 'border-t border-ask-sep' : 'h-px bg-ask-sep/50 ml-8'} />
                           <div className="pl-8 pr-4 py-3 bg-ask-orange/5">
-                            <BlockRenderer block={conf} onRespond={respond} />
+                            <BlockRenderer block={conf} onRespond={respond} showDebugInfo={showBlockDebugInfo} />
                           </div>
                         </div>
                       ))}

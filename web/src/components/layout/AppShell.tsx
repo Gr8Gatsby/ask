@@ -600,6 +600,7 @@ function AppShellInner({ children }: Props) {
     || location.pathname.startsWith('/tasks')
     || location.pathname.startsWith('/home')
     || location.pathname.startsWith('/settings')
+    || location.pathname.startsWith('/debug')
 
   // iPhone 16 Pro: 390px wide, titanium frame
   // Pixel 9 Pro: slightly different corner radius, dark metal frame

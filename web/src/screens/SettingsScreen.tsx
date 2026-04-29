@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { usePlatform } from '../lib/PlatformContext'
 import { useSettings } from '../lib/SettingsContext'
 import { getMachines } from '../lib/api'
@@ -216,10 +217,16 @@ function ComputerFilterSheet({
 // ---- Screen ----
 
 export default function SettingsScreen() {
+  const navigate = useNavigate()
   const { platform, themeMode } = usePlatform()
   const isAndroid = platform === 'android'
 
-  const { useBrandColors, setUseBrandColors, selectedMachineID, setSelectedMachineID } = useSettings()
+  const {
+    useBrandColors, setUseBrandColors,
+    selectedMachineID, setSelectedMachineID,
+    showBlockDebugInfo, setShowBlockDebugInfo,
+    hiddenMachineIDs, toggleHiddenMachine,
+  } = useSettings()
   const [machines, setMachines] = useState<Machine[]>([])
   const [selectedMachine, setSelectedMachine] = useState<Machine | null>(null)
   const [showComputerFilter, setShowComputerFilter] = useState(false)
@@ -249,19 +256,41 @@ export default function SettingsScreen() {
             <path d="M1 1l6 5.5L1 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
         </AndroidPref>
-        {machines.map((m, i) => (
-          <AndroidPref
-            key={m.machineID}
-            title={m.name}
-            summary={m.status === 'busy' ? 'Active' : 'Idle'}
-            last={i === machines.length - 1}
-            onTap={() => setSelectedMachine(m)}
-          >
-            <svg width="8" height="13" viewBox="0 0 8 13" fill="none" className="text-ask-secondary/50">
-              <path d="M1 1l6 5.5L1 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-          </AndroidPref>
-        ))}
+        {machines.map((m, i) => {
+          const isHidden = hiddenMachineIDs.has(m.machineID)
+          return (
+            <div key={m.machineID} className="flex items-center">
+              <div className="flex-1">
+                <AndroidPref
+                  title={m.name}
+                  summary={isHidden ? 'Hidden · ' + (m.status === 'busy' ? 'Active' : 'Idle') : (m.status === 'busy' ? 'Active' : 'Idle')}
+                  last={i === machines.length - 1}
+                  onTap={() => setSelectedMachine(m)}
+                >
+                  <svg width="8" height="13" viewBox="0 0 8 13" fill="none" className="text-ask-secondary/50">
+                    <path d="M1 1l6 5.5L1 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </AndroidPref>
+              </div>
+              <button
+                onClick={() => toggleHiddenMachine(m.machineID)}
+                className="px-4 py-2 text-ask-secondary active:opacity-70 flex-shrink-0"
+                title={isHidden ? 'Show on home screen' : 'Hide from home screen'}
+              >
+                {isHidden ? (
+                  <svg width="20" height="14" viewBox="0 0 22 16" fill="none">
+                    <path d="M11 1C5.5 1 1 5.5 1 8s4.5 7 10 7 10-4.5 10-7S16.5 1 11 1z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                    <circle cx="11" cy="8" r="3" stroke="currentColor" strokeWidth="1.8"/>
+                  </svg>
+                ) : (
+                  <svg width="20" height="16" viewBox="0 0 22 18" fill="none">
+                    <path d="M1 1l20 16M9.5 3.2C10 3.1 10.5 3 11 3c5 0 9 4 9 5s-1.4 2.5-3.5 3.8M6.5 4.7C3.7 6.2 2 8 2 8s4 5 9 5c1.3 0 2.5-.3 3.6-.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                )}
+              </button>
+            </div>
+          )
+        })}
 
         <AndroidCategoryHeader label="Appearance" />
         <AndroidPref title="Script Brand Colors" summary="Show script accent colors on cards" last>
@@ -269,6 +298,16 @@ export default function SettingsScreen() {
         </AndroidPref>
 
         <AndroidCategoryHeader label="Developer" />
+        <AndroidPref title="Show Debug Info on Cards" summary="Show block ID, type, and timestamp on cards" last={false}>
+          <AndroidToggle on={showBlockDebugInfo} onToggle={() => setShowBlockDebugInfo(!showBlockDebugInfo)} />
+        </AndroidPref>
+        {showBlockDebugInfo && (
+          <AndroidPref title="Debug Console" summary="Live event log, blocks, and sessions" onTap={() => navigate('/debug')}>
+            <svg width="8" height="13" viewBox="0 0 8 13" fill="none" className="text-ask-secondary/50">
+              <path d="M1 1l6 5.5L1 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </AndroidPref>
+        )}
         <AndroidPref title="CloudKit Environment" summary="Development" />
         <AndroidPref title="App Version" summary="0.1.0 (1)" last />
 
@@ -309,14 +348,49 @@ export default function SettingsScreen() {
           <IOSSectionHeader label="Machines" />
           <IOSListCard>
             <IOSRow label="Computer" value={selectedMachineName} chevron onTap={() => setShowComputerFilter(true)} />
-            {machines.map(m => (
-              <React.Fragment key={m.machineID}>
-                <IOSSep />
-                <IOSRow label={m.name} value={m.status === 'busy' ? 'Active' : 'Idle'} chevron onTap={() => setSelectedMachine(m)} />
-              </React.Fragment>
-            ))}
+            {machines.map(m => {
+              const isHidden = hiddenMachineIDs.has(m.machineID)
+              return (
+                <React.Fragment key={m.machineID}>
+                  <IOSSep />
+                  <div className="flex items-center min-h-[44px] px-4">
+                    <button
+                      onClick={() => setSelectedMachine(m)}
+                      className="flex-1 flex items-center gap-2 text-left active:opacity-70"
+                    >
+                      <span className={`text-[17px] font-normal ${isHidden ? 'text-ask-secondary' : 'text-ask-text'}`}>{m.name}</span>
+                      {isHidden && (
+                        <svg width="14" height="11" viewBox="0 0 22 17" fill="none" className="text-ask-secondary/60 flex-shrink-0">
+                          <path d="M1 1l20 15M9.5 3.2C10 3.1 10.5 3 11 3c5 0 9 4 9 5s-1.4 2.5-3.5 3.8M6.5 4.7C3.7 6.2 2 8 2 8s4 5 9 5c1.3 0 2.5-.3 3.6-.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      )}
+                    </button>
+                    <span className="text-[17px] text-ask-secondary mr-3">{m.status === 'busy' ? 'Active' : 'Idle'}</span>
+                    <button
+                      onClick={() => toggleHiddenMachine(m.machineID)}
+                      className="p-1 active:opacity-70"
+                      title={isHidden ? 'Show on home screen' : 'Hide from home screen'}
+                    >
+                      {isHidden ? (
+                        <svg width="18" height="12" viewBox="0 0 22 16" fill="none" className="text-ask-secondary">
+                          <path d="M11 1C5.5 1 1 5.5 1 8s4.5 7 10 7 10-4.5 10-7S16.5 1 11 1z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                          <circle cx="11" cy="8" r="3" stroke="currentColor" strokeWidth="1.8"/>
+                        </svg>
+                      ) : (
+                        <svg width="18" height="14" viewBox="0 0 22 18" fill="none" className="text-ask-secondary">
+                          <path d="M1 1l20 16M9.5 3.2C10 3.1 10.5 3 11 3c5 0 9 4 9 5s-1.4 2.5-3.5 3.8M6.5 4.7C3.7 6.2 2 8 2 8s4 5 9 5c1.3 0 2.5-.3 3.6-.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      )}
+                    </button>
+                    <svg width="6" height="10" viewBox="0 0 6 10" fill="none" className="ml-1 text-ask-secondary/45 flex-shrink-0" onClick={() => setSelectedMachine(m)}>
+                      <path d="M1 1l4 4-4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </div>
+                </React.Fragment>
+              )
+            })}
           </IOSListCard>
-          <IOSSectionFooter text="Filter to a single computer or view all. A running Mac re-registers within 30 seconds." />
+          <IOSSectionFooter text="Filter to a single computer or view all. Tap the eye to hide a machine from the home screen. A running Mac re-registers within 30 seconds." />
 
           {/* Appearance section */}
           <IOSSectionHeader label="Appearance" />
@@ -329,6 +403,11 @@ export default function SettingsScreen() {
           {/* Developer section */}
           <IOSSectionHeader label="Developer" />
           <IOSListCard>
+            <IOSRow label="Show Debug Info on Cards">
+              <IOSToggle on={showBlockDebugInfo} onToggle={() => setShowBlockDebugInfo(!showBlockDebugInfo)} />
+            </IOSRow>
+            {showBlockDebugInfo && <><IOSSep /><IOSRow label="Debug Console" chevron onTap={() => navigate('/debug')} /></>}
+            <IOSSep />
             <IOSRow label="CloudKit Environment" value="Development" />
             <IOSSep />
             <IOSRow label="App Version" value="0.1.0 (1)" />
