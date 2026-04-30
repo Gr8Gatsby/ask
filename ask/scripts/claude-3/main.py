@@ -23,7 +23,7 @@ import uuid
 from typing import Optional
 
 from registry import PendingPermission, SessionRecord, SessionRegistry
-from transport import discover_claude_processes, find_repos, parse_tmux_prompt, tty_is_live
+from transport import find_repos
 
 sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1, closefd=False)
 
@@ -475,17 +475,30 @@ class Claude3:
             return
         if not session.tty and not session.tmux_target:
             return
+        args: dict = {
+            'session_id': session.raw_id,
+            'app_id': 'claude-3',
+            'tty': session.tty,
+            'tmux_target': session.tmux_target,
+        }
+        if session.pid:
+            args['pid'] = session.pid
+        # For TTY sessions, register the interactive_prompt detector so
+        # detect_tui can replace the local parse_tmux_prompt call.
+        if session.tty and not session.tmux_target:
+            args['hook'] = {
+                'scan_lines': 40,
+                'patterns': [
+                    {'id': 'interactive_prompt', 'detect': {'type': 'interactive_prompt'}},
+                ],
+            }
         try:
             await self._rpc('tools/call', {
                 'name': 'register_session',
-                'arguments': {
-                    'session_id': session.raw_id,
-                    'app_id': 'claude-3',
-                    'tty': session.tty,
-                    'tmux_target': session.tmux_target,
-                },
+                'arguments': args,
             }, timeout=4.0)
-            _log(f'tm_register {session.session_id[:12]} tty={session.tty!r} tmux={session.tmux_target!r}')
+            _log(f'tm_register {session.session_id[:12]} tty={session.tty!r} '
+                 f'tmux={session.tmux_target!r} pid={session.pid}')
         except Exception as e:
             _log(f'tm_register failed: {e}', 'WARN')
 
@@ -512,7 +525,8 @@ class Claude3:
             return ok
         # TTY was unknown — try to discover it, re-register, and retry once.
         if session.cwd:
-            for proc in discover_claude_processes():
+            discovered = await self._call_tool('discover_sessions', {'executable': 'claude'})
+            for proc in (discovered or {}).get('sessions', []):
                 if proc.get('cwd') == session.cwd and proc.get('tty'):
                     session.tty = proc['tty']
                     self._registry._index_aliases(session)
@@ -885,59 +899,67 @@ class Claude3:
                     session.pending_confirmation_tty = None
                 continue
 
-            content = await self._tm_read_output(session, lines=40)
-            if not content:
-                continue
-
-            parsed = parse_tmux_prompt(content)
-            content_hash = _hl.md5(content.encode()).hexdigest()[:8]
-
-            if parsed:
-                if content_hash != last_hash:
-                    last_hash = content_hash
-                    body, options, reply_mode = parsed
-                    active_options = options
-                    # Embed as pending_confirmation in the session block
-                    session.pending_permission = PendingPermission(
-                        request_id=f'tty:{uuid.uuid4().hex[:8]}',
-                        tool='Terminal prompt',
-                        preview=body,
-                        options=options,
-                        suggestions={},
-                        requested_at=datetime.datetime.now().timestamp(),
-                    )
-                    session.state = 'waiting_permission'
-                    fut = asyncio.get_running_loop().create_future()
-                    self._pending_permissions[session.pending_permission.request_id] = fut
-                    await self._emit_session_block(session)
-                    _log(f'TTY prompt surfaced for {session_id[:8]}: {body[:60]}')
-                    try:
-                        value = await asyncio.wait_for(fut, timeout=PERMISSION_TIMEOUT)
-                    except asyncio.TimeoutError:
-                        value = None
-                    finally:
-                        self._pending_permissions.pop(session.pending_permission.request_id, None)
-
-                    if value is not None and value in active_options and reply_mode in ('numbered', 'arrow'):
-                        idx = active_options.index(value)
-                        down_seq = '\x1b[B' * idx
-                        await self._tm_inject_tty(session, down_seq + '\n')
-                    elif value == 'Yes' and reply_mode == 'yn':
-                        await self._tm_inject_tty(session, 'y\n')
-                    elif value == 'No' and reply_mode == 'yn':
-                        await self._tm_inject_tty(session, 'n\n')
-
-                    last_hash = ''
-                    active_options = []
-                    session.pending_permission = None
-                    session.state = 'idle'
-                    await self._emit_session_block(session)
-            else:
+            tui = await self._call_tool('detect_tui', {'session_id': session.raw_id})
+            if not tui or tui.get('pattern_id') != 'interactive_prompt':
                 if last_hash:
                     last_hash = ''
                     active_options = []
                     session.pending_permission = None
                     await self._emit_session_block(session)
+                continue
+
+            prompt_result = tui.get('result') or {}
+            prompt_hash = _hl.md5(str(prompt_result).encode()).hexdigest()[:8]
+
+            if prompt_hash == last_hash:
+                continue  # same prompt still showing, already surfaced
+
+            last_hash = prompt_hash
+            ptype = prompt_result.get('type', 'numbered')
+            if ptype == 'binary':
+                options = ['Yes', 'No']
+                reply_mode = 'yn'
+                body = prompt_result.get('prompt_text', 'Continue?')
+            else:
+                options = prompt_result.get('options', [])
+                reply_mode = ptype  # 'numbered' or 'arrow'
+                body = 'Choose an option'
+            active_options = options
+
+            session.pending_permission = PendingPermission(
+                request_id=f'tty:{uuid.uuid4().hex[:8]}',
+                tool='Terminal prompt',
+                preview=body,
+                options=options,
+                suggestions={},
+                requested_at=datetime.datetime.now().timestamp(),
+            )
+            session.state = 'waiting_permission'
+            fut = asyncio.get_running_loop().create_future()
+            self._pending_permissions[session.pending_permission.request_id] = fut
+            await self._emit_session_block(session)
+            _log(f'TTY prompt surfaced for {session_id[:8]}: {body[:60]}')
+            try:
+                value = await asyncio.wait_for(fut, timeout=PERMISSION_TIMEOUT)
+            except asyncio.TimeoutError:
+                value = None
+            finally:
+                self._pending_permissions.pop(session.pending_permission.request_id, None)
+
+            if value is not None and value in active_options and reply_mode in ('numbered', 'arrow'):
+                idx = active_options.index(value)
+                down_seq = '\x1b[B' * idx
+                await self._tm_inject_tty(session, down_seq + '\n')
+            elif value == 'Yes' and reply_mode == 'yn':
+                await self._tm_inject_tty(session, 'y\n')
+            elif value == 'No' and reply_mode == 'yn':
+                await self._tm_inject_tty(session, 'n\n')
+
+            last_hash = ''
+            active_options = []
+            session.pending_permission = None
+            session.state = 'idle'
+            await self._emit_session_block(session)
 
         self._tty_monitors.discard(session_id)
 
@@ -958,7 +980,8 @@ class Claude3:
         Unknown processes (no TTY or CWD match) are ignored — they will
         self-register via hook events when their next tool or prompt fires.
         """
-        processes = discover_claude_processes()
+        discovered = await self._call_tool('discover_sessions', {'executable': 'claude'})
+        processes = (discovered or {}).get('sessions', [])
         for proc in processes:
             tty = proc['tty']
             cwd = proc.get('cwd', '')
@@ -1194,7 +1217,12 @@ class Claude3:
                         _log(f'no-routing eviction error for {session.session_id}: {exc}', 'WARN')
                     continue
             # Only evict TTY sessions if the TTY is confirmed dead.
-            if not session.tmux_target and session.tty and not tty_is_live(session.tty):
+            if not session.tmux_target and session.tty:
+                alive_result = await self._call_tool('session_alive', {'session_id': session.raw_id})
+                tty_dead = not (alive_result or {}).get('alive', True)
+            else:
+                tty_dead = False
+            if not session.tmux_target and session.tty and tty_dead:
                 _log(f'session {session.session_id} TTY gone — marking stopped')
                 session.state = 'stopped'
                 session.stopped_at = datetime.datetime.now().timestamp()

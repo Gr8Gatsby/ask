@@ -8,20 +8,7 @@ import tempfile
 import uuid
 
 from registry import PendingPermission, SessionRegistry
-from transport import (
-    TMUX,
-    discover_codex_panes,
-    discover_codex_processes,
-    find_repos,
-    find_tmux_target_for_tty,
-    get_pane_pid,
-    launch_codex,
-    pane_exists,
-    send_interrupt,
-    send_quit,
-    send_text,
-    tty_exists,
-)
+from transport import find_repos, launch_codex
 
 sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1, closefd=False)
 
@@ -235,19 +222,16 @@ class Codex3:
     # ------------------------------------------------------------------
 
     async def _tm_register(self, session) -> None:
-        if not session.raw_id or not session.tty:
+        if not session.raw_id or (not session.tty and not session.tmux_target):
             return
         try:
-            await self._rpc('tools/call', {
-                'name': 'register_session',
-                'arguments': {
-                    'session_id': session.raw_id,
-                    'app_id': 'codex-3',
-                    'tty': session.tty,
-                    'tmux_target': '',
-                },
-            })
-            _log(f'tm_register {session.session_id[:12]} tty={session.tty!r}')
+            args: dict = {'session_id': session.raw_id, 'app_id': 'codex-3'}
+            if session.tty:
+                args['tty'] = session.tty
+            if session.tmux_target:
+                args['tmux_target'] = session.tmux_target
+            await self._rpc('tools/call', {'name': 'register_session', 'arguments': args})
+            _log(f'tm_register {session.session_id[:12]} tty={session.tty!r} tmux={session.tmux_target!r}')
         except Exception as exc:
             _log(f'tm_register failed: {exc}', 'WARN')
 
@@ -279,7 +263,12 @@ class Codex3:
 
     async def _route_text(self, session, text: str) -> bool:
         if session.tmux_target:
-            return send_text(session.tmux_target, text)
+            try:
+                await self._call_tool('send_text', {'session_id': session.raw_id, 'text': text})
+                return True
+            except Exception as exc:
+                _log(f'send_text failed for {session.session_id}: {exc}', 'WARN')
+                return False
         if session.tty:
             return await self._tm_inject_tty(session, text + '\n')
         return False
@@ -317,12 +306,19 @@ class Codex3:
             session.tmux_target for session in self._registry.sessions.values()
             if session.tmux_target and session.state != 'stopped'
         }
-        for pane in discover_codex_panes(exclude_targets=managed_targets):
-            value = f'adopt:{pane["tmux_target"]}'
+        discovered = await self._call_tool('discover_sessions', {'executable': 'codex'})
+        for proc in (discovered or {}).get('sessions', []):
+            tmux_target = proc.get('tmux_target', '')
+            if not tmux_target or tmux_target in managed_targets:
+                continue
+            cwd = proc.get('cwd', '')
+            project = os.path.basename(cwd.rstrip('/')) or tmux_target.rsplit(':', 1)[-1]
+            pane = {'tmux_target': tmux_target, 'cwd': cwd, 'project': project}
+            value = f'adopt:{tmux_target}'
             self._start_choices[value] = pane
             choices.append({
-                'name': f'Resume {pane["project"]}',
-                'path': pane['cwd'] or pane['tmux_target'],
+                'name': f'Resume {project}',
+                'path': cwd or tmux_target,
                 'value': value,
             })
 
@@ -394,27 +390,29 @@ class Codex3:
         await self.emit_block(self._session_block_id(session.session_id), 'agent_session', payload, ttl=SESSION_TTL)
 
     async def _discover_active_processes(self):
-        """Auto-register TTY codex processes not yet tracked by the registry."""
-        processes = discover_codex_processes()
+        """Auto-register codex processes not yet tracked by the registry."""
+        discovered = await self._call_tool('discover_sessions', {'executable': 'codex'})
+        processes = (discovered or {}).get('sessions', [])
         for proc in processes:
-            tty = proc['tty']
+            tty = proc.get('tty', '')
             cwd = proc.get('cwd', '')
-            pid = proc['pid']
+            pid = proc.get('pid', 0)
+            proc_tmux = proc.get('tmux_target', '')
 
             existing_sid = self._registry.resolve(tty=tty)
             if existing_sid:
                 session = self._registry.sessions[existing_sid]
-                # Backfill tmux target and project if missing
-                if not session.tmux_target:
-                    pane_info = find_tmux_target_for_tty(tty)
-                    if pane_info.get('tmux_target'):
-                        session.tmux_target = pane_info['tmux_target']
-                        self._registry._index_aliases(session)
-                        _log(f'backfilled tmux_target={session.tmux_target!r} for {existing_sid}')
-                    if pane_info.get('project'):
-                        session.project = pane_info['project']
-                    if pane_info.get('cwd') and not session.cwd:
-                        session.cwd = pane_info['cwd']
+                # Backfill tmux target and metadata if missing
+                if not session.tmux_target and proc_tmux:
+                    session.tmux_target = proc_tmux
+                    self._registry._index_aliases(session)
+                    _log(f'backfilled tmux_target={session.tmux_target!r} for {existing_sid}')
+                if proc_tmux:
+                    derived_project = os.path.basename(cwd.rstrip('/')) if cwd else ''
+                    if derived_project and not session.project:
+                        session.project = derived_project
+                    if cwd and not session.cwd:
+                        session.cwd = cwd
                 await self._emit_session_block(session)
                 continue
 
@@ -432,25 +430,21 @@ class Codex3:
                     await self._emit_session_block(session)
                     continue
 
-            # Auto-adopt unknown process; prefer tmux routing when the TTY is a tmux pane
-            pane_info = find_tmux_target_for_tty(tty)
-            tmux_target = pane_info.get('tmux_target', '')
-            effective_cwd = pane_info.get('cwd', '') or cwd
-            effective_project = pane_info.get('project', '') or proc.get('project', '')
-            _log(f'auto-adopting pid={pid} tty={tty} tmux={tmux_target!r} project={effective_project!r}')
+            # Auto-adopt unknown process; prefer tmux routing when inside a tmux pane
+            effective_project = os.path.basename(cwd.rstrip('/')) if cwd else (
+                f'codex-{tty}' if tty else f'codex-{pid}'
+            )
+            _log(f'auto-adopting pid={pid} tty={tty} tmux={proc_tmux!r} project={effective_project!r}')
             session = self._registry.ensure(
                 raw_id=str(pid),
                 tty=tty,
-                tmux_target=tmux_target,
-                cwd=effective_cwd,
+                tmux_target=proc_tmux,
+                cwd=cwd,
                 project=effective_project,
             )
-            if tmux_target:
-                session.tmux_target = tmux_target
             session.state = 'idle'
             session.touch()
-            if session.tty and not session.tmux_target:
-                asyncio.create_task(self._tm_register(session))
+            asyncio.create_task(self._tm_register(session))
             asyncio.create_task(self._set_task_status(session, 'working'))
             await self._emit_session_block(session)
 
@@ -463,12 +457,15 @@ class Codex3:
                 continue
             alive = False
             if session.tmux_target:
-                alive = pane_exists(session.tmux_target)
+                result = await self._call_tool('pane_alive', {'target': session.tmux_target})
+                alive = bool((result or {}).get('alive', False))
             elif session.tty:
-                alive = tty_exists(session.tty)
+                result = await self._call_tool('session_alive', {'session_id': session.raw_id})
+                reason = (result or {}).get('reason', '')
+                # Treat unknown_session as alive — the session may not be registered yet.
+                alive = (result or {}).get('alive', True) or reason == 'unknown_session'
             if alive:
-                if session.tty:
-                    asyncio.create_task(self._tm_register(session))
+                asyncio.create_task(self._tm_register(session))
                 if not self._post_restart_reset_done:
                     if session.state in ('running_tool', 'awaiting_user', 'starting'):
                         session.state = 'idle'
@@ -653,6 +650,7 @@ class Codex3:
         session.tmux_target = info['tmux_target']
         session.is_headless = info['is_headless']
         session.state = 'starting'
+        asyncio.create_task(self._tm_register(session))
         await self._set_task_status(session, 'working')
         await self._append_structured_message(session, 'Session started', f'Launched Codex in `{session.project}`.')
         await self._emit_session_block(session)
@@ -660,7 +658,10 @@ class Codex3:
         _save_registry(self._registry)
 
     async def _adopt_tmux_session(self, tmux_target: str, cwd: str = '', project: str = ''):
-        if not tmux_target or not pane_exists(tmux_target):
+        if not tmux_target:
+            return
+        result = await self._call_tool('pane_alive', {'target': tmux_target})
+        if not (result or {}).get('alive', False):
             return
         session = self._registry.ensure(
             raw_id=tmux_target,
@@ -672,6 +673,7 @@ class Codex3:
         session.state = 'idle'
         session.is_headless = False
         session.touch()
+        asyncio.create_task(self._tm_register(session))
         await self._set_task_status(session, 'working')
         await self._append_structured_message(session, 'Session adopted', f'Attached to existing tmux pane `{tmux_target}`.')
         await self._emit_session_block(session)
@@ -715,7 +717,11 @@ class Codex3:
         if not session:
             return {'error': 'unknown session'}
         if session.tmux_target:
-            ok = send_interrupt(session.tmux_target)
+            try:
+                await self._call_tool('send_interrupt', {'target': session.tmux_target})
+                ok = True
+            except Exception:
+                ok = False
         else:
             ok = await self._tm_send_interrupt(session)
         if not ok:
@@ -756,7 +762,11 @@ class Codex3:
             return
         if value == '__interrupt__':
             if session.tmux_target:
-                ok = send_interrupt(session.tmux_target)
+                try:
+                    await self._call_tool('send_interrupt', {'target': session.tmux_target})
+                    ok = True
+                except Exception:
+                    ok = False
             else:
                 ok = await self._tm_send_interrupt(session)
             _log(f'interrupt session={session.session_id!r} ok={ok}')
@@ -767,7 +777,12 @@ class Codex3:
             return
         if value == '__close_session__':
             if session.tmux_target:
-                ok = send_quit(session.tmux_target)
+                try:
+                    await self._call_tool('send_interrupt', {'target': session.tmux_target})
+                    await self._call_tool('send_text', {'session_id': session.raw_id, 'text': '/quit'})
+                    ok = True
+                except Exception:
+                    ok = False
             else:
                 ok = await self._tm_inject_tty(session, '/quit\n')
             _log(f'close session={session.session_id!r} ok={ok}')
