@@ -10,6 +10,8 @@ Each line on stdin is a JSON-RPC message. Responses go to stdout.
 Debug output (what's detected, what actions are taken) goes to stderr and log.
 """
 
+from __future__ import annotations
+
 import sys
 import json
 import asyncio
@@ -354,6 +356,69 @@ def detect_keyword_match(text: str, params: dict) -> object:
     return None
 
 
+def detect_interactive_prompt(text: str, params: dict) -> object:
+    """
+    Detects user-actionable prompts in terminal output.
+
+    Handles three styles:
+      binary  — [Y/n], [y/N], (yes/no) lines at the bottom of output
+      arrow   — lines prefixed with ❯ or › (cursor-menu style)
+      numbered — lines matching "1) ..." or "1. ..." with at least two options
+    """
+    lines = text.splitlines()
+
+    # Binary: look in the last 10 lines for [Y/n] / (yes/no) patterns
+    binary_re = re.compile(
+        r'(.*?)\s*[\(\[]([Yy]/[Nn]|[Nn]/[Yy]|yes/no|no/yes)[\)\]]\s*:?\s*$',
+        re.IGNORECASE,
+    )
+    for line in reversed(lines[-10:]):
+        m = binary_re.search(line.strip())
+        if m:
+            prompt_text = m.group(1).strip() or line.strip()
+            _dbg(f'  [interactive_prompt] binary: {prompt_text!r}')
+            return {'type': 'binary', 'prompt_text': prompt_text}
+
+    # Arrow cursor menu: lines prefixed with ❯ or › — at least 2 options
+    arrow_re = re.compile(r'^[›❯]\s+(.+)$')
+    plain_option_re = re.compile(r'^\s{2,}(.+)$')
+    option_block: list[str] = []
+    selected_idx = 0
+    in_block = False
+    for line in lines:
+        stripped = line.strip()
+        am = arrow_re.match(stripped)
+        if am:
+            if not in_block:
+                in_block = True
+                selected_idx = len(option_block)
+            option_block.append(am.group(1).strip())
+        elif in_block:
+            pm = plain_option_re.match(line)
+            if pm and stripped:
+                option_block.append(stripped)
+            elif not stripped:
+                break  # blank line ends the block
+            else:
+                break
+    if len(option_block) >= 2:
+        _dbg(f'  [interactive_prompt] arrow: {len(option_block)} options selected={selected_idx}')
+        return {'type': 'arrow', 'options': option_block, 'selected_index': selected_idx}
+
+    # Numbered: "1) Option" or "1. Option" — at least 2 items
+    numbered_re = re.compile(r'^\s*\d+[.)]\s+(.+)$')
+    numbered: list[str] = []
+    for line in lines:
+        m = numbered_re.match(line)
+        if m:
+            numbered.append(m.group(1).strip())
+    if len(numbered) >= 2:
+        _dbg(f'  [interactive_prompt] numbered: {len(numbered)} options')
+        return {'type': 'numbered', 'options': numbered}
+
+    return None
+
+
 def detect_screen_metadata(text: str, params: dict) -> dict:
     """
     Generic screen observer. Extracts every observable fact from the terminal
@@ -524,6 +589,7 @@ DETECTORS = {
     'checkbox_menu':      detect_checkbox_menu,
     'text_prompt':        detect_text_prompt,
     'keyword_match':      detect_keyword_match,
+    'interactive_prompt': detect_interactive_prompt,
     'screen_metadata':    detect_screen_metadata,
 }
 
@@ -1128,7 +1194,7 @@ async def _tmux_send_text(target: str, text: str) -> bool:
 class Session:
     def __init__(self, session_id: str, app_id: str, tty: str = '',
                  tmux_target: str = '', hook: dict = None, read_mode: str = 'history',
-                 terminal_app: str = ''):
+                 terminal_app: str = '', pid: int = None):
         self.session_id = session_id
         self.app_id = app_id
         self.tty = tty
@@ -1137,16 +1203,20 @@ class Session:
         self.read_mode = read_mode  # 'history' or 'contents'
         self.terminal_app = terminal_app  # 'Terminal', 'iTerm2', 'Ghostty', etc.
         self.session_type = 'tmux' if tmux_target else 'terminal_app'
+        self.pid: int | None = pid
+        self.registered_at: float = _time.time()
 
     def to_dict(self) -> dict:
         return {
-            'session_id':   self.session_id,
-            'app_id':       self.app_id,
-            'type':         self.session_type,
-            'tty':          self.tty,
-            'tmux_target':  self.tmux_target,
-            'terminal_app': self.terminal_app,
-            'has_hook':     bool(self.hook),
+            'session_id':    self.session_id,
+            'app_id':        self.app_id,
+            'type':          self.session_type,
+            'tty':           self.tty,
+            'tmux_target':   self.tmux_target,
+            'terminal_app':  self.terminal_app,
+            'pid':           self.pid,
+            'has_hook':      bool(self.hook),
+            'registered_at': self.registered_at,
         }
 
 
@@ -1244,6 +1314,9 @@ class TerminalManager:
         if not tty and not tmux:
             raise ValueError('tty or tmux_target required')
 
+        pid_raw = args.get('pid')
+        pid = int(pid_raw) if pid_raw is not None else None
+
         read_mode = args.get('read_mode', 'history')
         terminal_app = ''
         if tty and not tmux:
@@ -1256,10 +1329,11 @@ class TerminalManager:
             hook=args.get('hook'),
             read_mode=read_mode,
             terminal_app=terminal_app,
+            pid=pid,
         )
         self._sessions[sid] = session
         _log(f'Registered session {sid[:12]} type={session.session_type} '
-             f'tty={tty!r} tmux={tmux!r} terminal_app={terminal_app!r} '
+             f'tty={tty!r} tmux={tmux!r} pid={pid} terminal_app={terminal_app!r} '
              f'read_mode={read_mode!r} hook_patterns={len(session.hook.get("patterns", []))}')
         return {'ok': True, 'session_id': sid, 'type': session.session_type}
 
@@ -1269,8 +1343,179 @@ class TerminalManager:
         _log(f'Unregistered session {sid[:12]} removed={removed}')
         return {'ok': True, 'removed': removed}
 
+    # -----------------------------------------------------------------------
+    # Liveness and discovery
+    # -----------------------------------------------------------------------
+
+    async def _check_alive(self, session: Session) -> tuple[bool, str]:
+        """Internal liveness check. Returns (alive, reason).
+
+        Priority:
+          1. tmux pane  → #{pane_dead} query
+          2. PID stored → os.kill(pid, 0)
+          3. TTY only   → ps -t confirms at least one process on the TTY
+          4. No routing → always dead
+        """
+        if session.session_type == 'tmux' and session.tmux_target:
+            result = await self._tool_pane_alive({'target': session.tmux_target})
+            if result.get('alive'):
+                return True, 'alive'
+            return False, result.get('reason', 'tmux_pane_dead')
+
+        if not session.tty and not session.tmux_target:
+            return False, 'no_routing'
+
+        if session.pid is not None:
+            try:
+                os.kill(session.pid, 0)
+                return True, 'alive'
+            except ProcessLookupError:
+                return False, 'pid_not_found'
+            except PermissionError:
+                # Process exists but owned by another user — still alive
+                return True, 'alive'
+            except Exception:
+                return False, 'pid_check_error'
+
+        # No PID — check if any process is attached to the TTY via ps
+        short = session.tty.replace('/dev/', '')
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'ps', '-t', short, '-o', 'pid=',
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3)
+            pids = [x.strip() for x in stdout.decode().split() if x.strip().isdigit()]
+            if pids:
+                return True, 'alive'
+            return False, 'no_processes_on_tty'
+        except Exception as e:
+            _log(f'_check_alive ps failed for {session.tty!r}: {e}', 'WARN')
+            return False, 'ps_error'
+
+    async def _tool_session_alive(self, args: dict) -> dict:
+        """Check whether a registered session's underlying process is still running."""
+        sid = args.get('session_id', '')
+        session = self._sessions.get(sid)
+        if not session:
+            _log(f'session_alive: unknown session {sid!r}', 'WARN')
+            return {'alive': False, 'reason': 'unknown_session', 'session_id': sid}
+        alive, reason = await self._check_alive(session)
+        _log(f'session_alive {sid[:12]} alive={alive} reason={reason}')
+        return {'alive': alive, 'reason': reason, 'session_id': sid}
+
+    async def _find_tmux_target_for_tty(self, tty: str) -> str | None:
+        """Return the tmux pane target whose pane_tty matches, or None."""
+        full_tty = _tty_to_full(tty)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                TMUX, 'list-panes', '-a', '-F',
+                '#{pane_tty}\t#{session_name}:#{window_index}.#{pane_index}',
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            for line in stdout.decode().splitlines():
+                parts = line.strip().split('\t', 1)
+                if len(parts) == 2 and parts[0] == full_tty:
+                    return parts[1]
+        except Exception as e:
+            _log(f'_find_tmux_target_for_tty failed: {e}', 'WARN')
+        return None
+
+    async def _tool_discover_sessions(self, args: dict) -> dict:
+        """Find all running processes matching an executable name.
+
+        Returns each as a candidate session with pid, tty, cwd, and tmux_target
+        (if the process runs inside a tmux pane). Callers use this to adopt
+        processes that registered before routing was resolved.
+
+        params:
+          executable          — process name to match (e.g. "claude", "codex")
+          exclude_session_ids — list of session_ids already tracked; skip their TTYs
+        """
+        executable = args.get('executable', '').strip()
+        if not executable:
+            raise ValueError('executable required')
+        exclude = set(args.get('exclude_session_ids', []))
+
+        # Build set of TTYs for already-tracked sessions we want to exclude
+        tracked_ttys: set[str] = set()
+        for s in self._sessions.values():
+            if s.session_id not in exclude and s.tty:
+                tracked_ttys.add(_tty_to_full(s.tty))
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'ps', 'aux',
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        except Exception as e:
+            raise RuntimeError(f'ps failed: {e}')
+
+        results = []
+        for line in stdout.decode().splitlines()[1:]:  # skip header
+            parts = line.split(None, 10)
+            if len(parts) < 11:
+                continue
+            _user, pid_str, _cpu, _mem, _vsz, _rss, tty_raw, _stat, _start, _time, command = parts
+
+            # Match executable by basename of command path
+            cmd_base = command.split('/')[-1].split()[0]
+            if cmd_base != executable:
+                continue
+
+            try:
+                pid = int(pid_str)
+            except ValueError:
+                continue
+
+            # Normalize TTY — '??' means no controlling terminal
+            tty: str | None = None
+            if tty_raw and tty_raw != '??':
+                tty = _tty_to_full(tty_raw) if not tty_raw.startswith('/') else tty_raw
+
+            if tty and tty in tracked_ttys:
+                continue  # already managed by a tracked session
+
+            # Resolve cwd via lsof
+            cwd = ''
+            try:
+                cwd_proc = await asyncio.create_subprocess_exec(
+                    'lsof', '-p', str(pid), '-d', 'cwd', '-Fn',
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+                )
+                cwd_out, _ = await asyncio.wait_for(cwd_proc.communicate(), timeout=3)
+                for cwd_line in cwd_out.decode().splitlines():
+                    if cwd_line.startswith('n/'):
+                        cwd = cwd_line[1:]
+                        break
+            except Exception:
+                pass
+
+            # Resolve tmux target if the TTY is inside a tmux pane
+            tmux_target: str | None = None
+            if tty:
+                tmux_target = await self._find_tmux_target_for_tty(tty)
+
+            results.append({
+                'pid': pid,
+                'tty': tty,
+                'cwd': cwd,
+                'tmux_target': tmux_target,
+            })
+
+        _log(f'discover_sessions executable={executable!r} found={len(results)}')
+        return {'sessions': results}
+
     async def _tool_list_sessions(self, args: dict) -> dict:
-        sessions = [s.to_dict() for s in self._sessions.values()]
+        sessions = []
+        for s in self._sessions.values():
+            alive, reason = await self._check_alive(s)
+            d = s.to_dict()
+            d['alive'] = alive
+            d['alive_reason'] = reason
+            sessions.append(d)
         _log(f'list_sessions → {len(sessions)} sessions')
         return {'sessions': sessions}
 

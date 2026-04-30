@@ -2,7 +2,7 @@
   "id": "terminal-manager",
   "name": "Terminal Manager",
   "type": "system",
-  "version": "2.1.6",
+  "version": "2.2.0",
   "description": "Local terminal session registry and TUI detector. Tools are available to all scripts via AskMac MCP — not exposed to iPhone.",
   "entry": "main.py",
   "tools": [
@@ -14,7 +14,23 @@
         { "name": "app_id",       "type": "string",  "required": true },
         { "name": "tty",          "type": "string",  "required": false },
         { "name": "tmux_target",  "type": "string",  "required": false },
+        { "name": "pid",          "type": "integer", "required": false },
         { "name": "hook",         "type": "object",  "required": false }
+      ]
+    },
+    {
+      "name": "session_alive",
+      "description": "Check whether a registered session's underlying process is still running. Uses PID (kill -0) when available, ps -t for TTY-only sessions, and #{pane_dead} for tmux sessions. Returns alive=false with reason='no_routing' for sessions with neither tty nor tmux_target.",
+      "params": [
+        { "name": "session_id", "type": "string", "required": true }
+      ]
+    },
+    {
+      "name": "discover_sessions",
+      "description": "Scan the running process table for instances of a given executable. Returns each match as a candidate session with pid, tty, cwd, and tmux_target (resolved if the process is inside a tmux pane). Use exclude_session_ids to skip TTYs already tracked by existing sessions.",
+      "params": [
+        { "name": "executable",          "type": "string", "required": true },
+        { "name": "exclude_session_ids", "type": "array",  "required": false }
       ]
     },
     {
