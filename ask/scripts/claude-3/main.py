@@ -1177,8 +1177,23 @@ class Claude3:
                         continue
                 except Exception:
                     pass
+            # Sessions with no routing (no tty, no tmux_target) can't have their
+            # liveness verified. Give them a 5-minute grace period to resolve routing
+            # (via a hook event or process-discovery link), then evict them.
+            if not session.tmux_target and not session.tty:
+                age = datetime.datetime.now().timestamp() - (session.last_seen or 0)
+                if age > 300:
+                    _log(f'session {session.session_id} has no routing after {int(age)}s — evicting')
+                    session.state = 'stopped'
+                    session.stopped_at = datetime.datetime.now().timestamp()
+                    self._registry.remove(session.session_id)
+                    try:
+                        await self._set_task_status(session, 'completed')
+                        await self.clear_block(self._session_block_id(session.session_id))
+                    except Exception as exc:
+                        _log(f'no-routing eviction error for {session.session_id}: {exc}', 'WARN')
+                    continue
             # Only evict TTY sessions if the TTY is confirmed dead.
-            # An empty TTY means we haven't resolved routing yet — keep the session alive.
             if not session.tmux_target and session.tty and not tty_is_live(session.tty):
                 _log(f'session {session.session_id} TTY gone — marking stopped')
                 session.state = 'stopped'
