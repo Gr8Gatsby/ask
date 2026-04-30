@@ -670,7 +670,7 @@ class Claude3:
         raw_id = msg.get('session_id', '')
         if not raw_id:
             return
-        session = self._registry.ensure(raw_id=raw_id, cwd=msg.get('cwd', ''))
+        session = self._registry.ensure(raw_id=raw_id)
         session.current_tool = msg.get('tool', '')
         session.preview = msg.get('preview', '')[:200]
         session.state = 'running_tool'
@@ -689,7 +689,7 @@ class Claude3:
         raw_id = msg.get('session_id', '')
         if not raw_id:
             return
-        session = self._registry.ensure(raw_id=raw_id, cwd=msg.get('cwd', ''))
+        session = self._registry.ensure(raw_id=raw_id)
         tool_name = msg.get('tool_name', '')
         session.current_tool = tool_name
         session.state = 'running_tool'
@@ -716,7 +716,7 @@ class Claude3:
         raw_id = msg.get('session_id', '')
         if not raw_id:
             return
-        session = self._registry.ensure(raw_id=raw_id, cwd=msg.get('cwd', ''))
+        session = self._registry.ensure(raw_id=raw_id)
         prompt = (msg.get('message', '') or '').strip()
         session.state = 'awaiting_user'
         session.preview = prompt[:200]
@@ -757,7 +757,7 @@ class Claude3:
         summary = (msg.get('summary', '') or '').strip()
         if not raw_id or not summary:
             return
-        session = self._registry.ensure(raw_id=raw_id, cwd=msg.get('cwd', ''))
+        session = self._registry.ensure(raw_id=raw_id)
         self._fire_a2a(self._append_structured_message(session, 'Context compacted', summary))
         _log(f'post_compact raw_id={raw_id[:8]} summary={summary[:60]}')
 

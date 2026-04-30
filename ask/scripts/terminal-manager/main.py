@@ -1461,8 +1461,8 @@ class TerminalManager:
             _user, pid_str, _cpu, _mem, _vsz, _rss, tty_raw, _stat, _start, _time, command = parts
 
             # Match executable by basename of command path
-            cmd_base = command.split('/')[-1].split()[0]
-            if cmd_base != executable:
+            cmd_parts = command.split('/')[-1].split()
+            if not cmd_parts or cmd_parts[0] != executable:
                 continue
 
             try:
@@ -1482,7 +1482,7 @@ class TerminalManager:
             cwd = ''
             try:
                 cwd_proc = await asyncio.create_subprocess_exec(
-                    'lsof', '-p', str(pid), '-d', 'cwd', '-Fn',
+                    'lsof', '-a', '-p', str(pid), '-d', 'cwd', '-Fn',
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
                 )
                 cwd_out, _ = await asyncio.wait_for(cwd_proc.communicate(), timeout=3)
@@ -2219,7 +2219,7 @@ class TerminalManager:
 
         try:
             proc = await asyncio.create_subprocess_exec(
-                'lsof', '-p', target_pid, '-d', 'cwd', '-Fn',
+                'lsof', '-a', '-p', target_pid, '-d', 'cwd', '-Fn',
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
