@@ -1401,17 +1401,19 @@ final class ScriptManager: @unchecked Sendable {
         let conn = SystemScriptConnection(scriptID: manifest.id, entryURL: entryURL)
 
         conn.onTerminate = { [weak self, weak conn] in
-            guard let self else { return }
-            guard self.systemConnections[manifest.id] === conn else { return }
-            self.systemConnections.removeValue(forKey: manifest.id)
-            self.upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon,
-                              iconImage: self.manifests[manifest.id]?.icon, status: .crashed, isEnabled: true)
-            let delay = self.restartDelays[manifest.id] ?? 1.0
-            self.restartDelays[manifest.id] = min(delay * 2, 30.0)
-            logger.debug("System script \(manifest.id) terminated — restarting in \(Int(delay))s")
-            Task { @MainActor [weak self] in
+            // terminationHandler fires on a background queue — hop to MainActor before
+            // touching any @Observable state to avoid a data race crash.
+            Task { @MainActor [weak self, weak conn] in
+                guard let self else { return }
+                guard self.systemConnections[manifest.id] === conn else { return }
+                self.systemConnections.removeValue(forKey: manifest.id)
+                self.upsertStatus(manifest.id, name: manifest.name, icon: manifest.icon,
+                                  iconImage: self.manifests[manifest.id]?.icon, status: .crashed, isEnabled: true)
+                let delay = self.restartDelays[manifest.id] ?? 1.0
+                self.restartDelays[manifest.id] = min(delay * 2, 30.0)
+                logger.debug("System script \(manifest.id) terminated — restarting in \(Int(delay))s")
                 try? await Task.sleep(for: .seconds(delay))
-                self?.launchSystem(manifest: manifest, scriptDir: scriptDir)
+                self.launchSystem(manifest: manifest, scriptDir: scriptDir)
             }
         }
 
