@@ -461,11 +461,12 @@ class Codex3:
         for session in list(self._registry.sessions.values()):
             if session.state == 'stopped':
                 continue
-            alive = False
             if session.tmux_target:
                 alive = pane_exists(session.tmux_target)
             elif session.tty:
                 alive = tty_exists(session.tty)
+            else:
+                alive = True  # no routing info yet — assume alive to avoid false eviction
             if alive:
                 if session.tty:
                     asyncio.create_task(self._tm_register(session))

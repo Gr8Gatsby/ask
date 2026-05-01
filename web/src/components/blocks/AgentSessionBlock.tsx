@@ -136,6 +136,17 @@ export default function AgentSessionBlock({ block, payload, onRespond }: Props) 
           </div>
         </>
       )}
+      {/* Terminal / tmux badge row */}
+      {(payload.is_tmux || payload.tty) && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${payload.is_tmux ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300' : 'bg-ask-sep text-ask-secondary'}`}>
+            {payload.is_tmux ? 'tmux' : 'terminal'}
+          </span>
+          <span className="text-[10px] text-ask-secondary font-mono truncate">
+            {payload.is_tmux ? payload.tmux_target : payload.tty}
+          </span>
+        </div>
+      )}
     </div>
   )
 }

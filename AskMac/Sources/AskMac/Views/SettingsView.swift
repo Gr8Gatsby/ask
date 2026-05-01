@@ -2367,24 +2367,64 @@ private struct MachineDetailView: View {
                         .font(.caption)
                 } else {
                     ForEach(agentSessions) { s in
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack {
-                                Text(s.controller).font(.caption).fontWeight(.medium)
-                                Text(s.project).font(.caption).foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 3) {
+                            // Row 1: controller · title  +  type badge
+                            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                                Text(s.controller)
+                                    .font(.caption).fontWeight(.semibold)
+                                if s.title != s.project {
+                                    Text(s.title)
+                                        .font(.caption).foregroundStyle(.primary)
+                                        .lineLimit(1).truncationMode(.tail)
+                                } else {
+                                    Text(s.project)
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
                                 Spacer()
-                                Text(s.tty.isEmpty ? "no TTY" : s.tty)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(s.tty.isEmpty ? .red : .secondary)
-                                    .textSelection(.enabled)
+                                // Terminal / tmux / no routing badge
+                                Text(s.sessionType)
+                                    .font(.caption2).fontWeight(.semibold)
+                                    .padding(.horizontal, 5).padding(.vertical, 2)
+                                    .background(s.sessionType == "tmux" ? Color.purple.opacity(0.15)
+                                                : s.sessionType == "no routing" ? Color.red.opacity(0.12)
+                                                : Color.secondary.opacity(0.12))
+                                    .foregroundStyle(s.sessionType == "tmux" ? Color.purple
+                                                     : s.sessionType == "no routing" ? Color.red
+                                                     : Color.secondary)
+                                    .clipShape(RoundedRectangle(cornerRadius: 4))
                             }
-                            Text(s.cwd)
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
+                            // Row 2: cwd
+                            Text(s.cwd.isEmpty ? "—" : s.cwd)
+                                .font(.caption2).foregroundStyle(.tertiary)
+                                .lineLimit(1).truncationMode(.middle)
                                 .textSelection(.enabled)
+                            // Row 3: session ID + routing + state
+                            HStack(spacing: 8) {
+                                Text(String(s.sessionID.prefix(22)))
+                                    .font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                                    .textSelection(.enabled)
+                                if !s.routing.isEmpty && s.routing != "—" {
+                                    Text("·").font(.caption2).foregroundStyle(.tertiary)
+                                    Text(s.routing)
+                                        .font(.caption2.monospaced()).foregroundStyle(.secondary)
+                                        .textSelection(.enabled)
+                                }
+                                if !s.state.isEmpty {
+                                    Text("·").font(.caption2).foregroundStyle(.tertiary)
+                                    Text(s.state.replacingOccurrences(of: "_", with: " "))
+                                        .font(.caption2).foregroundStyle(
+                                            s.state == "idle" ? .secondary
+                                            : s.state.contains("tool") ? Color.orange
+                                            : Color.blue)
+                                }
+                                if s.isTransient {
+                                    Text("transient").font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                        .italic()
+                                }
+                            }
                         }
-                        .padding(.vertical, 1)
+                        .padding(.vertical, 2)
                     }
                 }
             } header: {
@@ -2406,8 +2446,8 @@ private struct MachineDetailView: View {
                         HStack {
                             Text(p.name).font(.caption).fontWeight(.medium)
                             Spacer()
-                            Text("PID \(p.pid)  TTY \(p.tty)")
-                                .font(.caption.monospaced())
+                            Text("PID \(p.pid)   TTY \(p.tty.isEmpty ? "—" : p.tty)")
+                                .font(.caption2.monospaced())
                                 .foregroundStyle(.secondary)
                                 .textSelection(.enabled)
                         }
@@ -2449,23 +2489,30 @@ private struct MachineDetailView: View {
     // MARK: Data loading
 
     private func refreshSessions() {
+        var sessions: [AgentSession] = []
+        var procs: [LiveProcess] = []
+
+        // claudecode-controller and codex-controller status files
         let statusFiles: [(controller: String, path: String)] = [
             ("Claude Code", NSHomeDirectory() + "/.ask/status/claudecode-controller.json"),
             ("Codex",       NSHomeDirectory() + "/.ask/status/codex-controller.json"),
         ]
-        var sessions: [AgentSession] = []
-        var procs: [LiveProcess] = []
         for (controller, path) in statusFiles {
             guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
             if let list = json["sessions"] as? [[String: Any]] {
                 for s in list {
+                    let project = s["project"] as? String ?? ""
                     sessions.append(AgentSession(
-                        controller: controller,
-                        sessionID: s["session_id"] as? String ?? "",
-                        project:   s["project"]    as? String ?? "",
-                        cwd:       s["cwd"]        as? String ?? "",
-                        tty:       s["tty"]        as? String ?? ""
+                        controller:  controller,
+                        sessionID:   s["session_id"] as? String ?? "",
+                        project:     project,
+                        title:       project,
+                        cwd:         s["cwd"]        as? String ?? "",
+                        tty:         s["tty"]        as? String ?? "",
+                        tmuxTarget:  "",
+                        state:       "",
+                        isTransient: false
                     ))
                 }
             }
@@ -2483,7 +2530,34 @@ private struct MachineDetailView: View {
                 }
             }
         }
-        agentSessions = sessions
+
+        // claude-3 daemon registry
+        let claude3Path = NSHomeDirectory() + "/.ask/claude3-sessions.json"
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: claude3Path)),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            for (_, value) in json {
+                guard let s = value as? [String: Any] else { continue }
+                let state = s["state"] as? String ?? ""
+                guard state != "stopped" else { continue }
+                let project     = s["project"]      as? String ?? ""
+                let firstPrompt = s["first_prompt"]  as? String ?? ""
+                let title = firstPrompt.isEmpty ? project
+                    : "\(project): \(firstPrompt.prefix(50))"
+                sessions.append(AgentSession(
+                    controller:  "Claude 3",
+                    sessionID:   s["session_id"]  as? String ?? "",
+                    project:     project,
+                    title:       title,
+                    cwd:         s["cwd"]         as? String ?? "",
+                    tty:         s["tty"]         as? String ?? "",
+                    tmuxTarget:  s["tmux_target"] as? String ?? "",
+                    state:       state,
+                    isTransient: s["is_transient"] as? Bool ?? false
+                ))
+            }
+        }
+
+        agentSessions = sessions.sorted { $0.controller < $1.controller }
         liveProcesses = procs
     }
 }
@@ -2495,8 +2569,23 @@ private struct AgentSession: Identifiable {
     let controller: String
     let sessionID: String
     let project: String
+    let title: String       // first_prompt or project
     let cwd: String
     let tty: String
+    let tmuxTarget: String
+    let state: String
+    let isTransient: Bool
+
+    var sessionType: String {
+        if !tmuxTarget.isEmpty { return "tmux" }
+        if !tty.isEmpty { return "terminal" }
+        return "no routing"
+    }
+    var routing: String {
+        if !tmuxTarget.isEmpty { return tmuxTarget }
+        if !tty.isEmpty { return tty }
+        return "—"
+    }
 }
 
 private struct LiveProcess: Identifiable {

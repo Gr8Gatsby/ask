@@ -103,7 +103,8 @@ def discover_codex_processes() -> list[dict]:
 
 
 def tty_exists(tty: str) -> bool:
-    return os.path.exists(f'/dev/{tty}')
+    # macOS ps reports TTY as 's004'; the device is at /dev/ttys004
+    return os.path.exists(f'/dev/{tty}') or os.path.exists(f'/dev/tty{tty}')
 
 
 def discover_codex_panes(exclude_targets: Optional[Set[str]] = None) -> list[dict]:

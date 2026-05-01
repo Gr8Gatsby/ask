@@ -50,6 +50,7 @@ class SessionRecord:
     pending_permission: Optional[PendingPermission] = None
     stopped_at: float = 0.0
     last_prompt: str = ''
+    first_prompt: str = ''   # first user message — used as display title
 
     def touch(self):
         self.last_seen = time.time()
@@ -79,6 +80,7 @@ class SessionRecord:
             permission_mode=raw.get('permission_mode', 'supervised'),
             stopped_at=float(raw.get('stopped_at', 0.0)),
             last_prompt=raw.get('last_prompt', ''),
+            first_prompt=raw.get('first_prompt', ''),
         )
         record.pending_permission = PendingPermission.from_dict(raw.get('pending_permission'))
         return record
