@@ -141,9 +141,20 @@ class SessionRegistry:
             self._index_aliases(s)
             return s
 
-        seed = raw_id or tty or cwd or str(time.time())
-        digest = hashlib.sha1(seed.encode()).hexdigest()[:10]
-        sid = f'claude3:{digest}'
+        # Seed priority: cwd → tty → raw_id → time. The same project directory
+        # produces the same digest across CLI restarts, so chat history (keyed by
+        # task_id == session_id) accumulates instead of fragmenting per `claude`
+        # invocation. If two concurrent sessions share a cwd, the first owns the
+        # cwd-derived sid and the second falls back to tty/raw_id.
+        sid = ''
+        for seed in (cwd, tty, raw_id, str(time.time())):
+            if not seed:
+                continue
+            digest = hashlib.sha1(seed.encode()).hexdigest()[:10]
+            candidate = f'claude3:{digest}'
+            if candidate not in self.sessions:
+                sid = candidate
+                break
         s = SessionRecord(
             session_id=sid,
             task_id=sid,
