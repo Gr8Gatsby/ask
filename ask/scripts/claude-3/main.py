@@ -1201,21 +1201,11 @@ class Claude3:
                 except Exception:
                     pass
             # Sessions with no routing (no tty, no tmux_target) can't have their
-            # liveness verified. Give them a 5-minute grace period to resolve routing
-            # (via a hook event or process-discovery link), then evict them.
-            if not session.tmux_target and not session.tty:
-                age = datetime.datetime.now().timestamp() - (session.last_seen or 0)
-                if age > 300:
-                    _log(f'session {session.session_id} has no routing after {int(age)}s — evicting')
-                    session.state = 'stopped'
-                    session.stopped_at = datetime.datetime.now().timestamp()
-                    self._registry.remove(session.session_id)
-                    try:
-                        await self._set_task_status(session, 'completed')
-                        await self.clear_block(self._session_block_id(session.session_id))
-                    except Exception as exc:
-                        _log(f'no-routing eviction error for {session.session_id}: {exc}', 'WARN')
-                    continue
+            # liveness verified live, but they include the supervisor Claude Code
+            # session that is the parent of this daemon — by design it has no
+            # tmux/tty routing and goes idle indefinitely between user prompts.
+            # Don't evict here; SESSION_TTL (24h) at registry-load filters out
+            # genuinely abandoned no-routing sessions on the next daemon restart.
             # Only evict TTY sessions if the TTY is confirmed dead.
             if not session.tmux_target and session.tty:
                 alive_result = await self._call_tool('session_alive', {'session_id': session.raw_id})
