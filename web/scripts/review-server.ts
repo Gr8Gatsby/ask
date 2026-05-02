@@ -388,43 +388,61 @@ const HTML = `<!doctype html>
   .run-hero h1 { margin: 0 0 4px; font-size: 22px; line-height: 1.25; }
   .run-hero p.lead { margin: 0 0 8px; color: var(--muted); font-size: 14px; line-height: 1.55; }
   .run-hero .meta { color: var(--muted); font-size: 12px; }
-  /* Sticky mini-map flowchart */
+  /* ----- Sticky mini-map flowchart -----
+     Dot color now means "where you are":
+       - default grey   = step you haven't viewed
+       - blue ring      = step you're on
+       - dark           = step you already passed
+     A separate small badge by the number indicates feedback count, so
+     "I left a note here" is no longer confused with "I'm here". */
   .mini-map { position: sticky; top: 53px; z-index: 15; background: var(--bg); padding: 10px 0 12px; border-bottom: 1px solid var(--border); margin: 8px 0 16px; }
   .mini-map .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
   .mini-map .nodes { display: flex; gap: 0; align-items: stretch; overflow-x: auto; padding-bottom: 2px; }
-  .mini-map .node { flex: 1 1 0; min-width: 80px; display: flex; flex-direction: column; align-items: center; cursor: pointer; padding: 4px; border-radius: 6px; }
+  .mini-map .node { flex: 1 1 0; min-width: 80px; display: flex; flex-direction: column; align-items: center; cursor: pointer; padding: 4px; border-radius: 6px; position: relative; }
   .mini-map .node:hover { background: var(--row-hover); }
-  .mini-map .node .dot { width: 22px; height: 22px; border-radius: 50%; background: var(--dot); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; }
-  .mini-map .node.has-fb .dot { background: var(--dot-fb); }
-  .mini-map .node.current .dot { box-shadow: 0 0 0 3px rgba(0,102,204,0.25); transform: scale(1.05); }
+  .mini-map .node .dot { width: 26px; height: 26px; border-radius: 50%; background: var(--dot); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; transition: transform .12s ease, box-shadow .12s ease, background .12s ease; }
+  .mini-map .node.passed .dot { background: var(--muted); }
+  .mini-map .node.current .dot { background: var(--primary); box-shadow: 0 0 0 4px rgba(0,102,204,0.22); transform: scale(1.08); }
   .mini-map .node .cap { font-size: 11px; color: var(--text); margin-top: 5px; max-width: 110px; text-align: center; line-height: 1.25; }
-  .mini-map .arrow { flex: 0 0 18px; align-self: center; height: 2px; background: var(--rail); margin-top: 11px; }
-  /* Story timeline */
-  .story h2 { font-size: 14px; margin: 0 0 4px; }
-  .story .desc { color: var(--muted); font-size: 13px; margin: 0 0 14px; line-height: 1.55; }
-  .timeline { position: relative; padding-left: 36px; }
-  .timeline::before { content: ""; position: absolute; left: 13px; top: 8px; bottom: 8px; width: 2px; background: var(--rail); }
-  .step { position: relative; margin-bottom: 22px; scroll-margin-top: 140px; }
-  .step::before { content: ""; position: absolute; left: -29px; top: 4px; width: 14px; height: 14px; border-radius: 50%; background: var(--dot); border: 2px solid var(--panel); }
-  .step.has-fb::before { background: var(--dot-fb); }
-  .step .head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
-  .step .num { color: var(--muted); font-size: 12px; font-family: ui-monospace, monospace; }
-  .step .title { font-weight: 600; font-size: 15px; }
-  .step .duration { color: var(--muted); font-size: 11px; }
-  .step .desc { color: var(--muted); font-size: 13px; line-height: 1.55; margin: 4px 0 8px; max-width: 720px; }
-  .step .shot { display: block; max-width: 720px; width: 100%; border: 1px solid var(--border); border-radius: 6px; cursor: zoom-in; box-shadow: var(--shadow); background: var(--code-bg); }
-  .step .quick { margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap; }
-  .step .quick button { font-size: 12px; padding: 4px 10px 4px 8px; display: inline-flex; align-items: center; gap: 6px; }
-  .step .quick button svg { width: 18px; height: 18px; flex-shrink: 0; }
-  .step .quick button:hover { border-color: var(--primary); color: var(--primary); }
-  .step .fb-list { margin-top: 8px; display: flex; flex-direction: column; gap: 5px; }
-  .step .fb-row { background: var(--pill-bg); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; font-size: 13px; display: flex; gap: 10px; align-items: flex-start; }
-  .step .fb-row .kind { font-weight: 600; min-width: 90px; display: inline-flex; align-items: center; gap: 6px; text-transform: capitalize; }
-  .step .fb-row .kind svg { width: 16px; height: 16px; flex-shrink: 0; }
-  .step .fb-row .text { color: var(--text); flex: 1; }
-  .step .fb-row .x { color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; padding: 0 2px; }
-  .step .fb-row .x svg { width: 14px; height: 14px; }
-  .step .fb-row .x:hover { color: var(--danger); }
+  .mini-map .node.current .cap { font-weight: 600; }
+  .mini-map .node .fb-count { position: absolute; top: 0; right: 18%; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--success); color: #fff; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; border: 2px solid var(--bg); }
+  .mini-map .arrow { flex: 0 0 22px; align-self: center; height: 2px; background: var(--rail); margin-top: 13px; }
+  /* ----- Slide (one step at a time) ----- */
+  .story-info { padding: 14px 18px; }
+  .story-info h2 { font-size: 14px; margin: 0 0 4px; }
+  .story-info .desc { color: var(--muted); font-size: 13px; margin: 0; line-height: 1.55; }
+  .slide { padding: 22px 22px 18px; }
+  .slide .step-meta { color: var(--muted); font-size: 12px; margin: 0 0 4px; }
+  .slide .step-title { font-size: 18px; font-weight: 600; margin: 0 0 6px; }
+  .slide .step-desc { color: var(--muted); font-size: 14px; line-height: 1.6; margin: 0 0 16px; max-width: 760px; }
+  .slide .step-shot-wrap { display: flex; justify-content: center; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 18px; margin-bottom: 16px; }
+  .slide .step-shot { max-width: 100%; max-height: 720px; cursor: zoom-in; border-radius: 4px; }
+  .slide .quick { margin-top: 0; display: flex; gap: 6px; flex-wrap: wrap; }
+  .slide .quick button { font-size: 13px; padding: 6px 12px 6px 10px; display: inline-flex; align-items: center; gap: 6px; }
+  .slide .quick button svg { width: 18px; height: 18px; flex-shrink: 0; }
+  .slide .quick button:hover { border-color: var(--primary); color: var(--primary); }
+  .slide .fb-list { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+  .slide .fb-row { background: var(--pill-bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; font-size: 13px; display: flex; gap: 10px; align-items: flex-start; }
+  .slide .fb-row .kind { font-weight: 600; min-width: 100px; display: inline-flex; align-items: center; gap: 6px; text-transform: capitalize; }
+  .slide .fb-row .kind svg { width: 16px; height: 16px; flex-shrink: 0; }
+  .slide .fb-row .text { color: var(--text); flex: 1; }
+  .slide .fb-row .x { color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; padding: 0 2px; }
+  .slide .fb-row .x svg { width: 14px; height: 14px; }
+  .slide .fb-row .x:hover { color: var(--danger); }
+  /* ----- Prev / Next nav under the slide ----- */
+  .slide-nav { display: flex; justify-content: space-between; gap: 12px; margin: 18px 0 0; }
+  .slide-nav button { padding: 9px 16px; display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
+  .slide-nav button svg { width: 16px; height: 16px; }
+  .slide-nav button:disabled { visibility: hidden; }
+  .slide-nav .step-counter { color: var(--muted); font-size: 12px; align-self: center; }
+  /* ----- Sticky review form pinned to the bottom ----- */
+  .review-sticky { position: sticky; bottom: 0; z-index: 14; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin: 24px 0 0; box-shadow: 0 -4px 14px rgba(0,0,0,0.06); }
+  [data-theme="dark"] .review-sticky { box-shadow: 0 -4px 14px rgba(0,0,0,0.3); }
+  .review-sticky .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .review-sticky .head h3 { margin: 0; font-size: 13px; color: var(--muted); }
+  .review-sticky textarea { min-height: 50px; }
+  .review-sticky .row { margin-top: 8px; }
+  .review-sticky .help { color: var(--muted); font-size: 11px; margin-top: 6px; line-height: 1.5; }
   /* Lightbox */
   dialog { background: rgba(0,0,0,0.92); border: none; max-width: 100vw; max-height: 100vh; padding: 0; }
   dialog img { max-width: 100vw; max-height: 100vh; display: block; cursor: zoom-out; }
@@ -465,6 +483,8 @@ const SVG = {
   remove:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18 18 6M6 6l12 12"/></svg>',
   sun:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M5.05 5.05l1.41 1.41M17.54 17.54l1.41 1.41M3 12h2M19 12h2M5.05 18.95l1.41-1.41M17.54 6.46l1.41-1.41"/></svg>',
   moon:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
+  arrowLeft: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>',
+  arrowRight:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>',
 };
 
 const KINDS = [
@@ -558,83 +578,93 @@ async function renderDetail(id) {
                        : '<span class="badge failed">failed</span>';
   const staleBadge = r.stale ? ' <span class="badge stale">may be stale (code changed since approval)</span>' : '';
 
-  // ----- review section -----
-  let reviewSection = '';
+  // ----- collected steps (flatten across stories) -----
+  const stories = r.stories || [];
+  const allSteps = stories.flatMap(s => s.steps.map(st => ({ s, st })));
+  const fbCountFor = (storyPath, stepIdx) => fb.filter(x => x.storyPath === storyPath && x.stepIdx === stepIdx).length;
+
+  // Restore previously-viewed slide index from sessionStorage so refreshing
+  // the page doesn't bounce back to step 1.
+  const slideKey = 'slide:' + r.id;
+  let slideIdx = parseInt(sessionStorage.getItem(slideKey) || '0', 10);
+  if (isNaN(slideIdx) || slideIdx < 0) slideIdx = 0;
+  if (slideIdx >= allSteps.length) slideIdx = Math.max(0, allSteps.length - 1);
+
+  // ----- review form (rendered separately, pinned to bottom) -----
+  let reviewBody = '';
   if (r.review) {
-    reviewSection = '<div class="panel">' +
-      '<h3>Review · <span class="decision-' + r.review.decision + '">' + r.review.decision + '</span> · ' + ago(r.review.reviewedAt) + '</h3>' +
-      '<p style="margin:0;white-space:pre-wrap">' + escape(r.review.summary || '(no summary)') + '</p>' +
-      '<div class="row" style="margin-top:8px"><button id="reopen">Reopen</button></div>' +
-    '</div>';
+    reviewBody = '<div class="head"><h3>Reviewed · <span class="decision-' + r.review.decision + '">' + r.review.decision + '</span> · ' + ago(r.review.reviewedAt) + '</h3>' +
+      '<button id="reopen">Reopen</button></div>' +
+      '<p style="margin:0;white-space:pre-wrap;font-size:13px">' + escape(r.review.summary || '(no summary)') + '</p>';
   } else if (r.status !== 'running') {
-    reviewSection = '<div class="panel">' +
-      '<h3>Mark this run reviewed</h3>' +
-      '<textarea id="summary" placeholder="Optional — what stood out? (Per-step quick-tags below replace most typing.)"></textarea>' +
-      '<div class="row" style="margin-top:8px">' +
+    reviewBody = '<div class="head"><h3>Overall review</h3>' +
+      '<span class="muted">Use per-step tags above for specifics; only the overall decision is required to finalize.</span></div>' +
+      '<textarea id="summary" placeholder="Optional — anything global to call out? (per-step quick-tags above replace most typing)"></textarea>' +
+      '<div class="row">' +
         '<button class="success" data-decision="approved">Approve</button>' +
         '<button data-decision="changes-requested">Changes requested</button>' +
         '<button class="danger" data-decision="rejected">Reject</button>' +
       '</div>' +
-      '<p class="help">' +
-        '<strong>Approve</strong> → don\\'t re-prompt unless web/src or ask/scripts changes (then a "may be stale" badge appears).<br>' +
-        '<strong>Changes requested / Reject</strong> → suppresses stale alerts; this run is logged as known-not-ready.<br>' +
-        'Submitting never re-runs the test. Use the <em>New run</em> button when you want to retest.' +
-      '</p>' +
-    '</div>';
+      '<p class="help"><strong>Approve</strong> = stop nagging unless web/src or ask/scripts changes. ' +
+        '<strong>Changes / Reject</strong> = log as known-not-ready, suppress stale alerts. ' +
+        'Submitting never re-runs the test — that\\'s always explicit via <em>New run</em>.</p>';
   }
 
   // ----- mini-map flowchart (sticky) -----
   let miniMap = '';
-  const stories = r.stories || [];
-  if (stories.length) {
-    const allSteps = stories.flatMap(s => s.steps.map(st => ({ s, st })));
-    miniMap = '<div class="mini-map" id="mini-map">' +
-      '<div class="label">Where you are</div>' +
-      '<div class="nodes">' +
-        allSteps.map(({ s, st }, i) => {
-          const has = fb.some(x => x.storyPath === s.path && x.stepIdx === st.idx);
-          const arrow = i < allSteps.length - 1 ? '<div class="arrow"></div>' : '';
-          return '<div class="node' + (has ? ' has-fb' : '') + '" data-target="step-' + escape(s.path) + '-' + st.idx + '">' +
-              '<div class="dot">' + (st.idx+1) + '</div>' +
-              '<div class="cap">' + escape(st.title) + '</div>' +
-            '</div>' + arrow;
-        }).join('') +
-      '</div></div>';
+  if (allSteps.length) {
+    miniMap = '<div class="mini-map" id="mini-map"><div class="label">Where you are</div><div class="nodes">' +
+      allSteps.map(({ s, st }, i) => {
+        const count = fbCountFor(s.path, st.idx);
+        const isCurrent = i === slideIdx;
+        const isPassed = i < slideIdx;
+        const cls = ['node'];
+        if (isCurrent) cls.push('current');
+        if (isPassed) cls.push('passed');
+        const arrow = i < allSteps.length - 1 ? '<div class="arrow"></div>' : '';
+        return '<div class="' + cls.join(' ') + '" data-slide="' + i + '">' +
+            '<div class="dot">' + (st.idx+1) + '</div>' +
+            (count > 0 ? '<div class="fb-count" title="' + count + ' note' + (count===1?'':'s') + '">' + count + '</div>' : '') +
+            '<div class="cap">' + escape(st.title) + '</div>' +
+          '</div>' + arrow;
+      }).join('') +
+    '</div></div>';
   }
 
-  // ----- story timelines -----
-  let storyHtml = '';
-  for (const s of stories) {
-    storyHtml += '<div class="story panel" data-story-path="' + escape(s.path) + '">' +
-      '<h2>' + escape(s.title || s.testTitle) + '</h2>' +
-      (s.description ? '<p class="desc">' + escape(s.description) + '</p>' : '') +
-      '<div class="muted" style="margin-bottom:14px">' + s.steps.length + ' step' + (s.steps.length===1?'':'s') + '</div>' +
-      '<div class="timeline">' +
-        s.steps.map(st => {
-          const stepFb = fb.filter(x => x.storyPath === s.path && x.stepIdx === st.idx);
-          return '<div id="step-' + escape(s.path) + '-' + st.idx + '" class="step' + (stepFb.length ? ' has-fb' : '') + '" data-step="' + st.idx + '">' +
-            '<div class="head">' +
-              '<span class="num">' + String(st.idx+1).padStart(2,'0') + '</span>' +
-              '<span class="title">' + escape(st.title) + '</span>' +
-              '<span class="duration">' + st.durationMs + 'ms</span>' +
-            '</div>' +
-            (st.description ? '<p class="desc">' + escape(st.description) + '</p>' : '') +
-            (st.file ? '<img class="shot" loading="lazy" src="/runs/' + r.id + '/story/' + encodeURI(s.path) + '/' + encodeURI(st.file) + '" alt="' + escape(st.title) + '">' : '') +
-            '<div class="quick">' +
-              KINDS.map(k => '<button data-kind="' + k.id + '">' + k.icon + '<span>' + k.label + '</span></button>').join('') +
-              '<button data-kind="other">' + SVG.other + '<span>Comment</span></button>' +
-            '</div>' +
-            '<div class="fb-list">' +
-              stepFb.map(f => '<div class="fb-row">' +
-                '<span class="kind">' + (KINDS.find(k=>k.id===f.kind)?.icon ?? SVG.other) + escape(f.kind) + '</span>' +
-                '<span class="text">' + escape(f.text || '') + '</span>' +
-                '<span class="x" data-at="' + f.at + '" title="remove">' + SVG.remove + '</span>' +
-              '</div>').join('') +
-            '</div>' +
-          '</div>';
-        }).join('') +
-      '</div>' +
-    '</div>';
+  // ----- single-slide rendering (current step only) -----
+  let slideHtml = '';
+  if (allSteps.length) {
+    const { s, st } = allSteps[slideIdx];
+    const stepFb = fb.filter(x => x.storyPath === s.path && x.stepIdx === st.idx);
+    slideHtml =
+      (stories.length === 1
+        ? '<div class="story-info panel" style="margin-top:0;margin-bottom:0;border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom:0">' +
+            '<h2>' + escape(s.title || s.testTitle) + '</h2>' +
+            (s.description ? '<p class="desc">' + escape(s.description) + '</p>' : '') +
+          '</div>'
+        : '') +
+      '<div class="panel slide" style="margin-top:' + (stories.length === 1 ? '0' : '16px') + ';border-top-left-radius:' + (stories.length === 1 ? '0' : '8px') + ';border-top-right-radius:' + (stories.length === 1 ? '0' : '8px') + '" data-story-path="' + escape(s.path) + '" data-step="' + st.idx + '">' +
+        '<p class="step-meta">Step ' + (slideIdx+1) + ' of ' + allSteps.length + ' · ' + st.durationMs + 'ms</p>' +
+        '<h2 class="step-title">' + escape(st.title) + '</h2>' +
+        (st.description ? '<p class="step-desc">' + escape(st.description) + '</p>' : '') +
+        (st.file ? '<div class="step-shot-wrap"><img class="step-shot" src="/runs/' + r.id + '/story/' + encodeURI(s.path) + '/' + encodeURI(st.file) + '" alt="' + escape(st.title) + '"></div>' : '') +
+        '<div class="quick">' +
+          KINDS.map(k => '<button data-kind="' + k.id + '">' + k.icon + '<span>' + k.label + '</span></button>').join('') +
+          '<button data-kind="other">' + SVG.other + '<span>Comment</span></button>' +
+        '</div>' +
+        '<div class="fb-list">' +
+          stepFb.map(f => '<div class="fb-row">' +
+            '<span class="kind">' + (KINDS.find(k=>k.id===f.kind)?.icon ?? SVG.other) + escape(f.kind) + '</span>' +
+            '<span class="text">' + escape(f.text || '') + '</span>' +
+            '<span class="x" data-at="' + f.at + '" title="remove">' + SVG.remove + '</span>' +
+          '</div>').join('') +
+        '</div>' +
+        '<div class="slide-nav">' +
+          '<button id="prev"' + (slideIdx === 0 ? ' disabled' : '') + '>' + SVG.arrowLeft + '<span>Previous</span></button>' +
+          '<span class="step-counter">' + (slideIdx+1) + ' / ' + allSteps.length + '   ·   ← / → to navigate</span>' +
+          '<button id="next"' + (slideIdx === allSteps.length-1 ? ' disabled' : '') + '><span>Next</span>' + SVG.arrowRight + '</button>' +
+        '</div>' +
+      '</div>';
   }
 
   // ----- ad-hoc shots (fallback for specs that don't use story()) -----
@@ -669,34 +699,41 @@ async function renderDetail(id) {
       '<p class="meta">' + escape(r.spec || '(all specs)').replace(/^e2e\\//,'') + ' · ' + r.id + ' · started ' + ago(r.startedAt) + ' · ' + passedBadge + staleBadge + '</p>' +
     '</div>' +
     miniMap +
-    reviewSection +
-    storyHtml +
+    slideHtml +
     shotsHtml +
-    '<details' + (r.exitCode === 0 ? '' : ' open') + '><summary style="cursor:pointer" class="muted">Output</summary>' +
+    (reviewBody ? '<div class="review-sticky" id="review-sticky">' + reviewBody + '</div>' : '') +
+    '<details' + (r.exitCode === 0 ? '' : ' open') + ' style="margin-top:16px"><summary style="cursor:pointer" class="muted">Output</summary>' +
       '<pre class="output" id="run-output">' + escape(r.output ?? '') + '</pre></details>';
 
   // image lightbox
-  view.querySelectorAll('img.shot, figure img').forEach(img => {
+  view.querySelectorAll('img.step-shot, figure img').forEach(img => {
     img.addEventListener('click', () => { lightboxImg.src = img.src; lightbox.showModal(); });
   });
-  // mini-map: click → scroll, scroll → highlight current
-  const miniNodes = view.querySelectorAll('.mini-map .node');
-  miniNodes.forEach(n => {
-    n.addEventListener('click', () => {
-      const tgt = document.getElementById(n.dataset.target);
-      if (tgt) tgt.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-  });
-  if (miniNodes.length) {
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach(e => {
-        if (!e.isIntersecting) return;
-        const id = e.target.id;
-        miniNodes.forEach(n => n.classList.toggle('current', n.dataset.target === id));
-      });
-    }, { rootMargin: '-150px 0px -60% 0px', threshold: 0 });
-    view.querySelectorAll('.step[id]').forEach(s => observer.observe(s));
+
+  // ----- slideshow navigation -----
+  function goTo(i) {
+    if (i < 0 || i >= allSteps.length) return;
+    sessionStorage.setItem(slideKey, String(i));
+    renderDetail(r.id);
   }
+  view.querySelectorAll('.mini-map .node').forEach(n => {
+    n.addEventListener('click', () => goTo(parseInt(n.dataset.slide, 10)));
+  });
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+  if (prevBtn) prevBtn.addEventListener('click', () => goTo(slideIdx - 1));
+  if (nextBtn) nextBtn.addEventListener('click', () => goTo(slideIdx + 1));
+  // Keyboard: ← / → only fire when no input/textarea is focused
+  const keyHandler = (ev) => {
+    const tag = (document.activeElement?.tagName || '').toUpperCase();
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if (ev.key === 'ArrowRight') { ev.preventDefault(); goTo(slideIdx + 1); }
+    if (ev.key === 'ArrowLeft')  { ev.preventDefault(); goTo(slideIdx - 1); }
+  };
+  // Replace any prior listener so we don't stack them across renders
+  if (window.__askKeyHandler) window.removeEventListener('keydown', window.__askKeyHandler);
+  window.__askKeyHandler = keyHandler;
+  window.addEventListener('keydown', keyHandler);
   // review submit / reopen
   view.querySelectorAll('button[data-decision]').forEach(b => {
     b.addEventListener('click', async () => {
@@ -713,35 +750,34 @@ async function renderDetail(id) {
     await fetch('/api/runs/' + r.id + '/review', { method: 'DELETE' });
     renderDetail(r.id);
   });
-  // per-step quick-tag handlers
-  view.querySelectorAll('.story').forEach(storyEl => {
-    const storyPath = storyEl.dataset.storyPath;
-    storyEl.querySelectorAll('.step').forEach(stepEl => {
-      const stepIdx = parseInt(stepEl.dataset.step, 10);
-      stepEl.querySelectorAll('button[data-kind]').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          const kind = btn.dataset.kind;
-          let text = '';
-          if (kind === 'other' || kind === 'bug' || kind === 'confusing') {
-            text = prompt('Add a note (optional):') ?? '';
-            if (kind === 'other' && !text) return;
-          }
-          await fetch('/api/runs/' + r.id + '/feedback', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ storyPath, stepIdx, kind, text }),
-          });
-          renderDetail(r.id);
+  // per-step quick-tag handlers (slide is the active step container)
+  const slideEl = view.querySelector('.slide');
+  if (slideEl) {
+    const storyPath = slideEl.dataset.storyPath;
+    const stepIdx = parseInt(slideEl.dataset.step, 10);
+    slideEl.querySelectorAll('button[data-kind]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const kind = btn.dataset.kind;
+        let text = '';
+        if (kind === 'other' || kind === 'bug' || kind === 'confusing') {
+          text = prompt('Add a note (optional):') ?? '';
+          if (kind === 'other' && !text) return;
+        }
+        await fetch('/api/runs/' + r.id + '/feedback', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ storyPath, stepIdx, kind, text }),
         });
-      });
-      stepEl.querySelectorAll('.fb-row .x').forEach(x => {
-        x.addEventListener('click', async () => {
-          const at = parseInt(x.dataset.at, 10);
-          await fetch('/api/runs/' + r.id + '/feedback?at=' + at, { method: 'DELETE' });
-          renderDetail(r.id);
-        });
+        renderDetail(r.id);
       });
     });
-  });
+    slideEl.querySelectorAll('.fb-row .x').forEach(x => {
+      x.addEventListener('click', async () => {
+        const at = parseInt(x.dataset.at, 10);
+        await fetch('/api/runs/' + r.id + '/feedback?at=' + at, { method: 'DELETE' });
+        renderDetail(r.id);
+      });
+    });
+  }
 }
 
 // ---------- routing -------------------------------------------------------
