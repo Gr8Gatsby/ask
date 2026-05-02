@@ -344,10 +344,28 @@ const HTML = `<!doctype html>
   }
   * { box-sizing: border-box; }
   body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
-  header { position: sticky; top: 0; z-index: 20; padding: 12px 16px; background: var(--header); border-bottom: 1px solid var(--header-bd); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-  header h1 { font-size: 14px; margin: 0; font-weight: 600; }
-  header h1 a { color: inherit; text-decoration: none; }
-  header .right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  /* ----- Floating menu trigger + slide-out side panel
+     Replaces the old sticky top toolbar. The trigger sits in the corner so
+     screenshots get the full vertical space; the panel slides in from the
+     left when opened. ----- */
+  #menu-trigger { position: fixed; top: 10px; left: 12px; z-index: 30; width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); cursor: pointer; padding: 0; }
+  #menu-trigger svg { width: 20px; height: 20px; }
+  #menu-trigger:hover { background: var(--row-hover); }
+  #status-pill { position: fixed; top: 18px; right: 14px; z-index: 30; }
+  #side-panel { position: fixed; top: 0; left: 0; bottom: 0; width: 280px; background: var(--panel); border-right: 1px solid var(--border); box-shadow: 4px 0 18px rgba(0,0,0,0.12); z-index: 40; transform: translateX(-110%); transition: transform .22s ease; padding: 16px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+  #side-panel.open { transform: translateX(0); }
+  #side-panel h1 { font-size: 14px; margin: 0; font-weight: 600; padding-right: 30px; }
+  #side-panel h1 a { color: inherit; text-decoration: none; }
+  #side-panel .group { display: flex; flex-direction: column; gap: 6px; }
+  #side-panel .group label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  #side-panel .group select, #side-panel .group button, #side-panel .group a button { width: 100%; text-align: left; }
+  #side-panel #theme-toggle { display: inline-flex; align-items: center; gap: 8px; }
+  #side-panel #theme-toggle svg { width: 18px; height: 18px; flex-shrink: 0; }
+  #side-panel #close-panel { position: absolute; top: 10px; right: 10px; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; padding: 0; background: transparent; border: none; cursor: pointer; }
+  #side-panel #close-panel svg { width: 16px; height: 16px; }
+  #side-panel #close-panel:hover { background: var(--row-hover); border-radius: 4px; }
+  #panel-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.35); opacity: 0; pointer-events: none; transition: opacity .2s ease; z-index: 35; }
+  #panel-backdrop.open { opacity: 1; pointer-events: auto; }
   select, button, input, textarea { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font: inherit; }
   button { cursor: pointer; }
   select:hover, button:hover:not(:disabled) { background: var(--row-hover); }
@@ -358,7 +376,7 @@ const HTML = `<!doctype html>
   button.icon-only { padding: 5px 7px; line-height: 1; }
   button.icon-only svg { width: 18px; height: 18px; display: block; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
-  main { padding: 16px; max-width: 1400px; margin: 0 auto; }
+  main { padding: 16px 16px 16px 60px; max-width: 1400px; margin: 0 auto; }
   table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 8px; overflow: hidden; box-shadow: var(--shadow); }
   table th, table td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
   table tr:last-child td { border-bottom: 0; }
@@ -395,7 +413,7 @@ const HTML = `<!doctype html>
        - dark           = step you already passed
      A separate small badge by the number indicates feedback count, so
      "I left a note here" is no longer confused with "I'm here". */
-  .mini-map { position: sticky; top: 53px; z-index: 15; background: var(--bg); padding: 10px 0 12px; border-bottom: 1px solid var(--border); margin: 8px 0 16px; }
+  .mini-map { position: sticky; top: 0; z-index: 15; background: var(--bg); padding: 10px 0 12px; border-bottom: 1px solid var(--border); margin: 0 0 12px; }
   .mini-map .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
   .mini-map .nodes { display: flex; gap: 0; align-items: stretch; overflow-x: auto; padding-bottom: 2px; }
   .mini-map .node { flex: 1 1 0; min-width: 80px; display: flex; flex-direction: column; align-items: center; cursor: pointer; padding: 4px; border-radius: 6px; position: relative; }
@@ -415,8 +433,8 @@ const HTML = `<!doctype html>
   .slide .step-meta { color: var(--muted); font-size: 12px; margin: 0 0 4px; }
   .slide .step-title { font-size: 18px; font-weight: 600; margin: 0 0 6px; }
   .slide .step-desc { color: var(--muted); font-size: 14px; line-height: 1.6; margin: 0 0 16px; max-width: 760px; }
-  .slide .step-shot-wrap { display: flex; justify-content: center; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 18px; margin-bottom: 16px; }
-  .slide .step-shot { max-width: 100%; max-height: 720px; cursor: zoom-in; border-radius: 4px; }
+  .slide .step-shot-wrap { display: flex; justify-content: center; align-items: center; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 12px; min-height: 200px; }
+  .slide .step-shot { max-width: 100%; max-height: calc(100vh - 360px); object-fit: contain; cursor: zoom-in; border-radius: 4px; }
   .slide .quick { margin-top: 0; display: flex; gap: 6px; flex-wrap: wrap; }
   .slide .quick button { font-size: 13px; padding: 6px 12px 6px 10px; display: inline-flex; align-items: center; gap: 6px; }
   .slide .quick button svg { width: 18px; height: 18px; flex-shrink: 0; }
@@ -443,10 +461,16 @@ const HTML = `<!doctype html>
   .review-sticky textarea { min-height: 50px; }
   .review-sticky .row { margin-top: 8px; }
   .review-sticky .help { color: var(--muted); font-size: 11px; margin-top: 6px; line-height: 1.5; }
-  /* Lightbox */
-  dialog { background: rgba(0,0,0,0.92); border: none; max-width: 100vw; max-height: 100vh; padding: 0; }
-  dialog img { max-width: 100vw; max-height: 100vh; display: block; cursor: zoom-out; }
-  dialog::backdrop { background: rgba(0,0,0,0.85); }
+  /* Lightbox with zoom/pan */
+  dialog#lightbox { background: rgba(0,0,0,0.95); border: none; width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh; padding: 0; margin: 0; overflow: hidden; }
+  dialog#lightbox::backdrop { background: rgba(0,0,0,0.9); }
+  #lb-stage { width: 100vw; height: 100vh; overflow: hidden; cursor: grab; user-select: none; touch-action: none; }
+  #lb-stage.dragging { cursor: grabbing; }
+  #lb-stage img { display: block; transform-origin: 0 0; user-select: none; -webkit-user-drag: none; pointer-events: none; }
+  #lb-controls { position: fixed; top: 14px; right: 14px; z-index: 50; display: flex; gap: 6px; }
+  #lb-controls button { background: rgba(255,255,255,0.92); color: #111; border: none; border-radius: 6px; width: 36px; height: 36px; font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  #lb-controls button:hover { background: #fff; }
+  #lb-hint { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.7); color: #fff; padding: 6px 12px; border-radius: 4px; font-size: 12px; pointer-events: none; }
   /* Misc */
   .muted { color: var(--muted); font-size: 12px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; }
@@ -456,19 +480,40 @@ const HTML = `<!doctype html>
 </style>
 </head>
 <body data-theme="light">
-<header>
+<button id="menu-trigger" aria-label="Open menu" title="Menu">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+</button>
+<span id="status-pill" class="badge">idle</span>
+<div id="panel-backdrop"></div>
+<aside id="side-panel" aria-hidden="true">
+  <button id="close-panel" aria-label="Close menu" title="Close"></button>
   <h1><a href="#/">Ask · review</a></h1>
-  <span id="status" class="badge">idle</span>
-  <div class="right">
+  <div class="group">
+    <label for="spec">Spec</label>
     <select id="spec"><option value="">All specs</option></select>
+  </div>
+  <div class="group">
     <button id="run" class="primary">New run</button>
-    <button id="theme-toggle" class="icon-only" title="Toggle light/dark"></button>
+  </div>
+  <div class="group">
+    <button id="theme-toggle"></button>
+  </div>
+  <div class="group">
     <a href="http://localhost:5173/dev/markdown" target="_blank"><button>/dev/markdown ↗</button></a>
     <a href="http://localhost:5173/" target="_blank"><button>app ↗</button></a>
   </div>
-</header>
+</aside>
 <main id="view"></main>
-<dialog id="lightbox"><img alt=""></dialog>
+<dialog id="lightbox">
+  <div id="lb-controls">
+    <button id="lb-zoom-out" title="Zoom out (-)"></button>
+    <button id="lb-zoom-reset" title="Reset (0)">⤢</button>
+    <button id="lb-zoom-in" title="Zoom in (+)">+</button>
+    <button id="lb-close" title="Close (Esc)">×</button>
+  </div>
+  <div id="lb-stage"><img alt=""></div>
+  <div id="lb-hint">scroll = zoom · drag = pan · double-click = reset</div>
+</dialog>
 <script>
 // Inline SVGs (Heroicons outline, 24x24 viewBox, stroke=currentColor).
 // No network dependency, scales cleanly, inherits the button text color.
@@ -499,11 +544,83 @@ const KINDS = [
 const view = document.getElementById('view');
 const specEl = document.getElementById('spec');
 const runEl = document.getElementById('run');
-const statusEl = document.getElementById('status');
+const statusEl = document.getElementById('status-pill');
+
+// ---------- side panel toggle -----------------------------------------------
+const sidePanel = document.getElementById('side-panel');
+const panelBackdrop = document.getElementById('panel-backdrop');
+const menuTrigger = document.getElementById('menu-trigger');
+const closePanelBtn = document.getElementById('close-panel');
+function setPanel(open) {
+  sidePanel.classList.toggle('open', open);
+  panelBackdrop.classList.toggle('open', open);
+  sidePanel.setAttribute('aria-hidden', open ? 'false' : 'true');
+}
+menuTrigger.addEventListener('click', () => setPanel(!sidePanel.classList.contains('open')));
+panelBackdrop.addEventListener('click', () => setPanel(false));
+closePanelBtn.innerHTML = SVG.remove;
+
+// ---------- lightbox with zoom + pan ----------------------------------------
 const lightbox = document.getElementById('lightbox');
-const lightboxImg = lightbox.querySelector('img');
-lightboxImg.addEventListener('click', () => lightbox.close());
+const lbStage = document.getElementById('lb-stage');
+const lightboxImg = lbStage.querySelector('img');
+let lbScale = 1, lbTx = 0, lbTy = 0;
+function lbApply() { lightboxImg.style.transform = 'translate(' + lbTx + 'px,' + lbTy + 'px) scale(' + lbScale + ')'; }
+function lbFit() {
+  // Fit to viewport at scale=1, centered.
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const nw = lightboxImg.naturalWidth || 1, nh = lightboxImg.naturalHeight || 1;
+  const fit = Math.min(vw / nw, vh / nh, 1);
+  lbScale = fit;
+  lbTx = (vw - nw * fit) / 2;
+  lbTy = (vh - nh * fit) / 2;
+  lbApply();
+}
+function lbZoomAt(factor, cx, cy) {
+  const next = Math.max(0.1, Math.min(8, lbScale * factor));
+  // keep the point under (cx, cy) stationary
+  lbTx = cx - (cx - lbTx) * (next / lbScale);
+  lbTy = cy - (cy - lbTy) * (next / lbScale);
+  lbScale = next;
+  lbApply();
+}
+function openLightbox(src) {
+  lightboxImg.src = src;
+  lightbox.showModal();
+  if (lightboxImg.complete) lbFit();
+  else lightboxImg.onload = () => lbFit();
+}
+lbStage.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const r = lbStage.getBoundingClientRect();
+  lbZoomAt(e.deltaY < 0 ? 1.15 : 1/1.15, e.clientX - r.left, e.clientY - r.top);
+}, { passive: false });
+let dragging = false, dragX = 0, dragY = 0, dragTx = 0, dragTy = 0;
+lbStage.addEventListener('pointerdown', (e) => {
+  dragging = true; lbStage.classList.add('dragging');
+  lbStage.setPointerCapture(e.pointerId);
+  dragX = e.clientX; dragY = e.clientY; dragTx = lbTx; dragTy = lbTy;
+});
+lbStage.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  lbTx = dragTx + (e.clientX - dragX);
+  lbTy = dragTy + (e.clientY - dragY);
+  lbApply();
+});
+lbStage.addEventListener('pointerup', (e) => { dragging = false; lbStage.classList.remove('dragging'); try { lbStage.releasePointerCapture(e.pointerId); } catch {} });
+lbStage.addEventListener('dblclick', () => lbFit());
+document.getElementById('lb-zoom-in').addEventListener('click', () => lbZoomAt(1.25, window.innerWidth/2, window.innerHeight/2));
+document.getElementById('lb-zoom-out').addEventListener('click', () => lbZoomAt(1/1.25, window.innerWidth/2, window.innerHeight/2));
+document.getElementById('lb-zoom-reset').addEventListener('click', () => lbFit());
+document.getElementById('lb-close').addEventListener('click', () => lightbox.close());
+document.getElementById('lb-zoom-out').textContent = '−';
 lightbox.addEventListener('click', (e) => { if (e.target === lightbox) lightbox.close(); });
+window.addEventListener('keydown', (e) => {
+  if (!lightbox.open) return;
+  if (e.key === '+' || e.key === '=') { e.preventDefault(); lbZoomAt(1.25, window.innerWidth/2, window.innerHeight/2); }
+  if (e.key === '-') { e.preventDefault(); lbZoomAt(1/1.25, window.innerWidth/2, window.innerHeight/2); }
+  if (e.key === '0') { e.preventDefault(); lbFit(); }
+});
 
 function ago(ms) {
   const s = (Date.now() - ms) / 1000;
@@ -707,7 +824,7 @@ async function renderDetail(id) {
 
   // image lightbox
   view.querySelectorAll('img.step-shot, figure img').forEach(img => {
-    img.addEventListener('click', () => { lightboxImg.src = img.src; lightbox.showModal(); });
+    img.addEventListener('click', () => openLightbox(img.src));
   });
 
   // ----- slideshow navigation -----
@@ -793,6 +910,7 @@ runEl.addEventListener('click', async () => {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ spec: specEl.value }),
   }).then(r => r.json());
+  setPanel(false);
   if (r.id) location.hash = '#/run/' + r.id;
 });
 
@@ -812,8 +930,10 @@ es.addEventListener('done', () => {
 const themeBtn = document.getElementById('theme-toggle');
 function applyTheme(t) {
   document.body.dataset.theme = t;
-  themeBtn.innerHTML = t === 'dark' ? SVG.sun : SVG.moon;
-  themeBtn.title = t === 'dark' ? 'Switch to light' : 'Switch to dark';
+  const icon = t === 'dark' ? SVG.sun : SVG.moon;
+  const label = t === 'dark' ? 'Light theme' : 'Dark theme';
+  themeBtn.innerHTML = icon + '<span>' + label + '</span>';
+  themeBtn.title = label;
 }
 applyTheme(localStorage.getItem('ask-review-theme') || 'light');
 themeBtn.addEventListener('click', () => {
