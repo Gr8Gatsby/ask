@@ -1,28 +1,42 @@
 /**
  * Ask · review dashboard
  *
- * Landing page: every test run as a row (status, spec, time, shots, review note).
- * Click a run → frozen screenshots, run output, and a review form to mark it
- * reviewed with a summary + decision.
+ * Landing page: every test run, with status, decision, and a "may be stale"
+ * badge when commits land between approval and now.
  *
- * Data lives under web/.review/:
- *   runs.json                    – array of run metadata (newest first)
- *   runs/<id>/output.txt         – captured stdout/stderr
- *   runs/<id>/screenshots/...    – frozen copy of the screenshots that PR
- *                                  produced (so historical runs survive
- *                                  re-runs that overwrite e2e/screenshots/)
+ * Run detail:
+ *   - Vertical step-by-step "story" timeline (from helpers/story.ts in the
+ *     spec) with per-step quick-tag feedback (👍🐛🎨📝🤔⚠️) + optional text
+ *   - Captured Playwright stdout
+ *   - Review form to mark the run reviewed; submitting NEVER kicks off
+ *     another run — re-runs are explicit via the New run button
+ *
+ * Approve / Changes-requested / Reject semantics
+ *   approved          → don't re-prompt unless code changes (stale = code
+ *                       under web/src or ask/scripts/ changed since this run)
+ *   changes-requested → known-not-ready, dashboard ignores it for stale alerts
+ *   rejected          → same as changes-requested — won't nag
+ *
+ * Storage (gitignored, web/.review/):
+ *   runs.json                          – metadata for every run
+ *   runs/<id>/output.txt               – captured stdout/stderr
+ *   runs/<id>/screenshots/...          – frozen ad-hoc screenshots
+ *   runs/<id>/story/<spec>/...         – frozen story dirs (from helpers/story.ts)
+ *   runs/<id>/feedback.json            – per-step feedback {step,kind,text}
  *
  * Run with: cd web && npm run review   →   http://localhost:4244
  */
 import http from 'http'
 import fs from 'fs'
 import path from 'path'
-import { spawn } from 'child_process'
+import { spawn, execSync } from 'child_process'
 import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const WEB = path.resolve(__dirname, '..')
+const REPO = path.resolve(WEB, '..')
 const SHOTS = path.join(WEB, 'e2e', 'screenshots')
+const STORY_ROOT = path.join(SHOTS, '__story')
 const E2E = path.join(WEB, 'e2e')
 const REVIEW = path.join(WEB, '.review')
 const RUNS_DIR = path.join(REVIEW, 'runs')
@@ -37,27 +51,31 @@ interface Review {
   decision: 'approved' | 'changes-requested' | 'rejected'
   reviewedAt: number
 }
+interface Feedback {
+  storyPath: string   // relative path under runs/<id>/story/  e.g. "<test-slug>"
+  stepIdx: number
+  kind: string        // ok | bug | style | copy | confusing | slow | other
+  text: string
+  at: number
+}
 interface Run {
   id: string
-  spec: string                  // '' = all specs
+  spec: string
   startedAt: number
   endedAt: number | null
   exitCode: number | null
   screenshotCount: number
   status: 'running' | 'awaiting-review' | 'reviewed'
   review: Review | null
+  gitHead: string | null    // sha at run start (for staleness detection)
 }
 
 function loadRuns(): Run[] {
   try { return JSON.parse(fs.readFileSync(RUNS_JSON, 'utf-8')) as Run[] }
   catch { return [] }
 }
-function saveRuns(runs: Run[]) {
-  fs.writeFileSync(RUNS_JSON, JSON.stringify(runs, null, 2))
-}
-function getRun(id: string): Run | undefined {
-  return loadRuns().find(r => r.id === id)
-}
+function saveRuns(runs: Run[]) { fs.writeFileSync(RUNS_JSON, JSON.stringify(runs, null, 2)) }
+function getRun(id: string): Run | undefined { return loadRuns().find(r => r.id === id) }
 function updateRun(id: string, patch: Partial<Run>): Run | undefined {
   const runs = loadRuns()
   const i = runs.findIndex(r => r.id === id)
@@ -70,6 +88,24 @@ function newRunId(): string {
   const d = new Date()
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+}
+
+function git(args: string[]): string {
+  try { return execSync(`git ${args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`, { cwd: REPO, encoding: 'utf-8' }).trim() }
+  catch { return '' }
+}
+function currentGitHead(): string | null { return git(['rev-parse', 'HEAD']) || null }
+
+/** True if any file under web/src or ask/scripts has changed since the run's gitHead. */
+function isPotentiallyStale(run: Run): boolean {
+  if (!run.gitHead) return false
+  if (!run.review || run.review.decision !== 'approved') return false
+  const out = git(['diff', '--name-only', `${run.gitHead}..HEAD`])
+  if (!out) return false
+  for (const line of out.split('\n')) {
+    if (line.startsWith('web/src/') || line.startsWith('ask/scripts/')) return true
+  }
+  return false
 }
 
 // ---------- run state -----------------------------------------------------
@@ -95,10 +131,12 @@ function listShots(dir: string): string[] {
 }
 
 function freezeScreenshots(runId: string, since: number): number {
+  // Freeze ad-hoc screenshots (anything in e2e/screenshots/ except __story)
   const dest = path.join(RUNS_DIR, runId, 'screenshots')
   fs.mkdirSync(dest, { recursive: true })
   let n = 0
   for (const src of listShots(SHOTS)) {
+    if (src.startsWith(STORY_ROOT)) continue
     const st = fs.statSync(src)
     if (st.mtimeMs < since) continue
     const rel = path.relative(SHOTS, src)
@@ -106,6 +144,24 @@ function freezeScreenshots(runId: string, since: number): number {
     fs.mkdirSync(path.dirname(dst), { recursive: true })
     fs.copyFileSync(src, dst)
     n++
+  }
+  // Freeze every story directory whole (story.json + step PNGs)
+  if (fs.existsSync(STORY_ROOT)) {
+    for (const e of fs.readdirSync(STORY_ROOT, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue
+      const srcDir = path.join(STORY_ROOT, e.name)
+      const storyJson = path.join(srcDir, 'story.json')
+      if (!fs.existsSync(storyJson)) continue
+      const startedAt = (() => {
+        try { return JSON.parse(fs.readFileSync(storyJson, 'utf-8')).startedAt as number ?? 0 } catch { return 0 }
+      })()
+      if (startedAt < since) continue
+      const dstDir = path.join(RUNS_DIR, runId, 'story', e.name)
+      fs.mkdirSync(dstDir, { recursive: true })
+      for (const f of fs.readdirSync(srcDir)) {
+        fs.copyFileSync(path.join(srcDir, f), path.join(dstDir, f))
+      }
+    }
   }
   return n
 }
@@ -121,6 +177,7 @@ function startRun(spec: string): Run | null {
     screenshotCount: 0,
     status: 'running',
     review: null,
+    gitHead: currentGitHead(),
   }
   fs.mkdirSync(path.join(RUNS_DIR, run.id), { recursive: true })
   saveRuns([run, ...loadRuns()])
@@ -176,6 +233,31 @@ function listFrozenShots(runId: string): { rel: string; size: number }[] {
   return out.sort((a, b) => a.rel.localeCompare(b.rel))
 }
 
+interface FrozenStory { path: string; testTitle: string; steps: { idx: number; name: string; file: string; durationMs: number }[] }
+function listFrozenStories(runId: string): FrozenStory[] {
+  const root = path.join(RUNS_DIR, runId, 'story')
+  if (!fs.existsSync(root)) return []
+  const out: FrozenStory[] = []
+  for (const e of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!e.isDirectory()) continue
+    const j = path.join(root, e.name, 'story.json')
+    if (!fs.existsSync(j)) continue
+    try {
+      const data = JSON.parse(fs.readFileSync(j, 'utf-8')) as { testTitle?: string; steps: FrozenStory['steps'] }
+      out.push({ path: e.name, testTitle: data.testTitle ?? e.name, steps: data.steps ?? [] })
+    } catch { /* skip */ }
+  }
+  return out
+}
+
+function loadFeedback(runId: string): Feedback[] {
+  const p = path.join(RUNS_DIR, runId, 'feedback.json')
+  try { return JSON.parse(fs.readFileSync(p, 'utf-8')) as Feedback[] } catch { return [] }
+}
+function saveFeedback(runId: string, fb: Feedback[]) {
+  fs.writeFileSync(path.join(RUNS_DIR, runId, 'feedback.json'), JSON.stringify(fb, null, 2))
+}
+
 // ---------- HTML page (SPA with hash routing) -----------------------------
 const HTML = `<!doctype html>
 <html lang="en"><head>
@@ -191,25 +273,18 @@ const HTML = `<!doctype html>
   header .right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
   select, button, input, textarea { background: #1a1a1c; color: #eee; border: 1px solid #333; border-radius: 6px; padding: 6px 10px; font: inherit; }
   button { cursor: pointer; }
-  select:hover, button:hover { background: #222226; }
+  select:hover, button:hover:not(:disabled) { background: #222226; }
   button.primary { background: #0066cc; border-color: #0066cc; color: #fff; }
   button.primary:hover { background: #0077ee; }
   button.danger { background: #6b1a1a; border-color: #6b1a1a; color: #fff; }
   button.success { background: #1d6f1d; border-color: #1d6f1d; color: #fff; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
-  main { padding: 16px; }
-  .group { margin-bottom: 24px; }
-  .group h2 { font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 8px; font-weight: 600; }
+  main { padding: 16px; max-width: 1400px; margin: 0 auto; }
   table { width: 100%; border-collapse: collapse; }
   table th, table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #1f1f22; vertical-align: top; }
   table th { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
   table tr:hover td { background: #14141a; }
   table tr.clickable { cursor: pointer; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; }
-  figure { margin: 0; background: #131316; border: 1px solid #262629; border-radius: 8px; overflow: hidden; }
-  figure img { display: block; width: 100%; cursor: zoom-in; background: #000; }
-  figcaption { padding: 6px 10px; font-size: 11px; color: #999; display: flex; justify-content: space-between; }
-  pre.output { background: #0a0a0c; border: 1px solid #2a2a2a; border-radius: 6px; padding: 10px; max-height: 280px; overflow: auto; font: 11px/1.4 ui-monospace,monospace; white-space: pre-wrap; }
   .empty { color: #666; padding: 28px; text-align: center; }
   .badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; display: inline-block; }
   .badge.running { background: #0a4d0a; color: #afe9af; }
@@ -217,21 +292,50 @@ const HTML = `<!doctype html>
   .badge.reviewed { background: #0a3a4d; color: #a4d8ee; }
   .badge.passed { background: #0a4d0a; color: #afe9af; }
   .badge.failed { background: #4d0a0a; color: #ee9c9c; }
+  .badge.stale { background: #6b1a1a; color: #ffc9c9; }
   .decision-approved { color: #afe9af; }
   .decision-changes-requested { color: #f5d77a; }
   .decision-rejected { color: #ee9c9c; }
   a { color: #4aa3ff; text-decoration: none; }
   a:hover { text-decoration: underline; }
-  textarea { width: 100%; min-height: 80px; resize: vertical; font-family: inherit; }
-  .review-form { background: #131316; border: 1px solid #262629; border-radius: 8px; padding: 14px; margin: 16px 0; }
-  .review-form .row { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
-  .review-existing { background: #131316; border: 1px solid #262629; border-radius: 8px; padding: 14px; margin: 16px 0; }
-  .review-existing h3 { margin: 0 0 6px; font-size: 13px; color: #aaa; }
-  .review-existing p { margin: 0; white-space: pre-wrap; }
+  textarea { width: 100%; min-height: 60px; resize: vertical; font-family: inherit; }
+  pre.output { background: #0a0a0c; border: 1px solid #2a2a2a; border-radius: 6px; padding: 10px; max-height: 280px; overflow: auto; font: 11px/1.4 ui-monospace,monospace; white-space: pre-wrap; }
+  .panel { background: #131316; border: 1px solid #262629; border-radius: 8px; padding: 14px; margin: 16px 0; }
+  .panel h3 { margin: 0 0 8px; font-size: 13px; color: #aaa; }
+  .panel .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .panel .help { color: #777; font-size: 12px; margin-top: 8px; line-height: 1.5; }
+  /* Story timeline */
+  .story h2 { font-size: 12px; color: #888; text-transform: uppercase; margin: 0 0 8px; }
+  .timeline { position: relative; padding-left: 32px; }
+  .timeline::before { content: ""; position: absolute; left: 12px; top: 6px; bottom: 6px; width: 2px; background: #262629; }
+  .step { position: relative; margin-bottom: 18px; }
+  .step::before { content: ""; position: absolute; left: -26px; top: 6px; width: 12px; height: 12px; border-radius: 50%; background: #444; border: 2px solid #131316; }
+  .step.has-fb::before { background: #4aa3ff; }
+  .step .head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .step .num { color: #666; font-size: 12px; font-family: ui-monospace, monospace; }
+  .step .name { font-weight: 500; }
+  .step .duration { color: #666; font-size: 11px; }
+  .step .shot { display: block; margin-top: 8px; max-width: 720px; width: 100%; border: 1px solid #262629; border-radius: 6px; cursor: zoom-in; }
+  .step .quick { margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap; }
+  .step .quick button { font-size: 12px; padding: 3px 8px; }
+  .step .quick button.active { background: #4aa3ff; border-color: #4aa3ff; color: #fff; }
+  .step .fb { margin-top: 6px; }
+  .step .fb-list { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+  .step .fb-row { background: #1a1a1c; border: 1px solid #262629; border-radius: 4px; padding: 6px 8px; font-size: 12px; display: flex; gap: 8px; align-items: flex-start; }
+  .step .fb-row .kind { font-weight: 600; min-width: 80px; }
+  .step .fb-row .text { color: #ddd; flex: 1; }
+  .step .fb-row .x { color: #666; cursor: pointer; }
+  .step .fb-row .x:hover { color: #ee9c9c; }
   /* Lightbox */
   dialog { background: rgba(0,0,0,0.95); border: none; max-width: 100vw; max-height: 100vh; padding: 0; }
   dialog img { max-width: 100vw; max-height: 100vh; display: block; cursor: zoom-out; }
   dialog::backdrop { background: rgba(0,0,0,0.9); }
+  /* Misc */
+  .muted { color: #888; font-size: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; }
+  figure { margin: 0; background: #131316; border: 1px solid #262629; border-radius: 8px; overflow: hidden; }
+  figure img { display: block; width: 100%; cursor: zoom-in; background: #000; }
+  figcaption { padding: 6px 10px; font-size: 11px; color: #999; display: flex; justify-content: space-between; }
 </style>
 </head>
 <body>
@@ -248,6 +352,15 @@ const HTML = `<!doctype html>
 <main id="view"></main>
 <dialog id="lightbox"><img alt=""></dialog>
 <script>
+const KINDS = [
+  { id: 'ok',         label: 'OK',         emoji: '👍' },
+  { id: 'bug',        label: 'Bug',        emoji: '🐛' },
+  { id: 'style',      label: 'Style',      emoji: '🎨' },
+  { id: 'copy',       label: 'Copy',       emoji: '📝' },
+  { id: 'confusing',  label: 'Confusing',  emoji: '🤔' },
+  { id: 'slow',       label: 'Slow',       emoji: '⚠️' },
+];
+
 const view = document.getElementById('view');
 const specEl = document.getElementById('spec');
 const runEl = document.getElementById('run');
@@ -288,33 +401,32 @@ async function renderList() {
     return;
   }
   const rows = runs.map(r => {
-    const passed = r.exitCode === 0;
     const exitBadge = r.exitCode === null
       ? '<span class="badge running">running</span>'
-      : passed ? '<span class="badge passed">passed</span>'
-               : '<span class="badge failed">failed</span>';
+      : r.exitCode === 0 ? '<span class="badge passed">passed</span>'
+                         : '<span class="badge failed">failed</span>';
     const statusBadge = '<span class="badge ' + (
       r.status === 'running' ? 'running' :
-      r.status === 'reviewed' ? 'reviewed' :
-      'awaiting'
+      r.status === 'reviewed' ? 'reviewed' : 'awaiting'
     ) + '">' + r.status + '</span>';
+    const staleBadge = r.stale ? ' <span class="badge stale" title="Code under web/src or ask/scripts has changed since this run was approved.">may be stale</span>' : '';
     const decision = r.review
-      ? '<span class="decision-' + r.review.decision + '">' + r.review.decision + '</span> · ' + escape(r.review.summary).slice(0, 80)
-      : '—';
+      ? '<span class="decision-' + r.review.decision + '">' + r.review.decision + '</span>' +
+        (r.review.summary ? ' · ' + escape(r.review.summary).slice(0, 80) : '')
+      : '<span class="muted">—</span>';
     return '<tr class="clickable" data-id="' + r.id + '">' +
-      '<td>' + ago(r.startedAt) + '<br><span style="color:#666;font-size:11px">' + r.id + '</span></td>' +
+      '<td>' + ago(r.startedAt) + '<br><span class="muted">' + r.id + '</span></td>' +
       '<td>' + escape(r.spec || '(all specs)').replace(/^e2e\\//,'') + '</td>' +
       '<td>' + exitBadge + '</td>' +
-      '<td>' + statusBadge + '</td>' +
+      '<td>' + statusBadge + staleBadge + '</td>' +
       '<td>' + r.screenshotCount + '</td>' +
       '<td>' + decision + '</td>' +
     '</tr>';
   }).join('');
   view.innerHTML =
-    '<table>' +
-      '<thead><tr><th>When</th><th>Spec</th><th>Result</th><th>Review</th><th>Shots</th><th>Decision · Summary</th></tr></thead>' +
-      '<tbody>' + rows + '</tbody>' +
-    '</table>';
+    '<table><thead><tr>' +
+      '<th>When</th><th>Spec</th><th>Result</th><th>Review</th><th>Shots</th><th>Decision · Summary</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table>';
   view.querySelectorAll('tr.clickable').forEach(tr => {
     tr.addEventListener('click', () => location.hash = '#/run/' + tr.dataset.id);
   });
@@ -324,44 +436,84 @@ async function renderList() {
 async function renderDetail(id) {
   const r = await fetch('/api/runs/' + id).then(r => r.json());
   if (r.error) { view.innerHTML = '<div class="empty">Run not found.</div>'; return; }
+  const fb = r.feedback || [];
   const passedBadge = r.exitCode === null
     ? '<span class="badge running">running</span>'
-    : r.exitCode === 0 ? '<span class="badge passed">passed</span>' : '<span class="badge failed">failed</span>';
+    : r.exitCode === 0 ? '<span class="badge passed">passed</span>'
+                       : '<span class="badge failed">failed</span>';
+  const staleBadge = r.stale ? ' <span class="badge stale">may be stale (code changed since approval)</span>' : '';
 
+  // ----- review section -----
   let reviewSection = '';
   if (r.review) {
-    reviewSection = '<div class="review-existing">' +
+    reviewSection = '<div class="panel">' +
       '<h3>Review · <span class="decision-' + r.review.decision + '">' + r.review.decision + '</span> · ' + ago(r.review.reviewedAt) + '</h3>' +
-      '<p>' + escape(r.review.summary) + '</p>' +
-      '<div class="row"><button id="reopen">Reopen</button></div>' +
+      '<p style="margin:0;white-space:pre-wrap">' + escape(r.review.summary || '(no summary)') + '</p>' +
+      '<div class="row" style="margin-top:8px"><button id="reopen">Reopen</button></div>' +
     '</div>';
   } else if (r.status !== 'running') {
-    reviewSection = '<div class="review-form">' +
-      '<h3 style="margin:0 0 8px;font-size:13px;color:#aaa">Mark this run reviewed</h3>' +
-      '<textarea id="summary" placeholder="What did you decide? What needs follow-up?"></textarea>' +
-      '<div class="row">' +
+    reviewSection = '<div class="panel">' +
+      '<h3>Mark this run reviewed</h3>' +
+      '<textarea id="summary" placeholder="Optional — what stood out? (Per-step quick-tags below replace most typing.)"></textarea>' +
+      '<div class="row" style="margin-top:8px">' +
         '<button class="success" data-decision="approved">Approve</button>' +
         '<button data-decision="changes-requested">Changes requested</button>' +
         '<button class="danger" data-decision="rejected">Reject</button>' +
       '</div>' +
+      '<p class="help">' +
+        '<strong>Approve</strong> → don\\'t re-prompt unless web/src or ask/scripts changes (then a "may be stale" badge appears).<br>' +
+        '<strong>Changes requested / Reject</strong> → suppresses stale alerts; this run is logged as known-not-ready.<br>' +
+        'Submitting never re-runs the test. Use the <em>New run</em> button when you want to retest.' +
+      '</p>' +
     '</div>';
   }
 
-  const shotGroups = new Map();
-  for (const s of r.screenshots) {
-    const parts = s.rel.split('/');
-    const g = parts.length > 1 ? parts[0] : '(root)';
-    if (!shotGroups.has(g)) shotGroups.set(g, []);
-    shotGroups.get(g).push(s);
+  // ----- story timelines -----
+  let storyHtml = '';
+  for (const s of (r.stories || [])) {
+    storyHtml += '<div class="story panel" data-story-path="' + escape(s.path) + '">' +
+      '<h2>' + escape(s.testTitle) + ' — ' + s.steps.length + ' step' + (s.steps.length===1?'':'s') + '</h2>' +
+      '<div class="timeline">' +
+        s.steps.map(st => {
+          const stepFb = fb.filter(x => x.storyPath === s.path && x.stepIdx === st.idx);
+          return '<div class="step' + (stepFb.length ? ' has-fb' : '') + '" data-step="' + st.idx + '">' +
+            '<div class="head">' +
+              '<span class="num">' + String(st.idx+1).padStart(2,'0') + '</span>' +
+              '<span class="name">' + escape(st.name) + '</span>' +
+              '<span class="duration">· ' + st.durationMs + 'ms</span>' +
+            '</div>' +
+            (st.file ? '<img class="shot" loading="lazy" src="/runs/' + r.id + '/story/' + encodeURI(s.path) + '/' + encodeURI(st.file) + '" alt="' + escape(st.name) + '">' : '') +
+            '<div class="quick">' +
+              KINDS.map(k => '<button data-kind="' + k.id + '">' + k.emoji + ' ' + k.label + '</button>').join('') +
+              '<button data-kind="other">＋ Comment</button>' +
+            '</div>' +
+            '<div class="fb-list">' +
+              stepFb.map(f => '<div class="fb-row">' +
+                '<span class="kind">' + (KINDS.find(k=>k.id===f.kind)?.emoji ?? '·') + ' ' + escape(f.kind) + '</span>' +
+                '<span class="text">' + escape(f.text || '') + '</span>' +
+                '<span class="x" data-at="' + f.at + '" title="remove">✕</span>' +
+              '</div>').join('') +
+            '</div>' +
+          '</div>';
+        }).join('') +
+      '</div>' +
+    '</div>';
   }
+
+  // ----- ad-hoc shots (fallback for specs that don't use story()) -----
   let shotsHtml = '';
-  if (!r.screenshots.length) {
-    shotsHtml = '<div class="empty">This run captured no screenshots.</div>';
-  } else {
-    for (const [g, items] of shotGroups) {
-      shotsHtml += '<div class="group"><h2>' + escape(g) + ' — ' + items.length + '</h2><div class="grid">' +
+  if (r.screenshots?.length) {
+    const groups = new Map();
+    for (const s of r.screenshots) {
+      const top = s.rel.split('/')[0] || '(root)';
+      if (!groups.has(top)) groups.set(top, []);
+      groups.get(top).push(s);
+    }
+    for (const [g, items] of groups) {
+      shotsHtml += '<div class="panel"><h2 style="margin:0 0 8px;font-size:12px;color:#888;text-transform:uppercase">' + escape(g) + ' — ' + items.length + '</h2>' +
+        '<div class="grid">' +
         items.map(s =>
-          '<figure><img loading="lazy" src="/runs/' + r.id + '/shots/' + encodeURI(s.rel) + '" alt="' + escape(s.rel) + '" />' +
+          '<figure><img loading="lazy" src="/runs/' + r.id + '/shots/' + encodeURI(s.rel) + '" alt="' + escape(s.rel) + '">' +
           '<figcaption><span>' + escape(s.rel.split("/").pop()) + '</span><span>' + fmt(s.size) + '</span></figcaption></figure>'
         ).join('') + '</div></div>';
     }
@@ -370,19 +522,21 @@ async function renderDetail(id) {
   view.innerHTML =
     '<p style="margin:0 0 12px"><a href="#/">← all runs</a></p>' +
     '<h2 style="margin:0 0 4px;font-size:16px">' + escape(r.spec || '(all specs)').replace(/^e2e\\//,'') + '</h2>' +
-    '<p style="margin:0 0 14px;color:#888;font-size:12px">' + r.id + ' · started ' + ago(r.startedAt) + ' · ' + passedBadge + '</p>' +
+    '<p style="margin:0 0 14px" class="muted">' + r.id + ' · started ' + ago(r.startedAt) + ' · ' + passedBadge + staleBadge + '</p>' +
     reviewSection +
-    '<details' + (r.exitCode === 0 ? '' : ' open') + '><summary style="cursor:pointer;color:#888;margin:8px 0;font-size:12px">Output</summary>' +
-      '<pre class="output" id="run-output">' + escape(r.output ?? '') + '</pre>' +
-    '</details>' +
-    shotsHtml;
+    storyHtml +
+    shotsHtml +
+    '<details' + (r.exitCode === 0 ? '' : ' open') + '><summary style="cursor:pointer" class="muted">Output</summary>' +
+      '<pre class="output" id="run-output">' + escape(r.output ?? '') + '</pre></details>';
 
-  view.querySelectorAll('figure img').forEach(img => {
+  // image lightbox
+  view.querySelectorAll('img.shot, figure img').forEach(img => {
     img.addEventListener('click', () => { lightboxImg.src = img.src; lightbox.showModal(); });
   });
+  // review submit / reopen
   view.querySelectorAll('button[data-decision]').forEach(b => {
     b.addEventListener('click', async () => {
-      const summary = (document.getElementById('summary')).value.trim() || '(no notes)';
+      const summary = (document.getElementById('summary')).value.trim();
       await fetch('/api/runs/' + r.id + '/review', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ summary, decision: b.dataset.decision }),
@@ -394,6 +548,35 @@ async function renderDetail(id) {
   if (reopen) reopen.addEventListener('click', async () => {
     await fetch('/api/runs/' + r.id + '/review', { method: 'DELETE' });
     renderDetail(r.id);
+  });
+  // per-step quick-tag handlers
+  view.querySelectorAll('.story').forEach(storyEl => {
+    const storyPath = storyEl.dataset.storyPath;
+    storyEl.querySelectorAll('.step').forEach(stepEl => {
+      const stepIdx = parseInt(stepEl.dataset.step, 10);
+      stepEl.querySelectorAll('button[data-kind]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const kind = btn.dataset.kind;
+          let text = '';
+          if (kind === 'other' || kind === 'bug' || kind === 'confusing') {
+            text = prompt('Add a note (optional):') ?? '';
+            if (kind === 'other' && !text) return;
+          }
+          await fetch('/api/runs/' + r.id + '/feedback', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ storyPath, stepIdx, kind, text }),
+          });
+          renderDetail(r.id);
+        });
+      });
+      stepEl.querySelectorAll('.fb-row .x').forEach(x => {
+        x.addEventListener('click', async () => {
+          const at = parseInt(x.dataset.at, 10);
+          await fetch('/api/runs/' + r.id + '/feedback?at=' + at, { method: 'DELETE' });
+          renderDetail(r.id);
+        });
+      });
+    });
   });
 }
 
@@ -422,7 +605,7 @@ es.addEventListener('line', (e) => {
 es.addEventListener('done', () => {
   statusEl.textContent = 'idle'; statusEl.className = 'badge';
   runEl.disabled = false;
-  route();   // reload current view (list or detail) so new shots appear
+  route();
 });
 
 loadSpecs();
@@ -447,8 +630,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (p === '/api/runs' && req.method === 'GET') {
+    const runs = loadRuns().map(r => ({ ...r, stale: isPotentiallyStale(r) }))
     res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify(loadRuns())); return
+    res.end(JSON.stringify(runs)); return
   }
 
   const runDetail = p.match(/^\/api\/runs\/([^/]+)$/)
@@ -459,7 +643,14 @@ const server = http.createServer(async (req, res) => {
     const output = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, 'utf-8')
                   : (currentRunId === r.id ? currentOutput : '')
     res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ ...r, output, screenshots: listFrozenShots(r.id) })); return
+    res.end(JSON.stringify({
+      ...r,
+      output,
+      screenshots: listFrozenShots(r.id),
+      stories: listFrozenStories(r.id),
+      feedback: loadFeedback(r.id),
+      stale: isPotentiallyStale(r),
+    })); return
   }
 
   if (p === '/api/run' && req.method === 'POST') {
@@ -485,23 +676,45 @@ const server = http.createServer(async (req, res) => {
         const { summary, decision } = JSON.parse(body) as { summary: string; decision: Review['decision'] }
         const r = updateRun(review[1], {
           status: 'reviewed',
-          review: { summary, decision, reviewedAt: Date.now() },
+          review: { summary: summary || '', decision, reviewedAt: Date.now() },
         })
         if (!r) { res.writeHead(404); res.end(JSON.stringify({ error: 'not found' })); return }
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify(r))
-      } catch (e) {
-        res.writeHead(400); res.end(JSON.stringify({ error: String(e) }))
-      }
+      } catch (e) { res.writeHead(400); res.end(JSON.stringify({ error: String(e) })) }
     })
     return
   }
-
   if (review && req.method === 'DELETE') {
     const r = updateRun(review[1], { status: 'awaiting-review', review: null })
     if (!r) { res.writeHead(404); res.end(JSON.stringify({ error: 'not found' })); return }
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify(r)); return
+  }
+
+  // Per-step feedback endpoints
+  const feedback = p.match(/^\/api\/runs\/([^/]+)\/feedback$/)
+  if (feedback && req.method === 'POST') {
+    let body = ''
+    req.on('data', d => body += d)
+    req.on('end', () => {
+      try {
+        const { storyPath, stepIdx, kind, text } = JSON.parse(body) as Omit<Feedback, 'at'>
+        const fb = loadFeedback(feedback[1])
+        fb.push({ storyPath, stepIdx, kind, text: text || '', at: Date.now() })
+        saveFeedback(feedback[1], fb)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: true }))
+      } catch (e) { res.writeHead(400); res.end(JSON.stringify({ error: String(e) })) }
+    })
+    return
+  }
+  if (feedback && req.method === 'DELETE') {
+    const at = parseInt(url.searchParams.get('at') ?? '', 10)
+    const fb = loadFeedback(feedback[1]).filter(f => f.at !== at)
+    saveFeedback(feedback[1], fb)
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ ok: true })); return
   }
 
   if (p === '/api/output' && req.method === 'GET') {
@@ -518,11 +731,22 @@ const server = http.createServer(async (req, res) => {
     return
   }
 
+  // Frozen ad-hoc screenshot
   const runShot = p.match(/^\/runs\/([^/]+)\/shots\/(.+)$/)
   if (runShot && req.method === 'GET') {
     const [, id, rel] = runShot
-    const full = path.join(RUNS_DIR, id, 'screenshots', decodeURIComponent(rel))
     const root = path.join(RUNS_DIR, id, 'screenshots')
+    const full = path.join(root, decodeURIComponent(rel))
+    if (!full.startsWith(root) || !fs.existsSync(full)) { res.writeHead(404); res.end('not found'); return }
+    res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=300' })
+    fs.createReadStream(full).pipe(res); return
+  }
+  // Frozen story step image
+  const storyShot = p.match(/^\/runs\/([^/]+)\/story\/([^/]+)\/(.+)$/)
+  if (storyShot && req.method === 'GET') {
+    const [, id, storyPath, rel] = storyShot
+    const root = path.join(RUNS_DIR, id, 'story', decodeURIComponent(storyPath))
+    const full = path.join(root, decodeURIComponent(rel))
     if (!full.startsWith(root) || !fs.existsSync(full)) { res.writeHead(404); res.end('not found'); return }
     res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=300' })
     fs.createReadStream(full).pipe(res); return

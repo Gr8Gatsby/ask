@@ -2,25 +2,21 @@ import { test, expect } from '@playwright/test'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { newStory, step } from './helpers/story'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const SHOTS = path.join(__dirname, 'screenshots', 'roundtrip')
-fs.mkdirSync(SHOTS, { recursive: true })
-
 const HOME = process.env.HOME!
 const CODEX_LOG = path.join(HOME, '.ask/logs/codex-3.log')
 
-// Real "manual" round trip via the UI:
-//   open /  →  navigate to a codex session  →  type a probe  →  hit send
-//   →  verify the daemon log shows it routed
-//   →  verify the tmux pane received the keystrokes
-// Screenshots before/after every step land in screenshots/roundtrip/.
+// Records a per-step "story" of what we did, with a screenshot at each
+// step. The review dashboard renders this as a vertical timeline so a
+// human can see the actions taken between screens, not just an end state.
+test('codex agent_session — type a probe in the UI, daemon routes it', async ({ page, request }, testInfo) => {
+  const story = newStory(testInfo)
 
-test('codex agent_session — type a probe in the UI, daemon routes it', async ({ page, request }) => {
-  // Pick a live codex agent_session block via the API (whatever the backend says is live)
   const blocks = (await (await request.get('/api/blocks')).json()) as { blocks: Array<{ blockID: string; payload: string }> }
   const sessionBlock = blocks.blocks.find(b => b.blockID.startsWith('codex3-session-'))
-  test.skip(!sessionBlock, 'no live codex agent_session block; nothing to drive')
+  test.skip(!sessionBlock, 'no live codex agent_session block')
   if (!sessionBlock) return
 
   const payload = JSON.parse(sessionBlock.payload) as { session_id: string; tmux_target?: string | null }
@@ -29,31 +25,33 @@ test('codex agent_session — type a probe in the UI, daemon routes it', async (
   const PROBE = `ui-probe-${Date.now()}-${Math.floor(Math.random() * 1e4)}`
   const offset = fs.statSync(CODEX_LOG).size
 
-  // Navigate to the session chat screen (the real route the UI uses)
-  await page.goto(`/script/codex-3/session/${encodeURIComponent(SESSION_ID)}`)
-  await page.waitForTimeout(1000)
-  await page.screenshot({ path: path.join(SHOTS, '01-chat-loaded.png'), fullPage: true })
+  await step(story, page, 'Open codex chat for the live session',
+    `/script/codex-3/session/${encodeURIComponent(SESSION_ID)}`)
 
-  // Find the reply input. The placeholder text in the codex agent_session
-  // block is set by the daemon; fall back to a generic Message…/Reply… match.
   const input = page.getByPlaceholder(/Message Codex|Reply|Message Claude/i).first()
   await expect(input).toBeVisible({ timeout: 5000 })
-  await input.fill(PROBE)
-  await page.screenshot({ path: path.join(SHOTS, '02-probe-typed.png'), fullPage: true })
 
-  // Submit. iOS variant has the input + a circular send button next to it
-  // (via SessionChatScreen.tsx); the simplest trigger is Enter.
-  await input.press('Enter')
-  await page.waitForTimeout(2000) // round trip + assistant first-token
-  await page.screenshot({ path: path.join(SHOTS, '03-after-send.png'), fullPage: true })
+  await step(story, page, 'Focus the reply input', async () => {
+    await input.click()
+  })
 
-  // Verify the daemon routed it
+  await step(story, page, `Type the probe text "${PROBE}"`, async () => {
+    await input.fill(PROBE)
+  })
+
+  await step(story, page, 'Press Enter to submit', async () => {
+    await input.press('Enter')
+    await page.waitForTimeout(2000)   // round trip + assistant first-token
+  })
+
+  // ----- assertions: daemon log, tmux pane, plus a final story shot -----
   const newLog = fs.readFileSync(CODEX_LOG).slice(offset).toString()
   expect(newLog).toMatch(/block response/)
   expect(newLog).toMatch(new RegExp(`reply session=.*ok=True.*${PROBE}`))
 
-  // Verify the tmux pane received the probe text
   const { execSync } = await import('child_process')
-  const tmux = execSync(`tmux capture-pane -t '${TMUX_TARGET}' -p`).toString()
-  expect(tmux).toContain(PROBE)
+  const tmuxOutput = execSync(`tmux capture-pane -t '${TMUX_TARGET}' -p`).toString()
+  expect(tmuxOutput).toContain(PROBE)
+
+  await step(story, page, 'Verified: probe received in tmux + daemon log routed it')
 })
