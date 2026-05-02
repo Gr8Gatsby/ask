@@ -496,9 +496,15 @@ class Codex3:
         await self._discover_active_processes()
 
     async def _heartbeat(self):
+        cycles = 0
         while True:
             await asyncio.sleep(15)
+            cycles += 1
             try:
+                # Every 4 cycles (~1 min) drop the emit dedup cache so any
+                # block AskMac silently dropped gets re-pushed.
+                if cycles % 4 == 0:
+                    self._emitted_payloads.clear()
                 await self._refresh_sessions()
             except Exception as exc:
                 _log(f'heartbeat error: {exc}', 'WARN')

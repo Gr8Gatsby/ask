@@ -677,9 +677,12 @@ class Claude3:
 
         last_msg = (msg.get('last_message', '') or '').strip()
         if last_msg and last_msg != session.last_message:
+            # Update the live block's preview so the UI shows the latest text,
+            # but DON'T append to chat history here. _handle_session_stop is
+            # the single writer for the assistant turn — otherwise every
+            # text-tool-text-tool segment within one Claude turn becomes a
+            # separate row in the transcript.
             session.last_message = last_msg
-            await self.append_message(session.task_id, 'assistant', last_msg)
-            await self._append_artifact_if_large(session, 'Assistant output', last_msg)
 
         await self._emit_session_block(session)
         await self._emit_tile()
@@ -696,9 +699,9 @@ class Claude3:
 
         last_msg = (msg.get('last_message', '') or '').strip()
         if last_msg and last_msg != session.last_message:
+            # Live preview only — see _handle_pre_tool_use comment above.
+            # _handle_session_stop is the single writer for the assistant turn.
             session.last_message = last_msg
-            await self.append_message(session.task_id, 'assistant', last_msg)
-            await self._append_artifact_if_large(session, 'Assistant output', last_msg)
 
         # Resolve any pending permission that was waiting for this tool
         if session.pending_permission and session.pending_permission.tool == tool_name:
@@ -1242,9 +1245,17 @@ class Claude3:
             _log(f'start_session emit error: {exc}', 'WARN')
 
     async def _heartbeat(self):
+        cycles = 0
         while True:
             await asyncio.sleep(15)
+            cycles += 1
             try:
+                # Every 4 cycles (~1 min), drop the emit dedup cache so any
+                # block AskMac silently dropped (TTL prune, restart, etc.)
+                # gets re-pushed on this refresh. Cheap insurance against the
+                # "block disappeared from UI" symptom.
+                if cycles % 4 == 0:
+                    self._emitted_payloads.clear()
                 await self._refresh_sessions()
             except Exception as exc:
                 _log(f'heartbeat error: {exc}', 'WARN')

@@ -23,8 +23,14 @@ public struct TaskRegistryEntry: Codable, Sendable {
 
 /// Thread-safe task state registry. Persists to disk so tasks survive daemon restarts.
 /// Composite key: machineID + "/" + scriptID + "/" + taskID → entry.
+///
+/// The on-disk file is read lazily on first access. Every public method awaits
+/// `ensureLoaded()` first, so an early `incrementMessage` call (which can happen
+/// when a hook event lands before the explicit `load()` completes) cannot race
+/// with the disk read and reset the sequence counter to 1.
 public actor TaskRegistryActor {
     public var entries: [String: TaskRegistryEntry] = [:]
+    private var didLoad = false
 
     private let persistURL: URL
 
@@ -39,7 +45,12 @@ public actor TaskRegistryActor {
         }
     }
 
+    /// Reads the on-disk registry into memory. Idempotent — subsequent calls are no-ops.
+    /// All mutating methods call this internally so the counter never starts fresh
+    /// on a stale in-memory view.
     public func load() {
+        guard !didLoad else { return }
+        didLoad = true
         guard let data = try? Data(contentsOf: persistURL),
               let decoded = try? JSONDecoder().decode([String: TaskRegistryEntry].self, from: data)
         else { return }
@@ -52,12 +63,14 @@ public actor TaskRegistryActor {
     }
 
     public func entry(for key: String) -> TaskRegistryEntry? {
-        entries[key]
+        load()
+        return entries[key]
     }
 
     /// Upserts a task entry, updating title and status. Returns the current entry.
     @discardableResult
     public func upsert(key: String, title: String, status: String) -> TaskRegistryEntry {
+        load()
         var entry = entries[key] ?? TaskRegistryEntry(title: title, status: status)
         entry.title = title
         entry.status = status
@@ -68,6 +81,7 @@ public actor TaskRegistryActor {
 
     /// Increments the message counter and sequence number. Returns the sequence number to use.
     public func incrementMessage(key: String) -> Int {
+        load()
         var entry = entries[key] ?? TaskRegistryEntry(title: "", status: "working")
         let seq = entry.nextSequenceNumber
         entry.messageCount += 1
@@ -78,6 +92,7 @@ public actor TaskRegistryActor {
     }
 
     public func incrementArtifact(key: String) {
+        load()
         guard var entry = entries[key] else { return }
         entry.artifactCount += 1
         entries[key] = entry

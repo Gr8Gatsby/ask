@@ -1,7 +1,7 @@
 ---
 name: validate-messaging
 description: End-to-end test that messages from the iPhone/web app reach a live Claude Code or Codex tmux/terminal session and that responses flow back. Lets Claude self-verify the supervisor pipeline without asking the user to reinstall AskMac.
-argument-hint: [claude|codex|both]  (default: both)
+argument-hint: [claude|codex|both] [--stress=N]  (default: both, no stress)
 ---
 
 Validates the **iPhone → CloudKit → AskMac → daemon → terminal-manager → tmux/tty → agent → hook → AskMac → iPhone** messaging round-trip on the dev box, end to end. Use this whenever you've changed claude-3, codex-3, terminal-manager, or any of the hooks and want to confirm the round trip still works.
@@ -240,6 +240,44 @@ codex-3    codex3:104cb45519 (codex:skills.0)   PASS         PASS     PASS      
 **Pass criteria for the overall run:** Routing + Hook-back both PASS for every tested agent. Block-flash is advisory — `WARN` is acceptable. Block-in-UI is required for messaging through the UI to work, but the run can still pass with `FAIL` if you fell back to the socket and the rest of the chain works (this signals "daemon side is fine, but a separate UI-emit bug exists").
 
 Then a one-line verdict: `✅ All agents healthy.` or `❌ codex-3 hook timed out — see ~/.ask/logs/codex-3.log @ offset NNN`.
+
+## Stress mode (`--stress=N`)
+
+When the user includes `--stress=N` in `$ARGUMENTS` (default N is omitted = single run), repeat steps 5–9 N times against the same session, with a short sleep between iterations, and report flake rate. Skip step 10 (it's already advisory).
+
+```python
+N = int(<arg>)            # e.g. 20
+results = []              # list of {routing, tmux_recv, hook_back_secs}
+for i in range(N):
+    PROBE = f"stress-{i}-{int(time.time())}-{random.randint(1000,9999)}"
+    offset = os.path.getsize(LOG)
+    requests.post(f"{BACKEND}/respond/{BLOCK_ID}", json={"value": PROBE})
+    time.sleep(1)
+    new = open(LOG, 'rb').read()[offset:].decode(errors='replace')
+    routing = ('reply session=' in new and 'ok=True' in new)
+    tmux_ok = (PROBE in subprocess.run(['tmux','capture-pane','-t',TMUX_TARGET,'-p'],
+                                       capture_output=True, text=True).stdout)
+    hook_t = None
+    for s in range(8):
+        time.sleep(1)
+        new = open(LOG, 'rb').read()[offset:].decode(errors='replace')
+        if 'user_prompt_submit' in new:
+            hook_t = s + 1
+            break
+    results.append({'routing': routing, 'tmux_recv': tmux_ok, 'hook_back_secs': hook_t})
+    time.sleep(3)   # let agent settle / go idle before the next probe
+
+# Summary
+total = len(results)
+routing_ok  = sum(1 for r in results if r['routing'])
+tmux_ok     = sum(1 for r in results if r['tmux_recv'])
+hook_ok     = sum(1 for r in results if r['hook_back_secs'] is not None)
+hook_secs   = [r['hook_back_secs'] for r in results if r['hook_back_secs'] is not None]
+print(f"stress {total}× — routing {routing_ok}/{total}, tmux {tmux_ok}/{total}, "
+      f"hook {hook_ok}/{total} (median {sorted(hook_secs)[len(hook_secs)//2] if hook_secs else 'n/a'}s)")
+```
+
+**Pass bar for production-grade:** `routing == N`, `tmux == N`, `hook >= 0.95 * N`, median hook latency ≤ 2s. Anything below that is a flake to investigate before claiming the path is solid.
 
 ## Common failure modes
 
