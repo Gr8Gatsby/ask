@@ -38,8 +38,14 @@ function usePhoneScale(containerRef: React.RefObject<HTMLDivElement | null>) {
     function update() {
       const el = containerRef.current
       if (!el) return
-      const availW = el.clientWidth
-      const availH = el.clientHeight
+      // clientWidth/Height include padding, but the phone renders inside that
+      // padding — so subtract it to get the actual space the phone can occupy.
+      // Without this, the scale comes out too large and the phone gets clipped.
+      const cs = getComputedStyle(el)
+      const padX = parseFloat(cs.paddingLeft || '0') + parseFloat(cs.paddingRight  || '0')
+      const padY = parseFloat(cs.paddingTop  || '0') + parseFloat(cs.paddingBottom || '0')
+      const availW = el.clientWidth  - padX
+      const availH = el.clientHeight - padY
       const s = Math.max(MIN_SCALE, Math.min(1, availW / PHONE_W, availH / PHONE_H))
       setScale(s)
     }
