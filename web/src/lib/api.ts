@@ -45,7 +45,15 @@ export async function getTaskMessages(taskID: string): Promise<TaskMessage[]> {
   const res = await fetch(`${BASE}/tasks/${taskID}/messages`)
   if (!res.ok) return []
   const data = await res.json() as { messages?: TaskMessage[] }
-  return data.messages ?? []
+  // Sort by timestamp first; sequenceNumber as tiebreaker. The backend's
+  // sequenceNumber counter can reset across AskMac TaskRegistry restarts,
+  // producing duplicates that group out-of-time-order messages together.
+  // Timestamp is monotonic per-write so it gives a reliable chat order.
+  return (data.messages ?? []).slice().sort((a, b) => {
+    const t = (a.timestamp ?? '').localeCompare(b.timestamp ?? '')
+    if (t !== 0) return t
+    return (a.sequenceNumber ?? 0) - (b.sequenceNumber ?? 0)
+  })
 }
 
 export async function getTaskArtifacts(taskID: string): Promise<TaskArtifact[]> {

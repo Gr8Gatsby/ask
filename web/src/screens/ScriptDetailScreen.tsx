@@ -50,11 +50,15 @@ function SessionRow({
         {showBlockDebugInfo && (
           <div className="flex items-center gap-1 mt-0.5 min-w-0">
             <span className={`px-1 py-px rounded text-[8px] font-semibold flex-shrink-0 ${
-              payload.tmux_target ? 'bg-ask-green/15 text-ask-green' :
-              payload.tty        ? 'bg-ask-blue/15 text-ask-blue'   :
-                                   'bg-ask-secondary/15 text-ask-secondary'
+              payload.tmux_target  ? 'bg-ask-green/15 text-ask-green' :
+              payload.tty          ? 'bg-ask-blue/15 text-ask-blue'   :
+              payload.is_headless  ? 'bg-ask-orange/15 text-ask-orange' :
+                                     'bg-ask-secondary/15 text-ask-secondary'
             }`}>
-              {payload.tmux_target ? 'tmux' : payload.tty ? 'terminal' : 'headless'}
+              {payload.tmux_target ? 'tmux'
+                : payload.tty ? 'terminal'
+                : payload.is_headless ? 'headless'
+                : 'in-process'}
             </span>
             <span className="font-mono text-[9px] text-ask-secondary/50 truncate">
               {payload.session_id}{payload.tmux_target ? ` · ${payload.tmux_target}` : ''}{payload.tty ? ` · ${payload.tty}` : ''}
