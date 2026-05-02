@@ -317,14 +317,17 @@ const HTML = `<!doctype html>
   .step .duration { color: #666; font-size: 11px; }
   .step .shot { display: block; margin-top: 8px; max-width: 720px; width: 100%; border: 1px solid #262629; border-radius: 6px; cursor: zoom-in; }
   .step .quick { margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap; }
-  .step .quick button { font-size: 12px; padding: 3px 8px; }
+  .step .quick button { font-size: 12px; padding: 3px 8px 3px 6px; display: inline-flex; align-items: center; gap: 5px; }
+  .step .quick button svg { width: 14px; height: 14px; flex-shrink: 0; opacity: 0.85; }
   .step .quick button.active { background: #4aa3ff; border-color: #4aa3ff; color: #fff; }
   .step .fb { margin-top: 6px; }
   .step .fb-list { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
   .step .fb-row { background: #1a1a1c; border: 1px solid #262629; border-radius: 4px; padding: 6px 8px; font-size: 12px; display: flex; gap: 8px; align-items: flex-start; }
-  .step .fb-row .kind { font-weight: 600; min-width: 80px; }
+  .step .fb-row .kind { font-weight: 600; min-width: 80px; display: inline-flex; align-items: center; gap: 4px; }
+  .step .fb-row .kind svg { width: 13px; height: 13px; flex-shrink: 0; opacity: 0.85; }
   .step .fb-row .text { color: #ddd; flex: 1; }
-  .step .fb-row .x { color: #666; cursor: pointer; }
+  .step .fb-row .x { color: #666; cursor: pointer; display: inline-flex; align-items: center; }
+  .step .fb-row .x svg { width: 13px; height: 13px; }
   .step .fb-row .x:hover { color: #ee9c9c; }
   /* Lightbox */
   dialog { background: rgba(0,0,0,0.95); border: none; max-width: 100vw; max-height: 100vh; padding: 0; }
@@ -352,13 +355,26 @@ const HTML = `<!doctype html>
 <main id="view"></main>
 <dialog id="lightbox"><img alt=""></dialog>
 <script>
+// Inline SVGs (Heroicons outline, 24x24 viewBox, stroke=currentColor).
+// No network dependency, scales cleanly, inherits the button text color.
+const SVG = {
+  ok:        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>',
+  bug:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12.75c1.148 0 2.278.08 3.383.237 1.037.146 1.866.966 1.866 2.013 0 3.728-2.35 6.75-5.25 6.75S6.75 18.728 6.75 15c0-1.046.83-1.867 1.866-2.013A24.16 24.16 0 0 1 12 12.75ZM12 9.75v.008M12 6.75v6M9 6.75 7.5 5.25M15 6.75l1.5-1.5M9 12.75H6M15 12.75h3M5.25 18.75H4.5M19.5 18.75H18.75"/></svg>',
+  style:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.53 16.122a3 3 0 0 0-3.412 1.034c-.473.658-.892 1.4-1.218 2.193a39.4 39.4 0 0 0 3.279-.764 3 3 0 0 0 1.351-2.463zM3.75 12.75A8.967 8.967 0 0 1 12 4.5c5 0 8.25 3.75 8.25 8.25 0 4-2 6-3 7l-3-3c1-1 3-3 3-7"/><path d="M14.25 9.75 10 14"/></svg>',
+  copy:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.862 4.487 18.549 2.799a2.121 2.121 0 1 1 3 3L19.862 7.487m-3-3L6.832 14.518a4.5 4.5 0 0 0-1.13 1.897l-1.034 3.45 3.45-1.034a4.5 4.5 0 0 0 1.897-1.13L19.862 7.487m-3-3 3 3"/></svg>',
+  confusing: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z"/></svg>',
+  slow:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>',
+  other:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.25 12.76c0 1.6 1.123 2.994 2.707 3.227 1.068.157 2.148.279 3.238.364.466.037.893.281 1.153.671L12 21l2.652-3.978c.26-.39.687-.634 1.153-.67 1.09-.086 2.17-.208 3.238-.365 1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0 0 12 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018Z"/></svg>',
+  remove:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18 18 6M6 6l12 12"/></svg>',
+};
+
 const KINDS = [
-  { id: 'ok',         label: 'OK',         emoji: '👍' },
-  { id: 'bug',        label: 'Bug',        emoji: '🐛' },
-  { id: 'style',      label: 'Style',      emoji: '🎨' },
-  { id: 'copy',       label: 'Copy',       emoji: '📝' },
-  { id: 'confusing',  label: 'Confusing',  emoji: '🤔' },
-  { id: 'slow',       label: 'Slow',       emoji: '⚠️' },
+  { id: 'ok',         label: 'OK',         icon: SVG.ok },
+  { id: 'bug',        label: 'Bug',        icon: SVG.bug },
+  { id: 'style',      label: 'Style',      icon: SVG.style },
+  { id: 'copy',       label: 'Copy',       icon: SVG.copy },
+  { id: 'confusing',  label: 'Confusing',  icon: SVG.confusing },
+  { id: 'slow',       label: 'Slow',       icon: SVG.slow },
 ];
 
 const view = document.getElementById('view');
@@ -484,14 +500,14 @@ async function renderDetail(id) {
             '</div>' +
             (st.file ? '<img class="shot" loading="lazy" src="/runs/' + r.id + '/story/' + encodeURI(s.path) + '/' + encodeURI(st.file) + '" alt="' + escape(st.name) + '">' : '') +
             '<div class="quick">' +
-              KINDS.map(k => '<button data-kind="' + k.id + '">' + k.emoji + ' ' + k.label + '</button>').join('') +
-              '<button data-kind="other">＋ Comment</button>' +
+              KINDS.map(k => '<button data-kind="' + k.id + '">' + k.icon + '<span>' + k.label + '</span></button>').join('') +
+              '<button data-kind="other">' + SVG.other + '<span>Comment</span></button>' +
             '</div>' +
             '<div class="fb-list">' +
               stepFb.map(f => '<div class="fb-row">' +
-                '<span class="kind">' + (KINDS.find(k=>k.id===f.kind)?.emoji ?? '·') + ' ' + escape(f.kind) + '</span>' +
+                '<span class="kind">' + (KINDS.find(k=>k.id===f.kind)?.icon ?? SVG.other) + escape(f.kind) + '</span>' +
                 '<span class="text">' + escape(f.text || '') + '</span>' +
-                '<span class="x" data-at="' + f.at + '" title="remove">✕</span>' +
+                '<span class="x" data-at="' + f.at + '" title="remove">' + SVG.remove + '</span>' +
               '</div>').join('') +
             '</div>' +
           '</div>';
