@@ -233,7 +233,14 @@ function listFrozenShots(runId: string): { rel: string; size: number }[] {
   return out.sort((a, b) => a.rel.localeCompare(b.rel))
 }
 
-interface FrozenStory { path: string; testTitle: string; steps: { idx: number; name: string; file: string; durationMs: number }[] }
+interface FrozenStep { idx: number; title: string; description?: string; name?: string; file: string; durationMs: number }
+interface FrozenStory {
+  path: string
+  testTitle: string
+  title: string
+  description: string
+  steps: FrozenStep[]
+}
 function listFrozenStories(runId: string): FrozenStory[] {
   const root = path.join(RUNS_DIR, runId, 'story')
   if (!fs.existsSync(root)) return []
@@ -243,8 +250,15 @@ function listFrozenStories(runId: string): FrozenStory[] {
     const j = path.join(root, e.name, 'story.json')
     if (!fs.existsSync(j)) continue
     try {
-      const data = JSON.parse(fs.readFileSync(j, 'utf-8')) as { testTitle?: string; steps: FrozenStory['steps'] }
-      out.push({ path: e.name, testTitle: data.testTitle ?? e.name, steps: data.steps ?? [] })
+      const data = JSON.parse(fs.readFileSync(j, 'utf-8')) as Partial<FrozenStory> & { steps?: FrozenStep[] }
+      const steps = (data.steps ?? []).map(s => ({ ...s, title: s.title ?? s.name ?? '(unnamed step)' }))
+      out.push({
+        path: e.name,
+        testTitle: data.testTitle ?? e.name,
+        title: data.title ?? data.testTitle ?? e.name,
+        description: data.description ?? '',
+        steps,
+      })
     } catch { /* skip */ }
   }
   return out
@@ -264,90 +278,173 @@ const HTML = `<!doctype html>
 <meta charset="utf-8">
 <title>Ask · review</title>
 <style>
-  :root { color-scheme: dark; }
+  /* ---------- theme tokens (light default, dark via [data-theme=dark]) ---------- */
+  :root {
+    color-scheme: light;
+    --bg:        #f6f7fa;
+    --panel:     #ffffff;
+    --text:      #1a1a1c;
+    --muted:     #6b7280;
+    --border:    #e5e7eb;
+    --header:    #ffffff;
+    --header-bd: #e5e7eb;
+    --row-hover: #f3f4f6;
+    --code-bg:   #f9fafb;
+    --link:      #0066cc;
+    --pill-bg:   #eef0f3;
+    --primary:   #0066cc;
+    --primary-h: #0077ee;
+    --success:   #1d6f1d;
+    --danger:    #b91c1c;
+    --rail:      #e5e7eb;
+    --dot:       #cbd5e1;
+    --dot-fb:    #0066cc;
+    --shadow:    0 1px 2px rgba(0,0,0,0.04), 0 1px 3px rgba(0,0,0,0.06);
+    /* badge palettes */
+    --b-running-bg:  #e3f7e3; --b-running-fg:  #1d6f1d;
+    --b-awaiting-bg: #fef3c7; --b-awaiting-fg: #92400e;
+    --b-reviewed-bg: #dbeafe; --b-reviewed-fg: #1e40af;
+    --b-passed-bg:   #e3f7e3; --b-passed-fg:   #1d6f1d;
+    --b-failed-bg:   #fee2e2; --b-failed-fg:   #b91c1c;
+    --b-stale-bg:    #fff7ed; --b-stale-fg:    #c2410c;
+    --d-approved:           #1d6f1d;
+    --d-changes-requested:  #92400e;
+    --d-rejected:           #b91c1c;
+  }
+  [data-theme="dark"] {
+    color-scheme: dark;
+    --bg:        #0b0b0c;
+    --panel:     #131316;
+    --text:      #eee;
+    --muted:     #9ca3af;
+    --border:    #262629;
+    --header:    #111;
+    --header-bd: #2a2a2a;
+    --row-hover: #14141a;
+    --code-bg:   #0a0a0c;
+    --link:      #4aa3ff;
+    --pill-bg:   #1a1a1c;
+    --primary:   #0066cc;
+    --primary-h: #0077ee;
+    --success:   #1d6f1d;
+    --danger:    #6b1a1a;
+    --rail:      #262629;
+    --dot:       #444;
+    --dot-fb:    #4aa3ff;
+    --shadow:    none;
+    --b-running-bg:  #0a4d0a; --b-running-fg:  #afe9af;
+    --b-awaiting-bg: #4d3d0a; --b-awaiting-fg: #f5d77a;
+    --b-reviewed-bg: #0a3a4d; --b-reviewed-fg: #a4d8ee;
+    --b-passed-bg:   #0a4d0a; --b-passed-fg:   #afe9af;
+    --b-failed-bg:   #4d0a0a; --b-failed-fg:   #ee9c9c;
+    --b-stale-bg:    #6b1a1a; --b-stale-fg:    #ffc9c9;
+    --d-approved:          #afe9af;
+    --d-changes-requested: #f5d77a;
+    --d-rejected:          #ee9c9c;
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0b0b0c; color: #eee; }
-  header { position: sticky; top: 0; z-index: 10; padding: 12px 16px; background: #111; border-bottom: 1px solid #2a2a2a; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+  header { position: sticky; top: 0; z-index: 20; padding: 12px 16px; background: var(--header); border-bottom: 1px solid var(--header-bd); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
   header h1 { font-size: 14px; margin: 0; font-weight: 600; }
   header h1 a { color: inherit; text-decoration: none; }
   header .right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
-  select, button, input, textarea { background: #1a1a1c; color: #eee; border: 1px solid #333; border-radius: 6px; padding: 6px 10px; font: inherit; }
+  select, button, input, textarea { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font: inherit; }
   button { cursor: pointer; }
-  select:hover, button:hover:not(:disabled) { background: #222226; }
-  button.primary { background: #0066cc; border-color: #0066cc; color: #fff; }
-  button.primary:hover { background: #0077ee; }
-  button.danger { background: #6b1a1a; border-color: #6b1a1a; color: #fff; }
-  button.success { background: #1d6f1d; border-color: #1d6f1d; color: #fff; }
+  select:hover, button:hover:not(:disabled) { background: var(--row-hover); }
+  button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  button.primary:hover { background: var(--primary-h); }
+  button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+  button.success { background: var(--success); border-color: var(--success); color: #fff; }
+  button.icon-only { padding: 5px 7px; line-height: 1; }
+  button.icon-only svg { width: 18px; height: 18px; display: block; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   main { padding: 16px; max-width: 1400px; margin: 0 auto; }
-  table { width: 100%; border-collapse: collapse; }
-  table th, table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #1f1f22; vertical-align: top; }
-  table th { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
-  table tr:hover td { background: #14141a; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 8px; overflow: hidden; box-shadow: var(--shadow); }
+  table th, table td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table tr:last-child td { border-bottom: 0; }
+  table th { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+  table tr:hover td { background: var(--row-hover); }
   table tr.clickable { cursor: pointer; }
-  .empty { color: #666; padding: 28px; text-align: center; }
+  .empty { color: var(--muted); padding: 28px; text-align: center; background: var(--panel); border-radius: 8px; }
   .badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; display: inline-block; }
-  .badge.running { background: #0a4d0a; color: #afe9af; }
-  .badge.awaiting { background: #4d3d0a; color: #f5d77a; }
-  .badge.reviewed { background: #0a3a4d; color: #a4d8ee; }
-  .badge.passed { background: #0a4d0a; color: #afe9af; }
-  .badge.failed { background: #4d0a0a; color: #ee9c9c; }
-  .badge.stale { background: #6b1a1a; color: #ffc9c9; }
-  .decision-approved { color: #afe9af; }
-  .decision-changes-requested { color: #f5d77a; }
-  .decision-rejected { color: #ee9c9c; }
-  a { color: #4aa3ff; text-decoration: none; }
+  .badge.running  { background: var(--b-running-bg);  color: var(--b-running-fg); }
+  .badge.awaiting { background: var(--b-awaiting-bg); color: var(--b-awaiting-fg); }
+  .badge.reviewed { background: var(--b-reviewed-bg); color: var(--b-reviewed-fg); }
+  .badge.passed   { background: var(--b-passed-bg);   color: var(--b-passed-fg); }
+  .badge.failed   { background: var(--b-failed-bg);   color: var(--b-failed-fg); }
+  .badge.stale    { background: var(--b-stale-bg);    color: var(--b-stale-fg); }
+  .decision-approved { color: var(--d-approved); font-weight: 600; }
+  .decision-changes-requested { color: var(--d-changes-requested); font-weight: 600; }
+  .decision-rejected { color: var(--d-rejected); font-weight: 600; }
+  a { color: var(--link); text-decoration: none; }
   a:hover { text-decoration: underline; }
   textarea { width: 100%; min-height: 60px; resize: vertical; font-family: inherit; }
-  pre.output { background: #0a0a0c; border: 1px solid #2a2a2a; border-radius: 6px; padding: 10px; max-height: 280px; overflow: auto; font: 11px/1.4 ui-monospace,monospace; white-space: pre-wrap; }
-  .panel { background: #131316; border: 1px solid #262629; border-radius: 8px; padding: 14px; margin: 16px 0; }
-  .panel h3 { margin: 0 0 8px; font-size: 13px; color: #aaa; }
+  pre.output { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; max-height: 280px; overflow: auto; font: 11px/1.5 ui-monospace,monospace; white-space: pre-wrap; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin: 16px 0; box-shadow: var(--shadow); }
+  .panel h3 { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
   .panel .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  .panel .help { color: #777; font-size: 12px; margin-top: 8px; line-height: 1.5; }
+  .panel .help { color: var(--muted); font-size: 12px; margin-top: 10px; line-height: 1.6; }
+  /* Run summary header */
+  .run-hero h1 { margin: 0 0 4px; font-size: 22px; line-height: 1.25; }
+  .run-hero p.lead { margin: 0 0 8px; color: var(--muted); font-size: 14px; line-height: 1.55; }
+  .run-hero .meta { color: var(--muted); font-size: 12px; }
+  /* Sticky mini-map flowchart */
+  .mini-map { position: sticky; top: 53px; z-index: 15; background: var(--bg); padding: 10px 0 12px; border-bottom: 1px solid var(--border); margin: 8px 0 16px; }
+  .mini-map .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+  .mini-map .nodes { display: flex; gap: 0; align-items: stretch; overflow-x: auto; padding-bottom: 2px; }
+  .mini-map .node { flex: 1 1 0; min-width: 80px; display: flex; flex-direction: column; align-items: center; cursor: pointer; padding: 4px; border-radius: 6px; }
+  .mini-map .node:hover { background: var(--row-hover); }
+  .mini-map .node .dot { width: 22px; height: 22px; border-radius: 50%; background: var(--dot); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; }
+  .mini-map .node.has-fb .dot { background: var(--dot-fb); }
+  .mini-map .node.current .dot { box-shadow: 0 0 0 3px rgba(0,102,204,0.25); transform: scale(1.05); }
+  .mini-map .node .cap { font-size: 11px; color: var(--text); margin-top: 5px; max-width: 110px; text-align: center; line-height: 1.25; }
+  .mini-map .arrow { flex: 0 0 18px; align-self: center; height: 2px; background: var(--rail); margin-top: 11px; }
   /* Story timeline */
-  .story h2 { font-size: 12px; color: #888; text-transform: uppercase; margin: 0 0 8px; }
-  .timeline { position: relative; padding-left: 32px; }
-  .timeline::before { content: ""; position: absolute; left: 12px; top: 6px; bottom: 6px; width: 2px; background: #262629; }
-  .step { position: relative; margin-bottom: 18px; }
-  .step::before { content: ""; position: absolute; left: -26px; top: 6px; width: 12px; height: 12px; border-radius: 50%; background: #444; border: 2px solid #131316; }
-  .step.has-fb::before { background: #4aa3ff; }
+  .story h2 { font-size: 14px; margin: 0 0 4px; }
+  .story .desc { color: var(--muted); font-size: 13px; margin: 0 0 14px; line-height: 1.55; }
+  .timeline { position: relative; padding-left: 36px; }
+  .timeline::before { content: ""; position: absolute; left: 13px; top: 8px; bottom: 8px; width: 2px; background: var(--rail); }
+  .step { position: relative; margin-bottom: 22px; scroll-margin-top: 140px; }
+  .step::before { content: ""; position: absolute; left: -29px; top: 4px; width: 14px; height: 14px; border-radius: 50%; background: var(--dot); border: 2px solid var(--panel); }
+  .step.has-fb::before { background: var(--dot-fb); }
   .step .head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
-  .step .num { color: #666; font-size: 12px; font-family: ui-monospace, monospace; }
-  .step .name { font-weight: 500; }
-  .step .duration { color: #666; font-size: 11px; }
-  .step .shot { display: block; margin-top: 8px; max-width: 720px; width: 100%; border: 1px solid #262629; border-radius: 6px; cursor: zoom-in; }
-  .step .quick { margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap; }
-  .step .quick button { font-size: 12px; padding: 3px 8px 3px 6px; display: inline-flex; align-items: center; gap: 5px; }
-  .step .quick button svg { width: 14px; height: 14px; flex-shrink: 0; opacity: 0.85; }
-  .step .quick button.active { background: #4aa3ff; border-color: #4aa3ff; color: #fff; }
-  .step .fb { margin-top: 6px; }
-  .step .fb-list { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
-  .step .fb-row { background: #1a1a1c; border: 1px solid #262629; border-radius: 4px; padding: 6px 8px; font-size: 12px; display: flex; gap: 8px; align-items: flex-start; }
-  .step .fb-row .kind { font-weight: 600; min-width: 80px; display: inline-flex; align-items: center; gap: 4px; }
-  .step .fb-row .kind svg { width: 13px; height: 13px; flex-shrink: 0; opacity: 0.85; }
-  .step .fb-row .text { color: #ddd; flex: 1; }
-  .step .fb-row .x { color: #666; cursor: pointer; display: inline-flex; align-items: center; }
-  .step .fb-row .x svg { width: 13px; height: 13px; }
-  .step .fb-row .x:hover { color: #ee9c9c; }
+  .step .num { color: var(--muted); font-size: 12px; font-family: ui-monospace, monospace; }
+  .step .title { font-weight: 600; font-size: 15px; }
+  .step .duration { color: var(--muted); font-size: 11px; }
+  .step .desc { color: var(--muted); font-size: 13px; line-height: 1.55; margin: 4px 0 8px; max-width: 720px; }
+  .step .shot { display: block; max-width: 720px; width: 100%; border: 1px solid var(--border); border-radius: 6px; cursor: zoom-in; box-shadow: var(--shadow); background: var(--code-bg); }
+  .step .quick { margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap; }
+  .step .quick button { font-size: 12px; padding: 4px 10px 4px 8px; display: inline-flex; align-items: center; gap: 6px; }
+  .step .quick button svg { width: 18px; height: 18px; flex-shrink: 0; }
+  .step .quick button:hover { border-color: var(--primary); color: var(--primary); }
+  .step .fb-list { margin-top: 8px; display: flex; flex-direction: column; gap: 5px; }
+  .step .fb-row { background: var(--pill-bg); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; font-size: 13px; display: flex; gap: 10px; align-items: flex-start; }
+  .step .fb-row .kind { font-weight: 600; min-width: 90px; display: inline-flex; align-items: center; gap: 6px; text-transform: capitalize; }
+  .step .fb-row .kind svg { width: 16px; height: 16px; flex-shrink: 0; }
+  .step .fb-row .text { color: var(--text); flex: 1; }
+  .step .fb-row .x { color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; padding: 0 2px; }
+  .step .fb-row .x svg { width: 14px; height: 14px; }
+  .step .fb-row .x:hover { color: var(--danger); }
   /* Lightbox */
-  dialog { background: rgba(0,0,0,0.95); border: none; max-width: 100vw; max-height: 100vh; padding: 0; }
+  dialog { background: rgba(0,0,0,0.92); border: none; max-width: 100vw; max-height: 100vh; padding: 0; }
   dialog img { max-width: 100vw; max-height: 100vh; display: block; cursor: zoom-out; }
-  dialog::backdrop { background: rgba(0,0,0,0.9); }
+  dialog::backdrop { background: rgba(0,0,0,0.85); }
   /* Misc */
-  .muted { color: #888; font-size: 12px; }
+  .muted { color: var(--muted); font-size: 12px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; }
-  figure { margin: 0; background: #131316; border: 1px solid #262629; border-radius: 8px; overflow: hidden; }
-  figure img { display: block; width: 100%; cursor: zoom-in; background: #000; }
-  figcaption { padding: 6px 10px; font-size: 11px; color: #999; display: flex; justify-content: space-between; }
+  figure { margin: 0; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; box-shadow: var(--shadow); }
+  figure img { display: block; width: 100%; cursor: zoom-in; background: var(--code-bg); }
+  figcaption { padding: 7px 10px; font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; border-top: 1px solid var(--border); }
 </style>
 </head>
-<body>
+<body data-theme="light">
 <header>
   <h1><a href="#/">Ask · review</a></h1>
   <span id="status" class="badge">idle</span>
   <div class="right">
     <select id="spec"><option value="">All specs</option></select>
     <button id="run" class="primary">New run</button>
+    <button id="theme-toggle" class="icon-only" title="Toggle light/dark"></button>
     <a href="http://localhost:5173/dev/markdown" target="_blank"><button>/dev/markdown ↗</button></a>
     <a href="http://localhost:5173/" target="_blank"><button>app ↗</button></a>
   </div>
@@ -366,6 +463,8 @@ const SVG = {
   slow:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>',
   other:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.25 12.76c0 1.6 1.123 2.994 2.707 3.227 1.068.157 2.148.279 3.238.364.466.037.893.281 1.153.671L12 21l2.652-3.978c.26-.39.687-.634 1.153-.67 1.09-.086 2.17-.208 3.238-.365 1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0 0 12 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018Z"/></svg>',
   remove:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18 18 6M6 6l12 12"/></svg>',
+  sun:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M5.05 5.05l1.41 1.41M17.54 17.54l1.41 1.41M3 12h2M19 12h2M5.05 18.95l1.41-1.41M17.54 6.46l1.41-1.41"/></svg>',
+  moon:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
 };
 
 const KINDS = [
@@ -484,21 +583,43 @@ async function renderDetail(id) {
     '</div>';
   }
 
+  // ----- mini-map flowchart (sticky) -----
+  let miniMap = '';
+  const stories = r.stories || [];
+  if (stories.length) {
+    const allSteps = stories.flatMap(s => s.steps.map(st => ({ s, st })));
+    miniMap = '<div class="mini-map" id="mini-map">' +
+      '<div class="label">Where you are</div>' +
+      '<div class="nodes">' +
+        allSteps.map(({ s, st }, i) => {
+          const has = fb.some(x => x.storyPath === s.path && x.stepIdx === st.idx);
+          const arrow = i < allSteps.length - 1 ? '<div class="arrow"></div>' : '';
+          return '<div class="node' + (has ? ' has-fb' : '') + '" data-target="step-' + escape(s.path) + '-' + st.idx + '">' +
+              '<div class="dot">' + (st.idx+1) + '</div>' +
+              '<div class="cap">' + escape(st.title) + '</div>' +
+            '</div>' + arrow;
+        }).join('') +
+      '</div></div>';
+  }
+
   // ----- story timelines -----
   let storyHtml = '';
-  for (const s of (r.stories || [])) {
+  for (const s of stories) {
     storyHtml += '<div class="story panel" data-story-path="' + escape(s.path) + '">' +
-      '<h2>' + escape(s.testTitle) + ' — ' + s.steps.length + ' step' + (s.steps.length===1?'':'s') + '</h2>' +
+      '<h2>' + escape(s.title || s.testTitle) + '</h2>' +
+      (s.description ? '<p class="desc">' + escape(s.description) + '</p>' : '') +
+      '<div class="muted" style="margin-bottom:14px">' + s.steps.length + ' step' + (s.steps.length===1?'':'s') + '</div>' +
       '<div class="timeline">' +
         s.steps.map(st => {
           const stepFb = fb.filter(x => x.storyPath === s.path && x.stepIdx === st.idx);
-          return '<div class="step' + (stepFb.length ? ' has-fb' : '') + '" data-step="' + st.idx + '">' +
+          return '<div id="step-' + escape(s.path) + '-' + st.idx + '" class="step' + (stepFb.length ? ' has-fb' : '') + '" data-step="' + st.idx + '">' +
             '<div class="head">' +
               '<span class="num">' + String(st.idx+1).padStart(2,'0') + '</span>' +
-              '<span class="name">' + escape(st.name) + '</span>' +
-              '<span class="duration">· ' + st.durationMs + 'ms</span>' +
+              '<span class="title">' + escape(st.title) + '</span>' +
+              '<span class="duration">' + st.durationMs + 'ms</span>' +
             '</div>' +
-            (st.file ? '<img class="shot" loading="lazy" src="/runs/' + r.id + '/story/' + encodeURI(s.path) + '/' + encodeURI(st.file) + '" alt="' + escape(st.name) + '">' : '') +
+            (st.description ? '<p class="desc">' + escape(st.description) + '</p>' : '') +
+            (st.file ? '<img class="shot" loading="lazy" src="/runs/' + r.id + '/story/' + encodeURI(s.path) + '/' + encodeURI(st.file) + '" alt="' + escape(st.title) + '">' : '') +
             '<div class="quick">' +
               KINDS.map(k => '<button data-kind="' + k.id + '">' + k.icon + '<span>' + k.label + '</span></button>').join('') +
               '<button data-kind="other">' + SVG.other + '<span>Comment</span></button>' +
@@ -535,10 +656,19 @@ async function renderDetail(id) {
     }
   }
 
+  // ----- friendly hero -----
+  const primaryStory = stories[0];
+  const heroTitle = primaryStory?.title || (r.spec || '(all specs)').replace(/^e2e\\//, '').replace(/\\.spec\\.ts$/, '');
+  const heroDesc = primaryStory?.description || '';
+
   view.innerHTML =
     '<p style="margin:0 0 12px"><a href="#/">← all runs</a></p>' +
-    '<h2 style="margin:0 0 4px;font-size:16px">' + escape(r.spec || '(all specs)').replace(/^e2e\\//,'') + '</h2>' +
-    '<p style="margin:0 0 14px" class="muted">' + r.id + ' · started ' + ago(r.startedAt) + ' · ' + passedBadge + staleBadge + '</p>' +
+    '<div class="run-hero">' +
+      '<h1>' + escape(heroTitle) + '</h1>' +
+      (heroDesc ? '<p class="lead">' + escape(heroDesc) + '</p>' : '') +
+      '<p class="meta">' + escape(r.spec || '(all specs)').replace(/^e2e\\//,'') + ' · ' + r.id + ' · started ' + ago(r.startedAt) + ' · ' + passedBadge + staleBadge + '</p>' +
+    '</div>' +
+    miniMap +
     reviewSection +
     storyHtml +
     shotsHtml +
@@ -549,6 +679,24 @@ async function renderDetail(id) {
   view.querySelectorAll('img.shot, figure img').forEach(img => {
     img.addEventListener('click', () => { lightboxImg.src = img.src; lightbox.showModal(); });
   });
+  // mini-map: click → scroll, scroll → highlight current
+  const miniNodes = view.querySelectorAll('.mini-map .node');
+  miniNodes.forEach(n => {
+    n.addEventListener('click', () => {
+      const tgt = document.getElementById(n.dataset.target);
+      if (tgt) tgt.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+  if (miniNodes.length) {
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(e => {
+        if (!e.isIntersecting) return;
+        const id = e.target.id;
+        miniNodes.forEach(n => n.classList.toggle('current', n.dataset.target === id));
+      });
+    }, { rootMargin: '-150px 0px -60% 0px', threshold: 0 });
+    view.querySelectorAll('.step[id]').forEach(s => observer.observe(s));
+  }
   // review submit / reopen
   view.querySelectorAll('button[data-decision]').forEach(b => {
     b.addEventListener('click', async () => {
@@ -622,6 +770,20 @@ es.addEventListener('done', () => {
   statusEl.textContent = 'idle'; statusEl.className = 'badge';
   runEl.disabled = false;
   route();
+});
+
+// ---------- theme toggle (light by default, persisted) -------------------
+const themeBtn = document.getElementById('theme-toggle');
+function applyTheme(t) {
+  document.body.dataset.theme = t;
+  themeBtn.innerHTML = t === 'dark' ? SVG.sun : SVG.moon;
+  themeBtn.title = t === 'dark' ? 'Switch to light' : 'Switch to dark';
+}
+applyTheme(localStorage.getItem('ask-review-theme') || 'light');
+themeBtn.addEventListener('click', () => {
+  const next = document.body.dataset.theme === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('ask-review-theme', next);
+  applyTheme(next);
 });
 
 loadSpecs();
