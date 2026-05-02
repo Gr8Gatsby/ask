@@ -8,7 +8,10 @@
     "dev:mock": "concurrently -n mock,vite -c cyan,blue \"PORT=4243 tsx watch mock/server.ts\" \"BACKEND_PORT=4243 vite\"",
     "mock": "PORT=4243 tsx watch mock/server.ts",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui",
+    "e2e:headed": "playwright test --headed"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -23,6 +26,7 @@
     "remark-gfm": "^4.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
