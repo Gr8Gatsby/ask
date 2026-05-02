@@ -4,7 +4,7 @@ description: End-to-end test that messages from the iPhone/web app reach a live 
 argument-hint: [claude|codex|both]  (default: both)
 ---
 
-Validates the **iPhone → CloudKit → AskMac → daemon → terminal-manager → tmux/tty → agent → hook → CloudKit → iPhone** messaging round-trip on the dev box, end to end. Use this whenever you've changed claude-3, codex-3, terminal-manager, or any of the hooks and want to confirm the round trip still works.
+Validates the **iPhone → CloudKit → AskMac → daemon → terminal-manager → tmux/tty → agent → hook → AskMac → iPhone** messaging round-trip on the dev box, end to end. Use this whenever you've changed claude-3, codex-3, terminal-manager, or any of the hooks and want to confirm the round trip still works.
 
 ## What this tests
 
@@ -12,13 +12,13 @@ Validates the **iPhone → CloudKit → AskMac → daemon → terminal-manager �
 [test driver]                                                          [agent]
      │                                                                    ▲
      ▼                                                                    │
- mock /respond ──→ daemon socket ──→ inject_tty/send_text ──→ tty/tmux ──┘
+ AskMac /respond ──→ daemon socket ──→ inject_tty/send_text ──→ tty/tmux ─┘
      ▲                                                                    │
      │                                                                    ▼
- blocks.json ◀─── emit_block ◀─── _handle_user_prompt ◀─── hook fires ◀───┘
+ AskMac /blocks ◀── emit_block ◀── _handle_user_prompt ◀── hook fires ◀───┘
 ```
 
-If a message goes in via the test driver and a fresh hook event lands in the daemon log within a few seconds, the round trip is healthy.
+The test exercises the same HTTP endpoints that the iPhone hits via CloudKit and that the web app hits via the vite proxy. If a message goes in via the test driver and a fresh hook event lands in the daemon log within a few seconds, the round trip is healthy.
 
 ## When to use vs. NOT use
 
@@ -31,22 +31,25 @@ If a message goes in via the test driver and a fresh hook event lands in the dae
 - You only changed the web/iOS UI (no daemon changes) — run `npm run dev` and inspect manually
 - The user is mid-session in the target tmux pane — the test injects a visible message into their terminal
 
-## Prerequisites (assumed live on the dev box)
+## Backend selection
 
-These must be running before the skill executes. The skill **detects and reports**, but does NOT auto-start AskMac (a debugger is usually attached):
+The skill calls a single backend that exposes `/blocks` and `/respond/<blockID>`. There are two:
+
+| Port | Backend | When |
+|---|---|---|
+| **4242** | AskMac LocalHTTPServer (real, in DEBUG builds) | AskMac is running from Xcode — preferred |
+| **4243** | Mock server (`web/mock/server.ts`) | AskMac is not running — fallback |
+
+⚠️ The mock server reads `~/.ask/blocks.json`, which **AskMac does not currently write to** — so the mock server's view of `agent_session` blocks is stale. Always prefer port 4242 when AskMac is up. The skill picks 4242 if it answers, else 4243, else fails the preflight.
+
+## Prerequisites
 
 | Component | Check | If missing |
 |---|---|---|
 | AskMac (Xcode build) | `pgrep -fl AskMac` | Tell the user to launch from Xcode |
 | claude-3 daemon | `test -S ~/.ask/sockets/claude-3.sock` | Reload scripts in AskMac (↺ in Settings → Actions) |
 | codex-3 daemon | `test -S ~/.ask/sockets/codex-3.sock` | Same |
-
-These can be started by the skill if missing:
-
-| Component | Check | Auto-start command |
-|---|---|---|
-| Mock server | `curl -sS http://localhost:4243/blocks` | `cd web && PORT=4243 npx tsx mock/server.ts > /tmp/mock-server.log 2>&1 &` |
-| Vite dev | `curl -sS http://localhost:5173/` | `cd web && npx vite > /tmp/vite.log 2>&1 &` |
+| Backend on 4242 OR 4243 | `curl -fsS http://localhost:4242/blocks` then 4243 | If AskMac is running on 4242, you're done. Otherwise start the mock server (see below). |
 
 ## Steps
 
@@ -56,19 +59,29 @@ These can be started by the skill if missing:
 
 ### 2 — Preflight
 
-Run all checks in parallel via Bash. Stop and report if any **required** prereq fails. Auto-start the optional components.
-
 ```bash
 pgrep -fl AskMac >/dev/null || echo "MISSING: AskMac"
 test -S "$HOME/.ask/sockets/claude-3.sock" || echo "MISSING: claude-3 socket"
 test -S "$HOME/.ask/sockets/codex-3.sock"  || echo "MISSING: codex-3 socket"
-curl -fsS http://localhost:4243/blocks > /dev/null || echo "START: mock server"
-curl -fsS http://localhost:5173/        > /dev/null || echo "START: vite"
+
+# Pick a backend
+if curl -fsS http://localhost:4242/blocks > /dev/null 2>&1; then
+  BACKEND=http://localhost:4242
+  echo "BACKEND: AskMac (4242)"
+elif curl -fsS http://localhost:4243/blocks > /dev/null 2>&1; then
+  BACKEND=http://localhost:4243
+  echo "BACKEND: mock (4243) — agent_session blocks may be stale"
+else
+  # Try to start mock as last resort
+  cd /Users/kevin/Documents/code/ask/web && PORT=4243 npx tsx mock/server.ts > /tmp/mock-server.log 2>&1 &
+  sleep 2
+  curl -fsS http://localhost:4243/blocks > /dev/null && BACKEND=http://localhost:4243 \
+    && echo "BACKEND: mock (4243) — started" \
+    || echo "MISSING: no backend on 4242 or 4243"
+fi
 ```
 
-If `START: mock server` appears, run `cd /Users/kevin/Documents/code/ask/web && PORT=4243 npx tsx mock/server.ts > /tmp/mock-server.log 2>&1 &` and wait until `curl http://localhost:4243/blocks` returns 200.
-
-If `START: vite` appears, run `cd /Users/kevin/Documents/code/ask/web && npx vite > /tmp/vite.log 2>&1 &` and poll until `curl http://localhost:5173/` returns 200.
+Stop and report if any **required** prereq fails.
 
 ### 3 — Pick a target session per agent
 
@@ -98,43 +111,51 @@ PY
 
 ⚠️ **Never target the Claude Code session that this skill is running in** — it's the parent process. Filter out any claude-3 session whose `raw_id` matches `$CLAUDE_SESSION_ID` (the env var the agent is running under), or — if that's not available — whose `tty` is empty AND `tmux_target` is empty (the in-process supervisor session has no routing). Prefer claude-3 sessions with a real `tty` or `tmux_target`.
 
-### 4 — Snapshot the daemon log offset
+### 4 — Verify the agent_session block exists in the backend
 
-For each agent under test, record the current size of its log so we can read just the new lines later:
+The backend's `/blocks` is the single source of truth that the iPhone/web UI sees. If the agent_session block isn't there, the user can't message the session through the UI even though the daemon registry says it's alive.
 
 ```bash
-CLAUDE_OFFSET=$(wc -c < ~/.ask/logs/claude-3.log 2>/dev/null || echo 0)
-CODEX_OFFSET=$(wc -c <  ~/.ask/logs/codex-3.log  2>/dev/null || echo 0)
+SUFFIX="${SESSION_ID##*:}"            # e.g. "104cb45519" — full segment after the colon
+BLOCK_ID="${AGENT_PREFIX}-session-${SUFFIX}"   # claude3-session-... or codex3-session-...
+
+curl -fsS "${BACKEND}/blocks" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+ids = [b['blockID'] for b in data.get('blocks', [])]
+print('present' if '${BLOCK_ID}' in ids else 'MISSING — UI cannot show this session')
+"
 ```
 
-### 5 — Inject the test message
+If MISSING, mark the agent as `UI-PATH FAIL` but keep going via socket fallback so we still know if routing itself works.
 
-Generate a unique probe string per session so we can grep for it cleanly:
+### 5 — Snapshot the daemon log offset
+
+Record the current size of the daemon's log so we can read just the new lines later:
+
+```bash
+OFFSET=$(wc -c < ~/.ask/logs/${AGENT}.log 2>/dev/null || echo 0)
+```
+
+### 6 — Inject the test message via the backend (UI path)
 
 ```
 PROBE="ask-validate-$(date +%s)-${RANDOM}"
 ```
 
-Send via the **mock server's HTTP endpoint** (this is the same path the iPhone/web UI uses). The skill should NOT call the daemon socket directly — the point is to test the full chain that the user sees.
-
-The mock server resolves the block by `blockID` and looks up its `scriptID` and `session_id` from the payload. The block ID is `<agent>-session-<suffix>`, where `<suffix>` is the **full** segment after the colon in `session_id`:
-
 ```bash
-SUFFIX="${SESSION_ID##*:}"            # e.g. "104cb45519" (claude/codex both use full suffix)
-# claude-3:  block id = claude3-session-${SUFFIX}
-# codex-3:   block id = codex3-session-${SUFFIX}
-BLOCK_ID="${AGENT_PREFIX}-session-${SUFFIX}"
-
-curl -sS -X POST "http://localhost:4243/respond/${BLOCK_ID}" \
+curl -sS -X POST "${BACKEND}/respond/${BLOCK_ID}" \
   -H 'Content-Type: application/json' \
   -d "{\"value\":\"${PROBE}\"}"
 ```
 
-If the block is **not currently in `~/.ask/blocks.json`** (which happens when the daemon hasn't re-emitted the session block yet, or AskMac dropped it on TTL), the mock server's `/respond/<blockID>` endpoint will fall through to its `clearBlock` default. In that case **fall back to direct socket** as a covered failure mode, and report it as a UI-path gap:
+Expected response: `{"ok":true}`. If the response is anything else, the backend rejected the request — read the response body for the reason.
+
+If the agent_session block was MISSING in step 4, the backend can't resolve `scriptID` from `blockID` and will fail. Fall back to direct socket so we can still validate the daemon-and-down portion:
 
 ```bash
 python3 - <<PY
-import socket, json
+import socket, json, os
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 sock.settimeout(5)
 sock.connect(os.path.expanduser('~/.ask/sockets/${AGENT}.sock'))
@@ -144,93 +165,94 @@ print(sock.recv(4096).decode())
 PY
 ```
 
-### 6 — Verify the daemon routed the message
+### 7 — Verify the daemon routed the message
 
-Read the daemon log starting from the offset captured in step 4 and grep for the probe and routing markers:
+Read the daemon log starting from the offset captured in step 5:
 
 ```bash
-tail -c +$((CLAUDE_OFFSET+1)) ~/.ask/logs/claude-3.log | grep -E "${PROBE}|ui_respond|inject_tty|send_text"
+tail -c +$((OFFSET+1)) ~/.ask/logs/${AGENT}.log | grep -E "${PROBE}|ui_respond|block response|inject_tty|send_text|reply session"
 ```
 
-**PASS criteria for routing:**
-- A line matching `socket event type='ui_respond'` for the target session
-- A line containing `reply session=...` with `ok=True`
+**PASS criteria:** a `reply session=...` line with `ok=True` for the target session, plus an entry-point line:
+- `socket event type='ui_respond'` (via mock-server `/respond` → daemon socket), OR
+- `block response block_id='...'` (via AskMac MCP `notifications/message` from `/respond` on port 4242)
 
-If both are present, the message reached the daemon and was routed. If routing failed (`ok=False`), report the routing error and stop.
+The two paths come in through different doors but both must produce `reply session=... ok=True` to count as routed.
 
-### 7 — Verify the agent received the message (tmux only)
+### 8 — Verify the agent received the message (tmux only)
 
-For sessions with `tmux_target`, capture the pane and look for the probe text:
+For sessions with `tmux_target`:
 
 ```bash
 tmux capture-pane -t "${TMUX_TARGET}" -p | grep -F "${PROBE}"
 ```
 
-For tty-only sessions (claude-3 plain-terminal): there's no portable way to read the terminal's scrollback. Skip this check and note "agent-receive verification skipped (no tmux)".
+For tty-only sessions (claude-3 plain-terminal): there's no portable way to read the terminal's scrollback. Skip and note "agent-receive verification skipped (no tmux)".
 
-### 8 — Wait for the hook round-trip
+### 9 — Wait for the hook round-trip
 
-Poll the daemon log (every 1s, up to 8s) for a fresh `user_prompt_submit` event with a session_id that matches the target session's `raw_id`. This is the agent calling its own hook to acknowledge the typed message:
+Poll the daemon log (every 1s, up to 8s) for a fresh `user_prompt_submit` event:
 
 ```bash
 for i in $(seq 1 8); do
-  if tail -c +$((OFFSET+1)) ~/.ask/logs/${AGENT}.log | grep -q "user_prompt_submit.*${RAW_ID:0:11}"; then
-    echo "HOOK FIRED"
+  if tail -c +$((OFFSET+1)) ~/.ask/logs/${AGENT}.log | grep -q "user_prompt_submit"; then
+    echo "HOOK FIRED ($i s)"
     break
   fi
   sleep 1
 done
 ```
 
-**PASS criteria for round-trip:** the hook fires within 8s. **WARN if delayed** (>4s) — agent is alive but slow. **FAIL** if no hook fires within 8s — the message was injected but the agent didn't see it (terminal disconnected, agent crashed, or tmux pane is in a non-input state like a scroll buffer).
+**PASS:** hook fires within 8s. **WARN if delayed** (>4s). **FAIL** if no hook fires within 8s — the message was injected but the agent didn't see it (terminal disconnected, agent crashed, or tmux pane is in a non-input state like a scroll buffer).
 
-### 9 — Verify the block updates in blocks.json
+### 10 — (Advisory) Verify the block payload briefly reflected the probe
 
-After the hook fires, the daemon should call `_emit_session_block` again with the new `last_prompt`/`first_prompt`. Read `~/.ask/blocks.json` and confirm the agent_session block's payload now contains the probe:
+This check is racy: after `_handle_block_response` sets `preview = probe`, the agent's `session_idle` hook fires shortly after and clears `preview = ''`. So this check **must run immediately after step 7** (routing PASS), before step 9. If the agent is fast, the probe will already be gone by the time you re-fetch.
+
+Treat this as **advisory**: if it's `updated`, great. If it's `NOT updated` but routing + hook-back both passed, do not fail the run — log it as a warning and move on.
 
 ```bash
-python3 - <<PY
-import json, os
-data = json.load(open(os.path.expanduser('~/.ask/blocks.json')))
+# Run RIGHT AFTER step 7 (do not sleep)
+curl -fsS "${BACKEND}/blocks" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
 for b in data.get('blocks', []):
     if b['blockID'] == '${BLOCK_ID}':
-        payload = json.loads(b['payload'])
-        print('last_prompt:', payload.get('last_prompt',''))
-        print('preview:    ', payload.get('preview',''))
+        payload = json.loads(b.get('payload','{}'))
+        text = (payload.get('last_prompt') or '') + (payload.get('preview') or '')
+        print('updated' if '${PROBE}' in text else 'NOT updated (likely already cleared by session_idle)')
         break
 else:
-    print('BLOCK NOT FOUND')
-PY
+    print('block disappeared from backend')
+"
 ```
 
-**PASS criteria for UI update:** `last_prompt` or `preview` contains `${PROBE}`. If `BLOCK NOT FOUND`, the daemon emitted but AskMac didn't persist the block to disk — flag this as a separate problem.
-
-### 10 — Report
+### 11 — Report
 
 Print a single table summarising each tested agent:
 
 ```
-Agent      Session                         Routing  Tmux-recv  Hook-back  Block-updated
-claude-3   claude3:582bdb8a25 (no tty)     PASS     SKIP       PASS       PASS
-codex-3    codex3:104cb45519 (codex:skills)PASS     PASS       PASS (1s)  PASS
+Agent      Session                              Block-in-UI  Routing  Tmux-recv  Hook-back  Block-flash
+claude-3   claude3:582bdb8a25 (no tty)          PASS         PASS     SKIP       PASS (1s)  WARN (cleared)
+codex-3    codex3:104cb45519 (codex:skills.0)   PASS         PASS     PASS       PASS (1s)  PASS
 ```
 
-Then a one-line verdict: `✅ All agents healthy.` or `❌ codex-3 hook timed out — see ~/.ask/logs/codex-3.log:NNN`.
+**Pass criteria for the overall run:** Routing + Hook-back both PASS for every tested agent. Block-flash is advisory — `WARN` is acceptable. Block-in-UI is required for messaging through the UI to work, but the run can still pass with `FAIL` if you fell back to the socket and the rest of the chain works (this signals "daemon side is fine, but a separate UI-emit bug exists").
 
-If anything failed, link to the relevant log file with the byte offset that was captured at step 4 so the user can `tail -c +OFFSET file | less` themselves.
+Then a one-line verdict: `✅ All agents healthy.` or `❌ codex-3 hook timed out — see ~/.ask/logs/codex-3.log @ offset NNN`.
 
-## Common failure modes and what they mean
+## Common failure modes
 
 | Symptom | Likely cause | Where to look |
 |---|---|---|
 | `MISSING: claude-3 socket` after AskMac is up | Daemon crashed on startup | `~/.ask/logs/claude-3.log` head |
+| `Block-in-UI FAIL` for an idle session | Daemon emitted but `_emitted_payloads` cache may be hiding a re-emit; or AskMac was restarted but daemon didn't see it | Restart the script via the AskMac reload button — that drops the daemon's dedup cache |
 | Routing PASS, hook-back FAIL | tmux pane is in scroll/copy mode, or agent crashed | `tmux capture-pane -t ... -p` for the agent's prompt |
 | Routing PASS, tmux-recv FAIL | `inject_tty`/`send_text` returned ok but text never arrived — terminal-manager-agent mismatch | `~/.ask/logs/terminal-manager.log` |
-| Hook-back PASS, block-updated FAIL | Daemon emitted but AskMac dropped the block | AskMac console (Xcode) for `emit_block` errors |
-| `BLOCK NOT FOUND` from the start | Daemon hasn't re-emitted since restart — `_emit_session_block` dedup gating may be skipping a re-emit | Restart the script via the AskMac reload button |
+| Hook-back PASS, block-updated FAIL | Daemon emitted but AskMac dropped the block, or 4243-mock-only run reading stale `blocks.json` | Use port 4242 (real AskMac), not 4243 (mock). |
 
 ## Notes on self-sufficiency
 
-- This skill **does not require an AskMac restart** — daemons reload via the Settings → Actions ↺ button, which Claude can suggest but the user must click. After deployment via `/deploy-scripts`, run this skill instead of asking the user to reinstall.
-- The skill **does not require the iPhone** — it exercises the same `/respond/<blockID>` HTTP endpoint that the iPhone hits via CloudKit + the web bridge. If this skill passes, the iPhone path passes too (assuming iPhone↔CloudKit auth is healthy, which is a separate concern).
-- The skill **must NOT target its own session** — see the warning in step 3.
+- The skill **does not require an AskMac restart** — daemons reload via the Settings → Actions ↺ button, which Claude can suggest but the user must click. After deployment via `/deploy-scripts`, run this skill instead of asking the user to reinstall.
+- The skill **does not require the iPhone** — it exercises the same `/respond/<blockID>` HTTP endpoint that the iPhone hits via CloudKit and the web app hits via the vite `/api` proxy. If this skill passes against `:4242`, the iPhone path passes too (assuming iPhone↔CloudKit auth is healthy, which is a separate concern).
+- The skill **must NOT target its own Claude Code session** — see the warning in step 3.
