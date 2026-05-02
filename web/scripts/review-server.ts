@@ -402,10 +402,12 @@ const HTML = `<!doctype html>
   .panel h3 { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
   .panel .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .panel .help { color: var(--muted); font-size: 12px; margin-top: 10px; line-height: 1.6; }
-  /* Run summary header */
-  .run-hero h1 { margin: 0 0 4px; font-size: 22px; line-height: 1.25; }
-  .run-hero p.lead { margin: 0 0 8px; color: var(--muted); font-size: 14px; line-height: 1.55; }
-  .run-hero .meta { color: var(--muted); font-size: 12px; }
+  /* Run summary header — compact one-line strip; full prose lives in the side panel */
+  .run-hero { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 8px; }
+  .run-hero h1 { margin: 0; font-size: 16px; line-height: 1.25; font-weight: 600; flex: 0 1 auto; }
+  .run-hero .meta { color: var(--muted); font-size: 11px; }
+  .run-hero .info-btn { background: transparent; border: none; padding: 2px 6px; color: var(--muted); cursor: pointer; font-size: 12px; }
+  .run-hero .info-btn:hover { color: var(--primary); }
   /* ----- Sticky mini-map flowchart -----
      Dot color now means "where you are":
        - default grey   = step you haven't viewed
@@ -413,28 +415,25 @@ const HTML = `<!doctype html>
        - dark           = step you already passed
      A separate small badge by the number indicates feedback count, so
      "I left a note here" is no longer confused with "I'm here". */
-  .mini-map { position: sticky; top: 0; z-index: 15; background: var(--bg); padding: 10px 0 12px; border-bottom: 1px solid var(--border); margin: 0 0 12px; }
-  .mini-map .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
-  .mini-map .nodes { display: flex; gap: 0; align-items: stretch; overflow-x: auto; padding-bottom: 2px; }
-  .mini-map .node { flex: 1 1 0; min-width: 80px; display: flex; flex-direction: column; align-items: center; cursor: pointer; padding: 4px; border-radius: 6px; position: relative; }
+  .mini-map { position: sticky; top: 0; z-index: 15; background: var(--bg); padding: 6px 0 8px; border-bottom: 1px solid var(--border); margin: 0 0 8px; }
+  .mini-map .nodes { display: flex; gap: 0; align-items: center; overflow-x: auto; padding-bottom: 2px; }
+  .mini-map .node { flex: 1 1 0; min-width: 70px; display: flex; flex-direction: row; align-items: center; gap: 6px; cursor: pointer; padding: 4px 6px; border-radius: 6px; position: relative; justify-content: center; }
   .mini-map .node:hover { background: var(--row-hover); }
-  .mini-map .node .dot { width: 26px; height: 26px; border-radius: 50%; background: var(--dot); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; transition: transform .12s ease, box-shadow .12s ease, background .12s ease; }
+  .mini-map .node .dot { width: 22px; height: 22px; border-radius: 50%; background: var(--dot); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; transition: transform .12s ease, box-shadow .12s ease, background .12s ease; }
   .mini-map .node.passed .dot { background: var(--muted); }
-  .mini-map .node.current .dot { background: var(--primary); box-shadow: 0 0 0 4px rgba(0,102,204,0.22); transform: scale(1.08); }
-  .mini-map .node .cap { font-size: 11px; color: var(--text); margin-top: 5px; max-width: 110px; text-align: center; line-height: 1.25; }
+  .mini-map .node.current .dot { background: var(--primary); box-shadow: 0 0 0 3px rgba(0,102,204,0.22); }
+  .mini-map .node .cap { font-size: 11px; color: var(--text); line-height: 1.2; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mini-map .node.current .cap { font-weight: 600; }
-  .mini-map .node .fb-count { position: absolute; top: 0; right: 18%; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--success); color: #fff; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; border: 2px solid var(--bg); }
-  .mini-map .arrow { flex: 0 0 22px; align-self: center; height: 2px; background: var(--rail); margin-top: 13px; }
+  .mini-map .node .fb-count { position: absolute; top: -2px; left: 22px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px; background: var(--success); color: #fff; font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center; border: 2px solid var(--bg); }
+  .mini-map .arrow { flex: 0 0 14px; height: 2px; background: var(--rail); }
   /* ----- Slide (one step at a time) ----- */
-  .story-info { padding: 14px 18px; }
-  .story-info h2 { font-size: 14px; margin: 0 0 4px; }
-  .story-info .desc { color: var(--muted); font-size: 13px; margin: 0; line-height: 1.55; }
-  .slide { padding: 22px 22px 18px; }
-  .slide .step-meta { color: var(--muted); font-size: 12px; margin: 0 0 4px; }
-  .slide .step-title { font-size: 18px; font-weight: 600; margin: 0 0 6px; }
-  .slide .step-desc { color: var(--muted); font-size: 14px; line-height: 1.6; margin: 0 0 16px; max-width: 760px; }
-  .slide .step-shot-wrap { display: flex; justify-content: center; align-items: center; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 12px; min-height: 200px; }
-  .slide .step-shot { max-width: 100%; max-height: calc(100vh - 360px); object-fit: contain; cursor: zoom-in; border-radius: 4px; }
+  .slide { padding: 12px 16px 14px; }
+  .slide .step-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0 0 6px; }
+  .slide .step-meta { color: var(--muted); font-size: 11px; margin: 0; }
+  .slide .step-title { font-size: 16px; font-weight: 600; margin: 0; }
+  .slide .step-desc { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0 0 8px; max-width: 920px; }
+  .slide .step-shot-wrap { display: flex; justify-content: center; align-items: center; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-bottom: 8px; min-height: 200px; }
+  .slide .step-shot { max-width: 100%; max-height: calc(100vh - 320px); object-fit: contain; cursor: zoom-in; border-radius: 4px; }
   .slide .quick { margin-top: 0; display: flex; gap: 6px; flex-wrap: wrap; }
   .slide .quick button { font-size: 13px; padding: 6px 12px 6px 10px; display: inline-flex; align-items: center; gap: 6px; }
   .slide .quick button svg { width: 18px; height: 18px; flex-shrink: 0; }
@@ -447,20 +446,24 @@ const HTML = `<!doctype html>
   .slide .fb-row .x { color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; padding: 0 2px; }
   .slide .fb-row .x svg { width: 14px; height: 14px; }
   .slide .fb-row .x:hover { color: var(--danger); }
-  /* ----- Prev / Next nav under the slide ----- */
-  .slide-nav { display: flex; justify-content: space-between; gap: 12px; margin: 18px 0 0; }
-  .slide-nav button { padding: 9px 16px; display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
-  .slide-nav button svg { width: 16px; height: 16px; }
-  .slide-nav button:disabled { visibility: hidden; }
-  .slide-nav .step-counter { color: var(--muted); font-size: 12px; align-self: center; }
-  /* ----- Sticky review form pinned to the bottom ----- */
-  .review-sticky { position: sticky; bottom: 0; z-index: 14; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin: 24px 0 0; box-shadow: 0 -4px 14px rgba(0,0,0,0.06); }
+  /* ----- Slide nav row: prev | quick-tags | next ----- */
+  .slide-nav { display: flex; align-items: center; gap: 8px; margin: 8px 0 0; }
+  .slide-nav > #prev, .slide-nav > #next { padding: 6px 12px; display: inline-flex; align-items: center; gap: 4px; font-size: 13px; flex-shrink: 0; }
+  .slide-nav > #prev svg, .slide-nav > #next svg { width: 14px; height: 14px; }
+  .slide-nav > #prev:disabled, .slide-nav > #next:disabled { visibility: hidden; }
+  .slide-nav .quick { flex: 1; display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin: 0; }
+  /* ----- Compact, collapsible review form pinned to the bottom ----- */
+  .review-sticky { position: sticky; bottom: 0; z-index: 14; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; margin: 12px 0 0; box-shadow: 0 -4px 14px rgba(0,0,0,0.06); }
   [data-theme="dark"] .review-sticky { box-shadow: 0 -4px 14px rgba(0,0,0,0.3); }
-  .review-sticky .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
-  .review-sticky .head h3 { margin: 0; font-size: 13px; color: var(--muted); }
-  .review-sticky textarea { min-height: 50px; }
-  .review-sticky .row { margin-top: 8px; }
-  .review-sticky .help { color: var(--muted); font-size: 11px; margin-top: 6px; line-height: 1.5; }
+  .review-sticky .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .review-sticky .head h3 { margin: 0; font-size: 12px; color: var(--muted); }
+  .review-sticky[open] .head { margin-bottom: 8px; }
+  .review-sticky textarea { min-height: 42px; }
+  .review-sticky .row { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .review-sticky .row button { padding: 5px 10px; font-size: 12px; }
+  .review-sticky .help { display: none; }
+  .review-sticky summary { cursor: pointer; list-style: none; }
+  .review-sticky summary::-webkit-details-marker { display: none; }
   /* Lightbox with zoom/pan */
   dialog#lightbox { background: rgba(0,0,0,0.95); border: none; width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh; padding: 0; margin: 0; overflow: hidden; }
   dialog#lightbox::backdrop { background: rgba(0,0,0,0.9); }
@@ -488,6 +491,7 @@ const HTML = `<!doctype html>
 <aside id="side-panel" aria-hidden="true">
   <button id="close-panel" aria-label="Close menu" title="Close"></button>
   <h1><a href="#/">Ask · review</a></h1>
+  <div class="group" id="panel-about"></div>
   <div class="group">
     <label for="spec">Spec</label>
     <select id="spec"><option value="">All specs</option></select>
@@ -707,30 +711,30 @@ async function renderDetail(id) {
   if (isNaN(slideIdx) || slideIdx < 0) slideIdx = 0;
   if (slideIdx >= allSteps.length) slideIdx = Math.max(0, allSteps.length - 1);
 
-  // ----- review form (rendered separately, pinned to bottom) -----
+  // ----- review form (collapsible, pinned to bottom) -----
   let reviewBody = '';
   if (r.review) {
-    reviewBody = '<div class="head"><h3>Reviewed · <span class="decision-' + r.review.decision + '">' + r.review.decision + '</span> · ' + ago(r.review.reviewedAt) + '</h3>' +
-      '<button id="reopen">Reopen</button></div>' +
-      '<p style="margin:0;white-space:pre-wrap;font-size:13px">' + escape(r.review.summary || '(no summary)') + '</p>';
+    reviewBody = '<details class="review-sticky" id="review-sticky" open>' +
+      '<summary class="head"><h3>Reviewed · <span class="decision-' + r.review.decision + '">' + r.review.decision + '</span> · ' + ago(r.review.reviewedAt) + '</h3>' +
+      '<button id="reopen">Reopen</button></summary>' +
+      '<p style="margin:0;white-space:pre-wrap;font-size:13px">' + escape(r.review.summary || '(no summary)') + '</p>' +
+      '</details>';
   } else if (r.status !== 'running') {
-    reviewBody = '<div class="head"><h3>Overall review</h3>' +
-      '<span class="muted">Use per-step tags above for specifics; only the overall decision is required to finalize.</span></div>' +
-      '<textarea id="summary" placeholder="Optional — anything global to call out? (per-step quick-tags above replace most typing)"></textarea>' +
+    reviewBody = '<details class="review-sticky" id="review-sticky">' +
+      '<summary class="head"><h3>Overall review — click to add an overall comment / approve / reject</h3></summary>' +
+      '<textarea id="summary" placeholder="Optional — anything global? Per-step quick-tags above replace most typing."></textarea>' +
       '<div class="row">' +
         '<button class="success" data-decision="approved">Approve</button>' +
         '<button data-decision="changes-requested">Changes requested</button>' +
         '<button class="danger" data-decision="rejected">Reject</button>' +
       '</div>' +
-      '<p class="help"><strong>Approve</strong> = stop nagging unless web/src or ask/scripts changes. ' +
-        '<strong>Changes / Reject</strong> = log as known-not-ready, suppress stale alerts. ' +
-        'Submitting never re-runs the test — that\\'s always explicit via <em>New run</em>.</p>';
+      '</details>';
   }
 
   // ----- mini-map flowchart (sticky) -----
   let miniMap = '';
   if (allSteps.length) {
-    miniMap = '<div class="mini-map" id="mini-map"><div class="label">Where you are</div><div class="nodes">' +
+    miniMap = '<div class="mini-map" id="mini-map"><div class="nodes">' +
       allSteps.map(({ s, st }, i) => {
         const count = fbCountFor(s.path, st.idx);
         const isCurrent = i === slideIdx;
@@ -754,33 +758,28 @@ async function renderDetail(id) {
     const { s, st } = allSteps[slideIdx];
     const stepFb = fb.filter(x => x.storyPath === s.path && x.stepIdx === st.idx);
     slideHtml =
-      (stories.length === 1
-        ? '<div class="story-info panel" style="margin-top:0;margin-bottom:0;border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom:0">' +
-            '<h2>' + escape(s.title || s.testTitle) + '</h2>' +
-            (s.description ? '<p class="desc">' + escape(s.description) + '</p>' : '') +
-          '</div>'
-        : '') +
-      '<div class="panel slide" style="margin-top:' + (stories.length === 1 ? '0' : '16px') + ';border-top-left-radius:' + (stories.length === 1 ? '0' : '8px') + ';border-top-right-radius:' + (stories.length === 1 ? '0' : '8px') + '" data-story-path="' + escape(s.path) + '" data-step="' + st.idx + '">' +
-        '<p class="step-meta">Step ' + (slideIdx+1) + ' of ' + allSteps.length + ' · ' + st.durationMs + 'ms</p>' +
-        '<h2 class="step-title">' + escape(st.title) + '</h2>' +
+      '<div class="panel slide" data-story-path="' + escape(s.path) + '" data-step="' + st.idx + '">' +
+        '<div class="step-head">' +
+          '<h2 class="step-title">' + escape(st.title) + '</h2>' +
+          '<span class="step-meta">Step ' + (slideIdx+1) + ' / ' + allSteps.length + ' · ' + st.durationMs + 'ms</span>' +
+        '</div>' +
         (st.description ? '<p class="step-desc">' + escape(st.description) + '</p>' : '') +
         (st.file ? '<div class="step-shot-wrap"><img class="step-shot" src="/runs/' + r.id + '/story/' + encodeURI(s.path) + '/' + encodeURI(st.file) + '" alt="' + escape(st.title) + '"></div>' : '') +
-        '<div class="quick">' +
-          KINDS.map(k => '<button data-kind="' + k.id + '">' + k.icon + '<span>' + k.label + '</span></button>').join('') +
-          '<button data-kind="other">' + SVG.other + '<span>Comment</span></button>' +
+        '<div class="slide-nav">' +
+          '<button id="prev"' + (slideIdx === 0 ? ' disabled' : '') + '>' + SVG.arrowLeft + '<span>Previous</span></button>' +
+          '<div class="quick">' +
+            KINDS.map(k => '<button data-kind="' + k.id + '">' + k.icon + '<span>' + k.label + '</span></button>').join('') +
+            '<button data-kind="other">' + SVG.other + '<span>Comment</span></button>' +
+          '</div>' +
+          '<button id="next"' + (slideIdx === allSteps.length-1 ? ' disabled' : '') + '><span>Next</span>' + SVG.arrowRight + '</button>' +
         '</div>' +
-        '<div class="fb-list">' +
+        (stepFb.length ? '<div class="fb-list">' +
           stepFb.map(f => '<div class="fb-row">' +
             '<span class="kind">' + (KINDS.find(k=>k.id===f.kind)?.icon ?? SVG.other) + escape(f.kind) + '</span>' +
             '<span class="text">' + escape(f.text || '') + '</span>' +
             '<span class="x" data-at="' + f.at + '" title="remove">' + SVG.remove + '</span>' +
           '</div>').join('') +
-        '</div>' +
-        '<div class="slide-nav">' +
-          '<button id="prev"' + (slideIdx === 0 ? ' disabled' : '') + '>' + SVG.arrowLeft + '<span>Previous</span></button>' +
-          '<span class="step-counter">' + (slideIdx+1) + ' / ' + allSteps.length + '   ·   ← / → to navigate</span>' +
-          '<button id="next"' + (slideIdx === allSteps.length-1 ? ' disabled' : '') + '><span>Next</span>' + SVG.arrowRight + '</button>' +
-        '</div>' +
+        '</div>' : '') +
       '</div>';
   }
 
@@ -803,24 +802,43 @@ async function renderDetail(id) {
     }
   }
 
-  // ----- friendly hero -----
+  // ----- friendly hero (one-line strip; full prose in the side panel) -----
   const primaryStory = stories[0];
   const heroTitle = primaryStory?.title || (r.spec || '(all specs)').replace(/^e2e\\//, '').replace(/\\.spec\\.ts$/, '');
   const heroDesc = primaryStory?.description || '';
+  // Stash run prose for the side panel "About" section
+  window.__askRunInfo = {
+    title: heroTitle,
+    description: heroDesc,
+    spec: (r.spec || '(all specs)').replace(/^e2e\\//, ''),
+    id: r.id,
+    startedAt: r.startedAt,
+  };
+  const aboutEl = document.getElementById('panel-about');
+  if (aboutEl) {
+    aboutEl.innerHTML =
+      '<label>About this run</label>' +
+      '<div style="font-size:13px;font-weight:600">' + escape(heroTitle) + '</div>' +
+      (heroDesc ? '<div class="muted" style="font-size:12px;line-height:1.55">' + escape(heroDesc) + '</div>' : '') +
+      '<div class="muted" style="font-size:11px">' + escape(window.__askRunInfo.spec) + ' · ' + r.id + ' · started ' + ago(r.startedAt) + '</div>';
+  }
 
   view.innerHTML =
-    '<p style="margin:0 0 12px"><a href="#/">← all runs</a></p>' +
     '<div class="run-hero">' +
+      '<a href="#/" class="muted" style="font-size:12px">← all runs</a>' +
       '<h1>' + escape(heroTitle) + '</h1>' +
-      (heroDesc ? '<p class="lead">' + escape(heroDesc) + '</p>' : '') +
-      '<p class="meta">' + escape(r.spec || '(all specs)').replace(/^e2e\\//,'') + ' · ' + r.id + ' · started ' + ago(r.startedAt) + ' · ' + passedBadge + staleBadge + '</p>' +
+      passedBadge + staleBadge +
+      '<button class="info-btn" id="hero-info" title="Show full description">about</button>' +
     '</div>' +
     miniMap +
     slideHtml +
     shotsHtml +
-    (reviewBody ? '<div class="review-sticky" id="review-sticky">' + reviewBody + '</div>' : '') +
+    (reviewBody || '') +
     '<details' + (r.exitCode === 0 ? '' : ' open') + ' style="margin-top:16px"><summary style="cursor:pointer" class="muted">Output</summary>' +
       '<pre class="output" id="run-output">' + escape(r.output ?? '') + '</pre></details>';
+
+  const heroInfoBtn = document.getElementById('hero-info');
+  if (heroInfoBtn) heroInfoBtn.addEventListener('click', () => setPanel(true));
 
   // image lightbox
   view.querySelectorAll('img.step-shot, figure img').forEach(img => {
