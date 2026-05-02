@@ -429,15 +429,15 @@ const HTML = `<!doctype html>
   /* ----- Slide: image left, sidebar right (title/description/feedback)
      The image always sits at the top of the panel; text on the right grows
      downward without ever pushing the image. ----- */
-  .slide { display: grid; grid-template-columns: minmax(0, 1fr) 300px; grid-template-rows: auto auto; gap: 14px; padding: 12px 14px 14px; }
+  .slide { display: grid; grid-template-columns: 320px minmax(0, 1fr); grid-template-rows: auto auto; gap: 16px; padding: 14px 16px 14px; }
   @media (max-width: 900px) { .slide { grid-template-columns: 1fr; } }
-  .slide .step-image { grid-column: 1; grid-row: 1; }
-  .slide .step-side  { grid-column: 2; grid-row: 1; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .slide .step-side  { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .slide .step-image { grid-column: 2; grid-row: 1; }
   .slide .slide-nav  { grid-column: 1 / -1; grid-row: 2; }
-  .slide .step-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-  .slide .step-meta { color: var(--muted); font-size: 11px; margin: 0; }
-  .slide .step-title { font-size: 16px; font-weight: 600; margin: 0; line-height: 1.3; }
-  .slide .step-desc { color: var(--text); font-size: 13px; line-height: 1.55; margin: 0; }
+  .slide .step-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .slide .step-meta { color: var(--muted); font-size: 12px; margin: 0; }
+  .slide .step-title { font-size: 22px; font-weight: 600; margin: 0; line-height: 1.25; }
+  .slide .step-desc { color: var(--text); font-size: 15px; line-height: 1.6; margin: 0; }
   .slide .step-shot-wrap { display: flex; justify-content: center; align-items: center; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; min-height: 200px; }
   .slide .step-shot { max-width: 100%; max-height: calc(100vh - 240px); object-fit: contain; cursor: zoom-in; border-radius: 4px; }
   .slide .quick { margin-top: 0; display: flex; gap: 6px; flex-wrap: wrap; }
@@ -529,7 +529,7 @@ const HTML = `<!doctype html>
 // No network dependency, scales cleanly, inherits the button text color.
 const SVG = {
   ok:        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>',
-  bug:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="8" width="10" height="12" rx="5"/><path d="M12 8V5M9 5l-1-2M15 5l1-2M7 12H4M20 12h-3M7 16H4M20 16h-3M7 20l-2 1M17 20l2 1"/></svg>',
+  bug:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="13" rx="4.5" ry="6.5"/><line x1="12" y1="6.5" x2="12" y2="19.5"/><path d="M10 5 L8.5 3"/><path d="M14 5 L15.5 3"/><path d="M7.7 9 L4.5 7"/><path d="M16.3 9 L19.5 7"/><path d="M7.5 13 L4 13"/><path d="M16.5 13 L20 13"/><path d="M7.7 17 L4.5 19"/><path d="M16.3 17 L19.5 19"/></svg>',
   style:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 1.5 1.5 0 0 0 0-3 1.5 1.5 0 0 1 0-3h2.5a4.5 4.5 0 0 0 4.5-4.5C19 6.4 15.86 3 12 3z"/><circle cx="7.5" cy="11" r=".75" fill="currentColor"/><circle cx="11" cy="7.5" r=".75" fill="currentColor"/><circle cx="15.5" cy="9.5" r=".75" fill="currentColor"/></svg>',
   copy:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>',
   confusing: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z"/></svg>',
