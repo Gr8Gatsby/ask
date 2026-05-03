@@ -57,6 +57,11 @@ interface Feedback {
   kind: string        // ok | bug | style | copy | confusing | slow | other
   text: string
   at: number
+  // Optional pin location, as fractions (0..1) of the screenshot's natural
+  // dimensions. Pins survive image rescaling; absent => unpinned (sidebar
+  // comment as before).
+  x?: number | null
+  y?: number | null
 }
 interface Run {
   id: string
@@ -233,7 +238,7 @@ function listFrozenShots(runId: string): { rel: string; size: number }[] {
   return out.sort((a, b) => a.rel.localeCompare(b.rel))
 }
 
-interface FrozenStep { idx: number; title: string; description?: string; name?: string; file: string; durationMs: number }
+interface FrozenStep { idx: number; title: string; description?: string; name?: string; file: string; htmlFile?: string; durationMs: number }
 interface FrozenStory {
   path: string
   testTitle: string
@@ -438,8 +443,45 @@ const HTML = `<!doctype html>
   .slide .step-meta { color: var(--muted); font-size: 12px; margin: 0; }
   .slide .step-title { font-size: 22px; font-weight: 600; margin: 0; line-height: 1.25; }
   .slide .step-desc { color: var(--text); font-size: 15px; line-height: 1.6; margin: 0; }
-  .slide .step-shot-wrap { display: flex; justify-content: center; align-items: center; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; min-height: 200px; }
-  .slide .step-shot { max-width: 100%; max-height: calc(100vh - 240px); object-fit: contain; cursor: zoom-in; border-radius: 4px; }
+  /* ----- Image / HTML view shell + pin overlay ----- */
+  .slide .view-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+  .slide .view-toolbar .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .slide .view-toolbar .seg button { border: none; border-right: 1px solid var(--border); border-radius: 0; padding: 4px 10px; font-size: 12px; background: var(--panel); }
+  .slide .view-toolbar .seg button:last-child { border-right: none; }
+  .slide .view-toolbar .seg button.active { background: var(--primary); color: #fff; }
+  .slide .view-toolbar .toolbar-spacer { flex: 1; }
+  .slide .view-toolbar button.tool { font-size: 12px; padding: 4px 10px; display: inline-flex; align-items: center; gap: 4px; }
+  .slide .view-toolbar button.tool svg { width: 14px; height: 14px; }
+  .slide .step-shot-wrap { position: relative; display: flex; justify-content: center; align-items: center; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; min-height: 200px; }
+  .slide .step-shot-wrap.pinning { cursor: crosshair; }
+  .slide .step-shot { max-width: 100%; max-height: calc(100vh - 280px); object-fit: contain; border-radius: 4px; user-select: none; -webkit-user-drag: none; }
+  .slide .step-shot.idle { cursor: zoom-in; }
+  .slide .html-frame { width: 100%; height: calc(100vh - 280px); border: 1px solid var(--border); border-radius: 4px; background: #fff; }
+  /* pin layer sits exactly over the rendered image */
+  .slide .pin-layer { position: absolute; pointer-events: none; }
+  .slide .pin-layer .pin { position: absolute; transform: translate(-50%, -100%); pointer-events: auto; cursor: grab; user-select: none; }
+  .slide .pin-layer .pin.dragging { cursor: grabbing; }
+  .slide .pin-layer .pin .marker { width: 26px; height: 32px; display: flex; align-items: center; justify-content: center; padding-bottom: 6px; font-size: 11px; font-weight: 700; filter: drop-shadow(0 2px 3px rgba(0,0,0,.35)); position: relative; }
+  .slide .pin-layer .pin .marker svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .slide .pin-layer .pin .marker .num { position: relative; z-index: 1; color: #fff; }
+  /* pin colors per kind */
+  .pin-kind-ok        { color: #1d6f1d; }
+  .pin-kind-bug       { color: #b91c1c; }
+  .pin-kind-style     { color: #7c3aed; }
+  .pin-kind-copy      { color: #0891b2; }
+  .pin-kind-confusing { color: #ca8a04; }
+  .pin-kind-slow      { color: #c2410c; }
+  .pin-kind-other     { color: #475569; }
+  /* inline comment popover */
+  .cmt-popover { position: absolute; z-index: 30; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 10px; width: 320px; max-width: calc(100vw - 40px); transform: translate(-50%, 8px); }
+  [data-theme="dark"] .cmt-popover { box-shadow: 0 8px 24px rgba(0,0,0,.5); }
+  .cmt-popover .kind-row { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+  .cmt-popover .kind-row button { padding: 4px 8px; font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
+  .cmt-popover .kind-row button svg { width: 14px; height: 14px; }
+  .cmt-popover .kind-row button.selected { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .cmt-popover textarea { min-height: 60px; font-size: 13px; }
+  .cmt-popover .actions { display: flex; gap: 6px; margin-top: 8px; justify-content: flex-end; }
+  .cmt-popover .actions button { font-size: 12px; padding: 5px 10px; }
   .slide .quick { margin-top: 0; display: flex; gap: 6px; flex-wrap: wrap; }
   .slide .quick button { font-size: 13px; padding: 6px 12px 6px 10px; display: inline-flex; align-items: center; gap: 6px; }
   .slide .quick button svg { width: 18px; height: 18px; flex-shrink: 0; }
@@ -540,6 +582,10 @@ const SVG = {
   moon:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
   arrowLeft: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>',
   arrowRight:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>',
+  pin:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z"/><circle cx="12" cy="9" r="2.5"/></svg>',
+  clipboard: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/></svg>',
+  // Shape used by the pin marker (filled teardrop)
+  pinShape:  '<svg viewBox="0 0 26 32" fill="currentColor"><path d="M13 1C6.4 1 1 6.4 1 13c0 8 12 18 12 18s12-10 12-18c0-6.6-5.4-12-12-12z"/></svg>',
 };
 
 const KINDS = [
@@ -763,11 +809,26 @@ async function renderDetail(id) {
   if (allSteps.length) {
     const { s, st } = allSteps[slideIdx];
     const stepFb = fb.filter(x => x.storyPath === s.path && x.stepIdx === st.idx);
+    const shotURL = st.file ? '/runs/' + r.id + '/story/' + encodeURI(s.path) + '/' + encodeURI(st.file) : '';
+    const htmlURL = st.htmlFile ? '/runs/' + r.id + '/story/' + encodeURI(s.path) + '/' + encodeURI(st.htmlFile) : '';
     slideHtml =
-      '<div class="panel slide" data-story-path="' + escape(s.path) + '" data-step="' + st.idx + '">' +
-        (st.file
-          ? '<div class="step-image"><div class="step-shot-wrap"><img class="step-shot" src="/runs/' + r.id + '/story/' + encodeURI(s.path) + '/' + encodeURI(st.file) + '" alt="' + escape(st.title) + '"></div></div>'
-          : '<div class="step-image"></div>') +
+      '<div class="panel slide" data-story-path="' + escape(s.path) + '" data-step="' + st.idx + '" data-shot-url="' + shotURL + '" data-html-url="' + htmlURL + '">' +
+        '<div class="step-image">' +
+          '<div class="view-toolbar">' +
+            '<div class="seg" id="view-seg">' +
+              '<button data-view="image" class="active">Image</button>' +
+              (htmlURL ? '<button data-view="html">HTML</button>' : '') +
+            '</div>' +
+            '<button class="tool" id="add-pin-btn" title="Click then click on the image to drop a pin">' + SVG.pin + '<span>Add pin</span></button>' +
+            '<div class="toolbar-spacer"></div>' +
+            (htmlURL ? '<button class="tool" id="copy-html-btn">' + SVG.clipboard + '<span>Copy HTML</span></button>' : '') +
+            '<button class="tool" id="copy-context-btn">' + SVG.clipboard + '<span>Copy step context</span></button>' +
+          '</div>' +
+          '<div class="step-shot-wrap" id="shot-wrap">' +
+            (shotURL ? '<img class="step-shot idle" id="step-shot" src="' + shotURL + '" alt="' + escape(st.title) + '">' : '') +
+            '<div class="pin-layer" id="pin-layer"></div>' +
+          '</div>' +
+        '</div>' +
         '<div class="step-side">' +
           '<div class="step-head">' +
             '<h2 class="step-title">' + escape(st.title) + '</h2>' +
@@ -850,10 +911,21 @@ async function renderDetail(id) {
   const heroInfoBtn = document.getElementById('hero-info');
   if (heroInfoBtn) heroInfoBtn.addEventListener('click', () => setPanel(true));
 
-  // image lightbox
-  view.querySelectorAll('img.step-shot, figure img').forEach(img => {
+  // image lightbox (only when not in pin-add mode and not clicking on a pin)
+  view.querySelectorAll('figure img').forEach(img => {
     img.addEventListener('click', () => openLightbox(img.src));
   });
+  const stepShot = document.getElementById('step-shot');
+  if (stepShot) {
+    stepShot.addEventListener('click', (ev) => {
+      if (document.getElementById('shot-wrap')?.classList.contains('pinning')) return;
+      if (ev.target.closest('.pin')) return;
+      openLightbox(stepShot.src);
+    });
+  }
+
+  // ---------- pinned comments + inline popover ----------
+  setupSlideInteractions(r.id, allSteps[slideIdx], fb, () => renderDetail(r.id));
 
   // ----- slideshow navigation -----
   function goTo(i) {
@@ -895,32 +967,262 @@ async function renderDetail(id) {
     await fetch('/api/runs/' + r.id + '/review', { method: 'DELETE' });
     renderDetail(r.id);
   });
-  // per-step quick-tag handlers (slide is the active step container)
-  const slideEl = view.querySelector('.slide');
-  if (slideEl) {
-    const storyPath = slideEl.dataset.storyPath;
-    const stepIdx = parseInt(slideEl.dataset.step, 10);
-    slideEl.querySelectorAll('button[data-kind]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const kind = btn.dataset.kind;
-        let text = '';
-        if (kind === 'other' || kind === 'bug' || kind === 'confusing') {
-          text = prompt('Add a note (optional):') ?? '';
-          if (kind === 'other' && !text) return;
+  // sidebar "remove" buttons on existing comments
+  view.querySelectorAll('.slide .fb-row .x').forEach(x => {
+    x.addEventListener('click', async () => {
+      const at = parseInt(x.dataset.at, 10);
+      await fetch('/api/runs/' + r.id + '/feedback?at=' + at, { method: 'DELETE' });
+      renderDetail(r.id);
+    });
+  });
+}
+
+// =============================================================================
+// Slide interactions: quick-tag toolbar, image/HTML toggle, pinned comments,
+// inline popover, copy buttons. All routed through one function so re-renders
+// don't double-bind handlers.
+// =============================================================================
+function setupSlideInteractions(runId, current, fb, refresh) {
+  if (!current) return;
+  const { s, st } = current;
+  const storyPath = s.path, stepIdx = st.idx;
+  const slideEl = document.querySelector('.slide');
+  if (!slideEl) return;
+  const shotWrap = slideEl.querySelector('#shot-wrap');
+  const shotImg = slideEl.querySelector('#step-shot');
+  const pinLayer = slideEl.querySelector('#pin-layer');
+  const stepFb = fb.filter(x => x.storyPath === storyPath && x.stepIdx === stepIdx);
+
+  // ----- view toggle: Image vs HTML -----
+  const viewSeg = slideEl.querySelector('#view-seg');
+  if (viewSeg) {
+    viewSeg.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        viewSeg.querySelectorAll('button').forEach(b => b.classList.toggle('active', b === btn));
+        const mode = btn.dataset.view;
+        const htmlURL = slideEl.dataset.htmlUrl;
+        if (mode === 'html' && htmlURL) {
+          // Replace the contents of shot-wrap with a sandboxed iframe.
+          // Pin layer kept hidden in HTML view (anchored to image pixels, not DOM).
+          shotWrap.innerHTML = '<iframe class="html-frame" sandbox="allow-same-origin" src="' + htmlURL + '"></iframe>';
+        } else {
+          shotWrap.innerHTML = '<img class="step-shot idle" id="step-shot" src="' + slideEl.dataset.shotUrl + '"><div class="pin-layer" id="pin-layer"></div>';
+          // Re-bind interactions for the regenerated DOM
+          setupSlideInteractions(runId, current, fb, refresh);
         }
-        await fetch('/api/runs/' + r.id + '/feedback', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ storyPath, stepIdx, kind, text }),
-        });
-        renderDetail(r.id);
       });
     });
-    slideEl.querySelectorAll('.fb-row .x').forEach(x => {
-      x.addEventListener('click', async () => {
-        const at = parseInt(x.dataset.at, 10);
-        await fetch('/api/runs/' + r.id + '/feedback?at=' + at, { method: 'DELETE' });
-        renderDetail(r.id);
+  }
+
+  // ----- pin layer: render existing pinned comments -----
+  function renderPins() {
+    if (!pinLayer || !shotImg) return;
+    pinLayer.innerHTML = '';
+    // Position the pin layer to overlap the rendered image rect exactly.
+    const rect = shotImg.getBoundingClientRect();
+    const wrapRect = shotWrap.getBoundingClientRect();
+    pinLayer.style.left = (rect.left - wrapRect.left) + 'px';
+    pinLayer.style.top  = (rect.top  - wrapRect.top)  + 'px';
+    pinLayer.style.width  = rect.width + 'px';
+    pinLayer.style.height = rect.height + 'px';
+    let pinNum = 0;
+    stepFb.forEach((f) => {
+      if (typeof f.x !== 'number' || typeof f.y !== 'number') return;
+      pinNum++;
+      const pin = document.createElement('div');
+      pin.className = 'pin pin-kind-' + f.kind;
+      pin.style.left = (f.x * 100) + '%';
+      pin.style.top  = (f.y * 100) + '%';
+      pin.dataset.at = String(f.at);
+      pin.innerHTML = '<div class="marker">' + SVG.pinShape + '<span class="num">' + pinNum + '</span></div>';
+      pin.title = f.kind + (f.text ? ': ' + f.text : '');
+      attachPinDrag(pin, f);
+      pinLayer.appendChild(pin);
+    });
+  }
+  if (shotImg) {
+    if (shotImg.complete) renderPins();
+    else shotImg.addEventListener('load', renderPins);
+    window.addEventListener('resize', renderPins);
+  }
+
+  // ----- pin drag-to-move -----
+  function attachPinDrag(pin, f) {
+    let dragging = false, startX = 0, startY = 0;
+    pin.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      dragging = false;
+      startX = e.clientX; startY = e.clientY;
+      pin.setPointerCapture(e.pointerId);
+    });
+    pin.addEventListener('pointermove', (e) => {
+      if (Math.abs(e.clientX - startX) + Math.abs(e.clientY - startY) > 4) {
+        dragging = true;
+        pin.classList.add('dragging');
+        const rect = shotImg.getBoundingClientRect();
+        const nx = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        const ny = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+        pin.style.left = (nx * 100) + '%';
+        pin.style.top  = (ny * 100) + '%';
+        pin.dataset.nx = String(nx);
+        pin.dataset.ny = String(ny);
+      }
+    });
+    pin.addEventListener('pointerup', async (e) => {
+      try { pin.releasePointerCapture(e.pointerId); } catch {}
+      pin.classList.remove('dragging');
+      if (dragging) {
+        const nx = parseFloat(pin.dataset.nx), ny = parseFloat(pin.dataset.ny);
+        await fetch('/api/runs/' + runId + '/feedback?at=' + f.at, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ x: nx, y: ny }),
+        });
+        refresh();
+      } else {
+        // Click (no drag) → open editor for this pin
+        openPopover({ x: f.x, y: f.y, existing: f });
+      }
+    });
+  }
+
+  // ----- "Add pin" mode: next click on the image drops a new pin -----
+  const addPinBtn = slideEl.querySelector('#add-pin-btn');
+  if (addPinBtn && shotWrap && shotImg) {
+    addPinBtn.addEventListener('click', () => {
+      shotWrap.classList.add('pinning');
+      addPinBtn.classList.add('active');
+    });
+    shotImg.addEventListener('click', (e) => {
+      if (!shotWrap.classList.contains('pinning')) return;
+      e.stopPropagation();
+      const rect = shotImg.getBoundingClientRect();
+      const nx = (e.clientX - rect.left) / rect.width;
+      const ny = (e.clientY - rect.top) / rect.height;
+      shotWrap.classList.remove('pinning');
+      addPinBtn.classList.remove('active');
+      openPopover({ x: nx, y: ny, existing: null });
+    });
+  }
+
+  // ----- quick-tag toolbar (unpinned comments) -----
+  slideEl.querySelectorAll('.slide-nav .quick button[data-kind]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const kind = btn.dataset.kind;
+      // OK and Slow are zero-text shortcuts — save immediately, no popover.
+      if (kind === 'ok' || kind === 'slow') {
+        fetch('/api/runs/' + runId + '/feedback', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ storyPath, stepIdx, kind, text: '', x: null, y: null }),
+        }).then(refresh);
+        return;
+      }
+      openPopover({ x: null, y: null, existing: null, presetKind: kind });
+    });
+  });
+
+  // ----- inline popover (replaces window.prompt) -----
+  function closePopover() {
+    document.querySelectorAll('.cmt-popover').forEach(p => p.remove());
+  }
+  function openPopover({ x, y, existing, presetKind }) {
+    closePopover();
+    const pop = document.createElement('div');
+    pop.className = 'cmt-popover';
+    let chosenKind = existing?.kind || presetKind || 'comment';
+    const kindButtons = KINDS.concat([{ id: 'other', label: 'Comment', icon: SVG.other }])
+      .map(k => '<button data-k="' + k.id + '"' + (k.id === chosenKind ? ' class="selected"' : '') + '>' + k.icon + '<span>' + k.label + '</span></button>')
+      .join('');
+    pop.innerHTML =
+      '<div class="kind-row">' + kindButtons + '</div>' +
+      '<textarea placeholder="Note (optional)">' + (existing?.text ? escape(existing.text) : '') + '</textarea>' +
+      '<div class="actions">' +
+        (existing ? '<button class="danger" data-act="delete">Delete</button>' : '') +
+        '<button data-act="cancel">Cancel</button>' +
+        '<button class="primary" data-act="save">Save</button>' +
+      '</div>';
+    // Position: anchored to pin coords if given, else top-center of image
+    const wrapRect = shotWrap.getBoundingClientRect();
+    if (typeof x === 'number' && typeof y === 'number' && shotImg) {
+      const rect = shotImg.getBoundingClientRect();
+      pop.style.left = (rect.left - wrapRect.left + x * rect.width) + 'px';
+      pop.style.top  = (rect.top  - wrapRect.top  + y * rect.height + 4) + 'px';
+    } else {
+      pop.style.left = '50%';
+      pop.style.top  = '12px';
+    }
+    shotWrap.appendChild(pop);
+    pop.querySelector('textarea').focus();
+    pop.querySelectorAll('.kind-row button').forEach(b => {
+      b.addEventListener('click', () => {
+        chosenKind = b.dataset.k;
+        pop.querySelectorAll('.kind-row button').forEach(x => x.classList.toggle('selected', x === b));
       });
+    });
+    pop.querySelector('[data-act="cancel"]').addEventListener('click', closePopover);
+    if (existing) {
+      pop.querySelector('[data-act="delete"]').addEventListener('click', async () => {
+        await fetch('/api/runs/' + runId + '/feedback?at=' + existing.at, { method: 'DELETE' });
+        closePopover(); refresh();
+      });
+    }
+    pop.querySelector('[data-act="save"]').addEventListener('click', async () => {
+      const text = pop.querySelector('textarea').value.trim();
+      if (existing) {
+        await fetch('/api/runs/' + runId + '/feedback?at=' + existing.at, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: chosenKind, text }),
+        });
+      } else {
+        await fetch('/api/runs/' + runId + '/feedback', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ storyPath, stepIdx, kind: chosenKind, text, x, y }),
+        });
+      }
+      closePopover(); refresh();
+    });
+    // Esc to dismiss
+    pop.querySelector('textarea').addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') { ev.preventDefault(); closePopover(); }
+      if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) {
+        ev.preventDefault();
+        pop.querySelector('[data-act="save"]').click();
+      }
+    });
+  }
+
+  // ----- copy HTML / copy step context -----
+  const copyHtmlBtn = slideEl.querySelector('#copy-html-btn');
+  if (copyHtmlBtn) {
+    copyHtmlBtn.addEventListener('click', async () => {
+      const url = slideEl.dataset.htmlUrl;
+      if (!url) return;
+      const html = await fetch(url).then(r => r.text());
+      await navigator.clipboard.writeText(html);
+      copyHtmlBtn.querySelector('span').textContent = 'Copied!';
+      setTimeout(() => { copyHtmlBtn.querySelector('span').textContent = 'Copy HTML'; }, 1500);
+    });
+  }
+  const copyCtxBtn = slideEl.querySelector('#copy-context-btn');
+  if (copyCtxBtn) {
+    copyCtxBtn.addEventListener('click', async () => {
+      const url = slideEl.dataset.htmlUrl;
+      const html = url ? await fetch(url).then(r => r.text()) : '';
+      const lines = [];
+      lines.push('## ' + st.title);
+      if (st.description) lines.push('', st.description);
+      if (stepFb.length) {
+        lines.push('', '### Comments');
+        stepFb.forEach((f, i) => {
+          const loc = (typeof f.x === 'number') ? ' @ pin ' + (i+1) : '';
+          lines.push('- (' + f.kind + loc + ') ' + (f.text || '(no note)'));
+        });
+      }
+      if (html) {
+        lines.push('', '### Captured HTML', '\\u0060\\u0060\\u0060html', html, '\\u0060\\u0060\\u0060');
+      }
+      await navigator.clipboard.writeText(lines.join('\\n'));
+      copyCtxBtn.querySelector('span').textContent = 'Copied!';
+      setTimeout(() => { copyCtxBtn.querySelector('span').textContent = 'Copy step context'; }, 1500);
     });
   }
 }
@@ -1061,9 +1363,29 @@ const server = http.createServer(async (req, res) => {
     req.on('data', d => body += d)
     req.on('end', () => {
       try {
-        const { storyPath, stepIdx, kind, text } = JSON.parse(body) as Omit<Feedback, 'at'>
+        const { storyPath, stepIdx, kind, text, x, y } = JSON.parse(body) as Omit<Feedback, 'at'>
         const fb = loadFeedback(feedback[1])
-        fb.push({ storyPath, stepIdx, kind, text: text || '', at: Date.now() })
+        fb.push({
+          storyPath, stepIdx, kind, text: text || '', at: Date.now(),
+          x: typeof x === 'number' ? x : null,
+          y: typeof y === 'number' ? y : null,
+        })
+        saveFeedback(feedback[1], fb)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: true }))
+      } catch (e) { res.writeHead(400); res.end(JSON.stringify({ error: String(e) })) }
+    })
+    return
+  }
+  // PATCH: edit text or move pin on an existing comment (matched by `at`)
+  if (feedback && req.method === 'PATCH') {
+    let body = ''
+    req.on('data', d => body += d)
+    req.on('end', () => {
+      try {
+        const at = parseInt(url.searchParams.get('at') ?? '', 10)
+        const patch = JSON.parse(body) as Partial<Pick<Feedback, 'text' | 'kind' | 'x' | 'y'>>
+        const fb = loadFeedback(feedback[1]).map(f => f.at === at ? { ...f, ...patch } : f)
         saveFeedback(feedback[1], fb)
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ ok: true }))
@@ -1103,14 +1425,17 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=300' })
     fs.createReadStream(full).pipe(res); return
   }
-  // Frozen story step image
+  // Frozen story step asset (image OR captured HTML)
   const storyShot = p.match(/^\/runs\/([^/]+)\/story\/([^/]+)\/(.+)$/)
   if (storyShot && req.method === 'GET') {
     const [, id, storyPath, rel] = storyShot
     const root = path.join(RUNS_DIR, id, 'story', decodeURIComponent(storyPath))
     const full = path.join(root, decodeURIComponent(rel))
     if (!full.startsWith(root) || !fs.existsSync(full)) { res.writeHead(404); res.end('not found'); return }
-    res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=300' })
+    const ct = full.endsWith('.html') ? 'text/html; charset=utf-8'
+             : full.endsWith('.json') ? 'application/json'
+             : 'image/png'
+    res.writeHead(200, { 'Content-Type': ct, 'Cache-Control': 'public, max-age=300' })
     fs.createReadStream(full).pipe(res); return
   }
 

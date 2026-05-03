@@ -35,6 +35,7 @@ export interface StoryStep {
   title: string
   description: string
   file: string
+  htmlFile?: string
   at: number
   durationMs: number
 }
@@ -103,13 +104,22 @@ export async function step(
   await page.waitForTimeout(150)
 
   const idx = story.steps.length
-  const file = `${String(idx).padStart(2, '0')}-${slug(title)}.png`
+  const base = `${String(idx).padStart(2, '0')}-${slug(title)}`
+  const file = `${base}.png`
+  const htmlFile = `${base}.html`
   await page.screenshot({ path: path.join(story.dir, file), fullPage: false })
+  // Also capture the live HTML so the dashboard can offer an Image/HTML
+  // toggle and a "Copy step context" hand-off to a coding agent.
+  try {
+    const html = await page.content()
+    fs.writeFileSync(path.join(story.dir, htmlFile), html)
+  } catch { /* non-fatal — page may have navigated */ }
   story.steps.push({
     idx,
     title,
     description,
     file,
+    htmlFile,
     at: Date.now(),
     durationMs: Date.now() - t0,
   })
