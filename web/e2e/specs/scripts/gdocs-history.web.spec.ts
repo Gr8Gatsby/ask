@@ -1,14 +1,10 @@
 /**
- * Manual-test walkthrough for `gdocs-history` on the web surface.
- * Plan: manual-script-sweep · Case: gdocs-history-web
+ * Web case · gdocs-history
+ * Steps are declared in web/review-plans/manual-script-sweep.json.
  */
 import { test } from '@playwright/test'
-import { runWebWalkthrough } from './_walkthrough'
+import { runWebCase } from './_walkthrough'
 
 test('gdocs-history-web', async ({ page }, testInfo) => {
-  await runWebWalkthrough(page, testInfo, {
-    caseId: 'gdocs-history-web',
-    scriptId: 'gdocs-history',
-    scriptName: 'Google Docs History',
-  })
+  await runWebCase(page, testInfo, 'gdocs-history-web')
 })

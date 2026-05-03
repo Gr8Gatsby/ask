@@ -1,71 +1,67 @@
 /**
- * Shared 8-step walkthrough for a script's web surface. Each per-script spec
- * imports this and supplies the script id + case id. Customisations (e.g.
- * additional script-specific steps) are appended by the caller via `extra`.
+ * Plan-driven walkthrough executor.
  *
- * The eight common steps follow §7.1 of docs/specs/manual-script-test-plan.md.
+ * The plan JSON at web/review-plans/manual-script-sweep.json is the single
+ * source of truth for per-case steps (titles, descriptions, and execution
+ * directives like `nav` or `waitMs`). A spec passes its caseId; the helper
+ * looks the case up, opens a story, and walks the declared steps in order.
+ *
+ * This means the dashboard's case-detail page and the slideshow show the
+ * same step list — declared steps, executed steps, and pinned-comment
+ * targets all agree.
  */
 import type { Page, TestInfo } from '@playwright/test'
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
 import { newStory, step } from '../../helpers/story'
 
-export interface WalkthroughOpts {
-  caseId: string
-  scriptId: string
-  scriptName: string
-  /** Optional script-specific steps to run between "Populated state" and "Back-out". */
-  extra?: (page: Page, story: ReturnType<typeof newStory>) => Promise<void>
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const PLAN_PATH = path.resolve(__dirname, '..', '..', '..', 'review-plans', 'manual-script-sweep.json')
+
+interface PlanStep {
+  id: string
+  title: string
+  description: string
+  nav?: string
+  waitMs?: number
+}
+interface PlanCase {
+  id: string
+  surface: 'web' | 'askmac'
+  title: string
+  description?: string
+  steps?: PlanStep[]
+}
+interface Plan { cases: PlanCase[] }
+
+function loadPlan(): Plan {
+  return JSON.parse(fs.readFileSync(PLAN_PATH, 'utf-8')) as Plan
 }
 
-export async function runWebWalkthrough(
-  page: Page,
-  testInfo: TestInfo,
-  opts: WalkthroughOpts,
-): Promise<void> {
+export function getCase(caseId: string): PlanCase {
+  const plan = loadPlan()
+  const c = plan.cases.find(x => x.id === caseId)
+  if (!c) throw new Error(`case "${caseId}" not declared in plan ${PLAN_PATH}`)
+  return c
+}
+
+/** Walk a web case's declared steps. Each step is one screenshot + HTML. */
+export async function runWebCase(page: Page, testInfo: TestInfo, caseId: string): Promise<void> {
+  const c = getCase(caseId)
+  if (c.surface !== 'web') throw new Error(`case "${caseId}" surface=${c.surface}, expected web`)
+  if (!c.steps?.length) throw new Error(`case "${caseId}" has no declared steps`)
+
   const story = newStory(testInfo, {
-    caseId: opts.caseId,
-    title: `${opts.scriptName} · Web walkthrough`,
-    description: `Cold open through back-out for the ${opts.scriptId} script on the iPhone webview.`,
+    caseId: c.id,
+    title: c.title,
+    description: c.description ?? '',
   })
 
-  await step(story, page, {
-    title: 'Cold open',
-    description: 'Open the home feed at /home with no other interaction; expect the script list to render.',
-  }, '/home')
-
-  await step(story, page, {
-    title: 'Tile / feed entry',
-    description: `The ${opts.scriptId} tile or feed entry renders with its icon and name in the home feed.`,
-  }, async () => { await page.waitForTimeout(300) })
-
-  await step(story, page, {
-    title: 'Tap into detail',
-    description: `Navigate to /script/${opts.scriptId} — the script's primary surface.`,
-  }, `/script/${opts.scriptId}`)
-
-  await step(story, page, {
-    title: 'Empty state',
-    description: 'Detail screen on first paint — what the user sees before data arrives.',
-  }, async () => { await page.waitForTimeout(300) })
-
-  await step(story, page, {
-    title: 'Populated state',
-    description: 'Same screen after a brief settle — captures whatever blocks the script publishes.',
-  }, async () => { await page.waitForTimeout(900) })
-
-  if (opts.extra) await opts.extra(page, story)
-
-  await step(story, page, {
-    title: 'Primary action',
-    description: `Visit /tasks to confirm any tasks emitted by ${opts.scriptId} are in the feed.`,
-  }, '/tasks')
-
-  await step(story, page, {
-    title: 'Error / refused state',
-    description: `Visit /settings to confirm ${opts.scriptId} permissions and toggles render correctly.`,
-  }, '/settings')
-
-  await step(story, page, {
-    title: 'Back-out',
-    description: 'Return to the home feed; verify the tile state survives navigation.',
-  }, '/home')
+  for (const s of c.steps) {
+    await step(story, page, { title: s.title, description: s.description }, async () => {
+      if (s.nav) await page.goto(s.nav)
+      if (typeof s.waitMs === 'number') await page.waitForTimeout(s.waitMs)
+    })
+  }
 }

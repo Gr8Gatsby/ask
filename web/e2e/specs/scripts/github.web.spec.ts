@@ -1,14 +1,10 @@
 /**
- * Manual-test walkthrough for `github` on the web surface.
- * Plan: manual-script-sweep · Case: github-web
+ * Web case · github
+ * Steps are declared in web/review-plans/manual-script-sweep.json.
  */
 import { test } from '@playwright/test'
-import { runWebWalkthrough } from './_walkthrough'
+import { runWebCase } from './_walkthrough'
 
 test('github-web', async ({ page }, testInfo) => {
-  await runWebWalkthrough(page, testInfo, {
-    caseId: 'github-web',
-    scriptId: 'github',
-    scriptName: 'Git Repos',
-  })
+  await runWebCase(page, testInfo, 'github-web')
 })

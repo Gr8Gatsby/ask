@@ -326,3 +326,4 @@ A **plan is current** when its latest run is clean and not flagged as drifted
 | 2026-05-03 | Decided: launch with one plan but support many; cases can be subset-run; AskMac driven by computer-use automation |
 | 2026-05-03 | Phase 1 shipped: plan model, /api/plans*, plans index, plan detail, run rollup, case slideshow scoping, hello-world web case wired through new runner |
 | 2026-05-03 | Phase 2 shipped: multi-spec runner; all 10 web cases implemented (hello-world, brew-monitor, github, ollama, gdocs-history, web-traffic, task-demo, terminal-snapshot, claude-3, codex-3) via a shared 8-step walkthrough helper |
+| 2026-05-03 | Phase 2.5 shipped: plan JSON owns each case's description + declared steps (titles, descriptions, nav/wait directives); case detail view at #/plan/:id/case/:caseId; case rows clickable; specs are now thin wrappers that read steps from the plan |

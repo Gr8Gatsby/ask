@@ -78,15 +78,25 @@ interface Run {
 }
 
 // ---------- plan model (new-style, additive) ------------------------------
+interface PlanStep {
+  id: string                // unique within the case
+  title: string
+  description: string
+  // Execution directives (web cases). Pending askmac cases omit these.
+  nav?: string              // page.goto(<path>)
+  waitMs?: number           // page.waitForTimeout(ms)
+}
 interface PlanCase {
   id: string
   scriptId: string
   surface: 'web' | 'askmac'
   title: string
+  description?: string      // human-readable case description
   spec?: string             // Playwright spec relative to web/e2e (web cases)
   driver?: string           // e.g. "computer-use" (askmac cases)
   deps: string[]
   status: 'implemented' | 'pending' | 'skipped'
+  steps?: PlanStep[]        // declared steps — source of truth for the spec
 }
 interface Plan {
   id: string
@@ -1536,9 +1546,10 @@ async function renderPlanDetail(planId) {
       ? '<span class="decision-' + last.decision + '">' + last.decision + '</span>'
       : '<span class="muted">—</span>';
     const surfaceTag = '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">' + c.surface + '</span>';
-    return '<tr><td><strong>' + escape(c.title) + '</strong> ' + surfaceTag + '<br><span class="muted" style="font-size:11px">' + escape(c.id) + (c.deps.length ? ' · deps: ' + c.deps.map(escape).join(', ') : '') + '</span></td>' +
+    const declaredSteps = c.steps && c.steps.length ? c.steps.length + ' planned' : '—';
+    return '<tr class="clickable case-row" data-caseid="' + escape(c.id) + '"><td><strong>' + escape(c.title) + '</strong> ' + surfaceTag + '<br><span class="muted" style="font-size:11px">' + escape(c.id) + (c.deps.length ? ' · deps: ' + c.deps.map(escape).join(', ') : '') + '</span></td>' +
       '<td>' + statusBadge + '</td>' +
-      '<td>' + (last && last.stepCount ? last.stepCount + ' steps' : '<span class="muted">—</span>') + '</td>' +
+      '<td>' + (last && last.stepCount ? last.stepCount + ' steps' : '<span class="muted">' + declaredSteps + '</span>') + '</td>' +
       '<td>' + fbStr + '</td>' +
       '<td>' + decision + '</td>' +
     '</tr>';
@@ -1576,7 +1587,10 @@ async function renderPlanDetail(planId) {
     if (r.id) location.hash = '#/plan/' + planId + '/run/' + r.id;
   });
   view.querySelectorAll('tr.clickable').forEach(tr => {
-    tr.addEventListener('click', () => location.hash = '#/plan/' + planId + '/run/' + tr.dataset.id);
+    tr.addEventListener('click', () => {
+      if (tr.dataset.caseid) location.hash = '#/plan/' + planId + '/case/' + tr.dataset.caseid;
+      else if (tr.dataset.id) location.hash = '#/plan/' + planId + '/run/' + tr.dataset.id;
+    });
   });
 }
 
@@ -1636,12 +1650,105 @@ async function renderRunRollup(planId, runId) {
     '<pre class="output" id="run-output">' + escape(run.output ?? '') + '</pre></details>';
 }
 
+async function renderCaseDetail(planId, caseId) {
+  const r = await fetch('/api/plans/' + planId + '/cases/' + caseId).then(r => r.json());
+  if (r.error) { view.innerHTML = '<div class="empty">Case not found.</div>'; return; }
+  const c = r.case;
+  const surfaceTag = '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">' + escape(c.surface) + '</span>';
+  const statusBadge = c.status === 'implemented'
+    ? '<span class="badge passed">implemented</span>'
+    : c.status === 'pending'
+      ? '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">pending</span>'
+      : '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">' + escape(c.status) + '</span>';
+  const depsLine = c.deps && c.deps.length
+    ? '<span class="muted">deps:</span> ' + c.deps.map(d => '<code>' + escape(d) + '</code>').join(' · ')
+    : '<span class="muted">no dependencies</span>';
+  const driverLine = c.spec
+    ? '<span class="muted">spec:</span> <code>' + escape(c.spec) + '</code>'
+    : c.driver
+      ? '<span class="muted">driver:</span> <code>' + escape(c.driver) + '</code>'
+      : '';
+
+  const stepsHtml = (c.steps || []).map((s, i) => {
+    const directive = s.nav ? '<code>nav → ' + escape(s.nav) + '</code>'
+      : s.waitMs ? '<code>wait ' + s.waitMs + 'ms</code>'
+      : '<span class="muted">—</span>';
+    return '<tr>' +
+      '<td style="width:50px"><strong>' + (i+1) + '</strong></td>' +
+      '<td><strong>' + escape(s.title) + '</strong><br>' +
+        '<span class="muted" style="font-size:11px">' + escape(s.id) + '</span></td>' +
+      '<td>' + escape(s.description) + '</td>' +
+      '<td style="width:160px">' + directive + '</td>' +
+    '</tr>';
+  }).join('');
+
+  const historyRows = (r.history || []).length
+    ? r.history.map(h => {
+        const status = h.status === 'passed' ? '<span class="badge passed">passed</span>'
+          : h.status === 'failed' ? '<span class="badge failed">failed</span>'
+          : '<span class="badge running">' + escape(h.status) + '</span>';
+        const fb = h.feedback.length ? h.feedback.map(f => f.count + ' ' + f.kind).join(' · ') : '<span class="muted">—</span>';
+        const decision = h.decision ? '<span class="decision-' + h.decision + '">' + h.decision + '</span>' : '<span class="muted">—</span>';
+        return '<tr class="clickable" data-runid="' + escape(h.runId) + '">' +
+          '<td>' + ago(h.startedAt) + '<br><span class="muted">' + escape(h.runId) + '</span></td>' +
+          '<td>' + status + '</td>' +
+          '<td>' + h.stepCount + ' steps</td>' +
+          '<td>' + fb + '</td>' +
+          '<td>' + decision + '</td>' +
+          '<td><a href="#/plan/' + escape(planId) + '/run/' + escape(h.runId) + '/' + escape(c.id) + '">open →</a></td>' +
+        '</tr>';
+      }).join('')
+    : '<tr><td colspan="6" class="muted" style="padding:18px;text-align:center">No runs of this case yet.</td></tr>';
+
+  const isPending = c.status === 'pending';
+  const runScopedBtn = !isPending
+    ? '<button class="primary" id="run-this-case">Run only this case</button>'
+    : '<span class="muted" style="font-size:12px">This case is pending — driver is <code>' + escape(c.driver || 'not set') + '</code> (Phase 3).</span>';
+
+  view.innerHTML =
+    '<div class="run-hero">' +
+      '<a href="#/plan/' + escape(planId) + '" class="muted" style="font-size:12px">← ' + escape(r.plan.title) + '</a>' +
+      '<h1>' + escape(c.title) + '</h1>' + surfaceTag + statusBadge +
+    '</div>' +
+    (c.description ? '<p class="muted" style="margin:0 0 8px;line-height:1.55">' + escape(c.description) + '</p>' : '') +
+    '<p class="muted" style="margin:0 0 14px;font-size:12px">' + depsLine + (driverLine ? ' · ' + driverLine : '') + '</p>' +
+    '<div class="panel"><div class="row" style="justify-content:space-between"><h3 style="margin:0">Declared steps · ' + (c.steps ? c.steps.length : 0) + '</h3>' + runScopedBtn + '</div>' +
+    (c.steps && c.steps.length
+      ? '<table style="margin-top:10px"><thead><tr><th>#</th><th>Step</th><th>Description</th><th>Directive</th></tr></thead>' +
+        '<tbody>' + stepsHtml + '</tbody></table>'
+      : '<p class="muted" style="margin:8px 0 0">No steps declared yet.</p>') +
+    '</div>' +
+    '<div class="panel"><h3 style="margin:0 0 8px">Run history for this case</h3>' +
+    '<table><thead><tr><th>When</th><th>Status</th><th>Steps</th><th>Pins</th><th>Decision</th><th></th></tr></thead>' +
+    '<tbody>' + historyRows + '</tbody></table></div>';
+
+  const runBtn = document.getElementById('run-this-case');
+  if (runBtn) {
+    runBtn.addEventListener('click', async () => {
+      const r = await fetch('/api/plans/' + planId + '/runs', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: { caseIds: [c.id] } }),
+      }).then(r => r.json());
+      if (r.id) location.hash = '#/plan/' + planId + '/run/' + r.id;
+      else if (r.error) alert(r.error);
+    });
+  }
+  view.querySelectorAll('tr.clickable').forEach(tr => {
+    tr.addEventListener('click', () => {
+      location.hash = '#/plan/' + planId + '/run/' + tr.dataset.runid + '/' + c.id;
+    });
+  });
+}
+
 // ---------- routing -------------------------------------------------------
 function route() {
   const h = location.hash;
   // #/plan/:id/run/:runId/:caseId
   let m = h.match(/^#\\/plan\\/([^/]+)\\/run\\/([^/]+)\\/([^/]+)$/);
   if (m) { renderDetail(m[2], { caseId: m[3], planId: m[1] }); return; }
+  // #/plan/:id/case/:caseId — case detail view (declared steps, history)
+  m = h.match(/^#\\/plan\\/([^/]+)\\/case\\/([^/]+)$/);
+  if (m) { renderCaseDetail(m[1], m[2]); return; }
   // #/plan/:id/run/:runId
   m = h.match(/^#\\/plan\\/([^/]+)\\/run\\/([^/]+)$/);
   if (m) { renderRunRollup(m[1], m[2]); return; }
@@ -1892,6 +1999,31 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(202, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ id: run.id }))
     })
+    return
+  }
+  // Plan-level case detail — used by the case detail route to show the
+  // declared case + its last result across all runs of this plan.
+  const planCaseDetail = p.match(/^\/api\/plans\/([^/]+)\/cases\/([^/]+)$/)
+  if (planCaseDetail && req.method === 'GET') {
+    const plan = getPlan(planCaseDetail[1])
+    if (!plan) { res.writeHead(404); res.end(JSON.stringify({ error: 'plan not found' })); return }
+    const c = plan.cases.find(c => c.id === planCaseDetail[2])
+    if (!c) { res.writeHead(404); res.end(JSON.stringify({ error: 'case not found' })); return }
+    // Walk runs of this plan (newest first) and gather: last result + history.
+    const runs = loadRuns().filter(r => r.planId === plan.id)
+    const history: Array<{ runId: string; startedAt: number; status: CaseResult['status']; stepCount: number; feedback: CaseResult['feedback']; decision: CaseResult['decision'] }> = []
+    for (const r of runs) {
+      const results = caseResultsForRun(r)
+      const cr = results.find(x => x.caseId === c.id)
+      if (!cr) continue
+      if (cr.status === 'pending' || cr.status === 'skipped') continue
+      history.push({
+        runId: r.id, startedAt: r.startedAt, status: cr.status,
+        stepCount: cr.stepCount, feedback: cr.feedback, decision: cr.decision,
+      })
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ plan: { id: plan.id, title: plan.title, version: plan.version }, case: c, history }))
     return
   }
   const caseDetail = p.match(/^\/api\/runs\/([^/]+)\/cases\/([^/]+)$/)

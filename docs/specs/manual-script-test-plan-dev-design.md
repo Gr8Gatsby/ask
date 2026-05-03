@@ -212,3 +212,4 @@ Out of scope until later phases:
 | 2026-05-03 | Initial dev design for Phase 1 foundation |
 | 2026-05-03 | Phase 1 implementation landed: plan + case + run-meta types, /api/plans*, plans index / plan detail / run rollup / case slideshow scoping, story recorder caseId support, hello-world web spec (one implemented case) |
 | 2026-05-03 | Phase 2: startRun accepts specs[]; shared `_walkthrough.ts` helper; 9 new per-script web specs land (brew-monitor, github, ollama, gdocs-history, web-traffic, task-demo, terminal-snapshot, claude-3, codex-3); plan now reports 10/20 implemented |
+| 2026-05-03 | Phase 2.5: PlanCase gains `description` and `steps[]`; PlanStep with id/title/description/nav/waitMs; new `/api/plans/:id/cases/:caseId` route returning declared case + run history; `#/plan/:id/case/:caseId` UI; plan-detail case rows now clickable; `_walkthrough.ts` reads steps from plan JSON so specs shrink to 4 lines |

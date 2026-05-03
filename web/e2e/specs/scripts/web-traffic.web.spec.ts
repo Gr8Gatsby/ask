@@ -1,14 +1,10 @@
 /**
- * Manual-test walkthrough for `web-traffic` on the web surface.
- * Plan: manual-script-sweep · Case: web-traffic-web
+ * Web case · web-traffic
+ * Steps are declared in web/review-plans/manual-script-sweep.json.
  */
 import { test } from '@playwright/test'
-import { runWebWalkthrough } from './_walkthrough'
+import { runWebCase } from './_walkthrough'
 
 test('web-traffic-web', async ({ page }, testInfo) => {
-  await runWebWalkthrough(page, testInfo, {
-    caseId: 'web-traffic-web',
-    scriptId: 'web-traffic',
-    scriptName: 'Web Traffic',
-  })
+  await runWebCase(page, testInfo, 'web-traffic-web')
 })

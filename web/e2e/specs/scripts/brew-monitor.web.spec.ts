@@ -1,14 +1,10 @@
 /**
- * Manual-test walkthrough for `brew-monitor` on the web surface.
- * Plan: manual-script-sweep · Case: brew-monitor-web
+ * Web case · brew-monitor
+ * Steps are declared in web/review-plans/manual-script-sweep.json.
  */
 import { test } from '@playwright/test'
-import { runWebWalkthrough } from './_walkthrough'
+import { runWebCase } from './_walkthrough'
 
 test('brew-monitor-web', async ({ page }, testInfo) => {
-  await runWebWalkthrough(page, testInfo, {
-    caseId: 'brew-monitor-web',
-    scriptId: 'brew-monitor',
-    scriptName: 'Homebrew',
-  })
+  await runWebCase(page, testInfo, 'brew-monitor-web')
 })
