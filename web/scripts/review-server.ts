@@ -1743,24 +1743,60 @@ async function renderRunRollup(planId, runId) {
   const decisionBadge = run.decisionRollup
     ? ' · <span class="decision-' + run.decisionRollup + '">rollup: ' + run.decisionRollup + '</span>' : '';
 
-  const caseRows = (run.caseResults || []).map(c => {
-    const status = c.status === 'pending' ? '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">pending</span>'
-      : c.status === 'skipped' ? '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">skipped</span>'
-      : c.status === 'passed' ? '<span class="badge passed">passed</span>'
-      : c.status === 'failed' ? '<span class="badge failed">failed</span>'
-      : '<span class="badge running">running</span>';
-    const surfaceTag = '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">' + c.surface + '</span>';
-    const fbStr = c.feedback.length ? c.feedback.map(f => f.count + ' ' + f.kind).join(' · ') : '<span class="muted">—</span>';
-    const drillIn = c.storyPath
-      ? '<a href="#/plan/' + escape(planId) + '/run/' + escape(runId) + '/' + escape(c.caseId) + '">open →</a>'
-      : '<span class="muted">no run</span>';
-    return '<tr><td><strong>' + escape(c.title) + '</strong> ' + surfaceTag + '<br><span class="muted" style="font-size:11px">' + escape(c.caseId) + '</span></td>' +
-      '<td>' + status + '</td>' +
-      '<td>' + (c.stepCount || '<span class="muted">—</span>') + '</td>' +
-      '<td>' + fbStr + '</td>' +
-      '<td>' + (c.decision ? '<span class="decision-' + c.decision + '">' + c.decision + '</span>' : '<span class="muted">—</span>') + '</td>' +
-      '<td>' + drillIn + '</td>' +
-    '</tr>';
+  // Build a story map so each case can show real screenshots when available.
+  const storyByPath = new Map();
+  for (const s of (run.stories || [])) storyByPath.set(s.path, s);
+
+  // Find the plan-declared case for richer info (description, declared steps).
+  const planCases = new Map((plan.cases || []).map(c => [c.id, c]));
+
+  const caseCards = (run.caseResults || []).map(c => {
+    const planCase = planCases.get(c.caseId);
+    const story = c.storyPath ? storyByPath.get(c.storyPath) : null;
+    const surfaceTag = '<span class="surface-pill">' + escape(c.surface) + '</span>';
+    const statusBadge = c.status === 'passed'   ? '<span class="badge passed">passed</span>'
+      : c.status === 'failed'                   ? '<span class="badge failed">failed</span>'
+      : c.status === 'running'                  ? '<span class="badge running">running</span>'
+      : c.status === 'skipped'                  ? '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">skipped</span>'
+      :                                           '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">' + escape(c.status) + '</span>';
+    const fbLine = c.feedback.length ? c.feedback.map(f => f.count + ' ' + f.kind).join(' · ') : 'no pins';
+    const decisionTag = c.decision ? ' · <span class="decision-' + c.decision + '">' + escape(c.decision) + '</span>' : '';
+
+    // Build the strip from declared steps; swap in real screenshots when present.
+    const declared = planCase?.steps || (story?.steps || []).map((s, i) => ({ id: 'step-' + i, title: s.title, description: '' }));
+    const stripCells = declared.map((ds, i) => {
+      const captured = story?.steps?.[i];
+      if (captured?.file) {
+        const url = '/runs/' + escape(run.id) + '/story/' + encodeURI(story.path) + '/' + encodeURI(captured.file);
+        return '<div class="thumb" data-step="' + i + '">' +
+          '<div class="img"><span class="num">' + (i+1) + '</span><img loading="lazy" src="' + url + '"></div>' +
+          '<div class="cap">' + escape(ds.title) + '</div>' +
+        '</div>';
+      }
+      const dir = ds.nav ? 'nav → ' + ds.nav : (typeof ds.waitMs === 'number' ? 'wait ' + ds.waitMs + 'ms' : '');
+      return '<div class="thumb placeholder" data-step="' + i + '">' +
+        '<div class="img"><div class="ph-num">' + (i+1) + '</div>' +
+          (dir ? '<div class="ph-dir">' + escape(dir) + '</div>' : '') + '</div>' +
+        '<div class="cap">' + escape(ds.title) + '</div>' +
+      '</div>';
+    }).join('');
+    const stripHtml = declared.length ? '<div class="strip">' + stripCells + '</div>' : '';
+
+    const actions = c.storyPath
+      ? '<button class="primary" data-act="open-slides" data-caseid="' + escape(c.caseId) + '">Open story →</button>'
+      : (planCase?.status === 'pending'
+          ? '<span class="muted" style="font-size:12px">pending — no run captured</span>'
+          : '<span class="muted" style="font-size:12px">no story (test failed before any step)</span>');
+
+    return '<div class="card" data-caseid="' + escape(c.caseId) + '" data-runid="' + escape(run.id) + '" data-storypath="' + escape(c.storyPath || '') + '">' +
+      '<div class="head"><h2>' + escape(c.title) + '</h2>' + surfaceTag + statusBadge + '</div>' +
+      (planCase?.description ? '<p class="desc">' + escape(planCase.description) + '</p>' : '') +
+      '<div class="meta">' +
+        '<span>' + (c.stepCount || declared.length) + ' steps · <strong>' + fbLine + '</strong>' + decisionTag + '</span>' +
+      '</div>' +
+      stripHtml +
+      '<div class="actions">' + actions + '</div>' +
+    '</div>';
   }).join('');
 
   const scriptsLine = tested?.scripts?.length
@@ -1774,11 +1810,43 @@ async function renderRunRollup(planId, runId) {
       '<h1>Run ' + escape(run.id) + '</h1>' + exitBadge + '<span>' + decisionBadge + '</span></div>' +
     '<p class="muted" style="margin:0 0 6px;font-size:12px">' + headerBits.join(' · ') + '</p>' +
     scriptsLine +
-    '<div class="panel"><h3 style="margin:0 0 8px">Cases in this run</h3>' +
-    '<table><thead><tr><th>Case</th><th>Status</th><th>Steps</th><th>Pins</th><th>Decision</th><th></th></tr></thead>' +
-    '<tbody>' + caseRows + '</tbody></table></div>' +
-    '<details' + (run.exitCode === 0 ? '' : ' open') + ' style="margin-top:16px"><summary style="cursor:pointer" class="muted">Output</summary>' +
+    '<div class="gallery">' + caseCards + '</div>' +
+    '<details' + (run.exitCode === 0 ? '' : ' open') + ' style="margin-top:16px"><summary style="cursor:pointer" class="muted">Run output</summary>' +
     '<pre class="output" id="run-output">' + escape(run.output ?? '') + '</pre></details>';
+
+  // Card click → open the case's slideshow if a story exists, else go to case detail.
+  view.querySelectorAll('.gallery .card').forEach(card => {
+    card.addEventListener('click', (ev) => {
+      if (ev.target.closest('button')) return;
+      if (ev.target.closest('.thumb')) return;
+      const cid = card.dataset.caseid;
+      const sp = card.dataset.storypath;
+      if (sp) location.hash = '#/plan/' + planId + '/run/' + runId + '/' + cid;
+      else    location.hash = '#/plan/' + planId + '/case/' + cid;
+    });
+  });
+  // Thumb click → jump to that step in the slideshow.
+  view.querySelectorAll('.gallery .thumb').forEach(thumb => {
+    thumb.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const card = thumb.closest('.card');
+      const cid = card?.dataset.caseid;
+      const sp = card?.dataset.storypath;
+      const stepIdx = parseInt(thumb.dataset.step, 10);
+      if (sp && cid && !thumb.classList.contains('placeholder')) {
+        try { sessionStorage.setItem('slide:' + runId, String(stepIdx)); } catch { /* */ }
+        location.hash = '#/plan/' + planId + '/run/' + runId + '/' + cid;
+      }
+    });
+  });
+  // "Open story →" button
+  view.querySelectorAll('button[data-act="open-slides"]').forEach(b => {
+    b.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const cid = b.dataset.caseid;
+      location.hash = '#/plan/' + planId + '/run/' + runId + '/' + cid;
+    });
+  });
 }
 
 async function renderCaseDetail(planId, caseId) {
@@ -1924,13 +1992,19 @@ es.addEventListener('done', async (e) => {
     try {
       const r = await fetch('/api/runs/' + finishedId).then(r => r.json());
       if (r && r.planId && Array.isArray(r.caseResults)) {
-        const firstCase = r.caseResults.find(c => c.storyPath && (c.status === 'passed' || c.status === 'failed'));
-        if (firstCase) {
-          // If the user is on a slideshow already, don't yank them.
-          if (!location.hash.match(/^#\\/plan\\/[^/]+\\/run\\/[^/]+\\/[^/]+$/)) {
-            location.hash = '#/plan/' + r.planId + '/run/' + finishedId + '/' + firstCase.caseId;
-            return;
+        const finished = r.caseResults.filter(c => c.storyPath && (c.status === 'passed' || c.status === 'failed'));
+        // Don't yank them out of a slideshow they navigated to mid-run.
+        const onSlideshow = !!location.hash.match(/^#\\/plan\\/[^/]+\\/run\\/[^/]+\\/[^/]+$/);
+        if (!onSlideshow && finished.length > 0) {
+          // Multi-case runs → land on the rollup (gallery of cases) so the
+          // user can pick which one to dive into. Single-case runs → drop
+          // straight into that case's slideshow.
+          if (finished.length === 1) {
+            location.hash = '#/plan/' + r.planId + '/run/' + finishedId + '/' + finished[0].caseId;
+          } else {
+            location.hash = '#/plan/' + r.planId + '/run/' + finishedId;
           }
+          return;
         }
       }
     } catch { /* fall through to route() */ }
