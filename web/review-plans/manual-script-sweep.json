@@ -1,0 +1,200 @@
+{
+  "id": "manual-script-sweep",
+  "title": "Manual script sweep",
+  "version": "1.0.0",
+  "description": "Per-script regression: walk every Ask script through its golden path and edge cases on the iPhone webview, then on the AskMac native app. Each case isolates one script (disables others, enables only declared deps). Issues are pinned with kind + (x, y) location and the captured HTML for hand-off to a coding agent.",
+  "cases": [
+    {
+      "id": "hello-world-web",
+      "scriptId": "hello-world",
+      "surface": "web",
+      "title": "Hello World · Web",
+      "spec": "specs/scripts/hello-world.web.spec.ts",
+      "deps": [],
+      "status": "implemented"
+    },
+    {
+      "id": "hello-world-mac",
+      "scriptId": "hello-world",
+      "surface": "askmac",
+      "title": "Hello World · AskMac",
+      "driver": "computer-use",
+      "deps": [],
+      "status": "pending"
+    },
+    {
+      "id": "brew-monitor-web",
+      "scriptId": "brew-monitor",
+      "surface": "web",
+      "title": "Homebrew · Web",
+      "spec": "specs/scripts/brew-monitor.web.spec.ts",
+      "deps": [],
+      "status": "pending"
+    },
+    {
+      "id": "brew-monitor-mac",
+      "scriptId": "brew-monitor",
+      "surface": "askmac",
+      "title": "Homebrew · AskMac",
+      "driver": "computer-use",
+      "deps": [],
+      "status": "pending"
+    },
+    {
+      "id": "github-web",
+      "scriptId": "github",
+      "surface": "web",
+      "title": "Git Repos · Web",
+      "spec": "specs/scripts/github.web.spec.ts",
+      "deps": [],
+      "status": "pending"
+    },
+    {
+      "id": "github-mac",
+      "scriptId": "github",
+      "surface": "askmac",
+      "title": "Git Repos · AskMac",
+      "driver": "computer-use",
+      "deps": [],
+      "status": "pending"
+    },
+    {
+      "id": "ollama-web",
+      "scriptId": "ollama",
+      "surface": "web",
+      "title": "Ollama · Web",
+      "spec": "specs/scripts/ollama.web.spec.ts",
+      "deps": [],
+      "status": "pending"
+    },
+    {
+      "id": "ollama-mac",
+      "scriptId": "ollama",
+      "surface": "askmac",
+      "title": "Ollama · AskMac",
+      "driver": "computer-use",
+      "deps": [],
+      "status": "pending"
+    },
+    {
+      "id": "gdocs-history-web",
+      "scriptId": "gdocs-history",
+      "surface": "web",
+      "title": "Google Docs History · Web",
+      "spec": "specs/scripts/gdocs-history.web.spec.ts",
+      "deps": [],
+      "status": "pending"
+    },
+    {
+      "id": "gdocs-history-mac",
+      "scriptId": "gdocs-history",
+      "surface": "askmac",
+      "title": "Google Docs History · AskMac",
+      "driver": "computer-use",
+      "deps": [],
+      "status": "pending"
+    },
+    {
+      "id": "web-traffic-web",
+      "scriptId": "web-traffic",
+      "surface": "web",
+      "title": "Web Traffic · Web",
+      "spec": "specs/scripts/web-traffic.web.spec.ts",
+      "deps": [],
+      "status": "pending"
+    },
+    {
+      "id": "web-traffic-mac",
+      "scriptId": "web-traffic",
+      "surface": "askmac",
+      "title": "Web Traffic · AskMac",
+      "driver": "computer-use",
+      "deps": [],
+      "status": "pending"
+    },
+    {
+      "id": "task-demo-web",
+      "scriptId": "task-demo",
+      "surface": "web",
+      "title": "Task Demo · Web",
+      "spec": "specs/scripts/task-demo.web.spec.ts",
+      "deps": [],
+      "status": "pending"
+    },
+    {
+      "id": "task-demo-mac",
+      "scriptId": "task-demo",
+      "surface": "askmac",
+      "title": "Task Demo · AskMac",
+      "driver": "computer-use",
+      "deps": [],
+      "status": "pending"
+    },
+    {
+      "id": "terminal-snapshot-web",
+      "scriptId": "terminal-snapshot",
+      "surface": "web",
+      "title": "Terminal Snapshot · Web",
+      "spec": "specs/scripts/terminal-snapshot.web.spec.ts",
+      "deps": [
+        "terminal-manager"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "terminal-snapshot-mac",
+      "scriptId": "terminal-snapshot",
+      "surface": "askmac",
+      "title": "Terminal Snapshot · AskMac",
+      "driver": "computer-use",
+      "deps": [
+        "terminal-manager"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "claude-3-web",
+      "scriptId": "claude-3",
+      "surface": "web",
+      "title": "Claude 3 · Web",
+      "spec": "specs/scripts/claude-3.web.spec.ts",
+      "deps": [
+        "terminal-manager"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "claude-3-mac",
+      "scriptId": "claude-3",
+      "surface": "askmac",
+      "title": "Claude 3 · AskMac",
+      "driver": "computer-use",
+      "deps": [
+        "terminal-manager"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "codex-3-web",
+      "scriptId": "codex-3",
+      "surface": "web",
+      "title": "Codex 3 · Web",
+      "spec": "specs/scripts/codex-3.web.spec.ts",
+      "deps": [
+        "terminal-manager"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "codex-3-mac",
+      "scriptId": "codex-3",
+      "surface": "askmac",
+      "title": "Codex 3 · AskMac",
+      "driver": "computer-use",
+      "deps": [
+        "terminal-manager"
+      ],
+      "status": "pending"
+    }
+  ]
+}

@@ -45,6 +45,7 @@ export interface Story {
   testTitle: string             // legacy — full Playwright test title path
   title: string                 // friendly run title
   description: string           // friendly run description
+  caseId?: string               // when set, ties this story to a plan's case
   startedAt: number
   steps: StoryStep[]
 }
@@ -55,8 +56,11 @@ function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60)
 }
 
-export function newStory(testInfo: TestInfo, info?: { title?: string; description?: string }): Story {
-  const testSlug = slug(testInfo.titlePath.join(' '))
+export function newStory(testInfo: TestInfo, info?: { title?: string; description?: string; caseId?: string }): Story {
+  // Story slug becomes the on-disk folder name and the storyPath the dashboard
+  // uses to look the run up. When this story belongs to a plan's case, the
+  // caseId is the canonical slug so the dashboard can map case <-> story.
+  const testSlug = info?.caseId ?? slug(testInfo.titlePath.join(' '))
   const dir = path.join(ROOT, testSlug)
   fs.rmSync(dir, { recursive: true, force: true })
   fs.mkdirSync(dir, { recursive: true })
@@ -65,6 +69,7 @@ export function newStory(testInfo: TestInfo, info?: { title?: string; descriptio
     testTitle: testInfo.titlePath.join(' › '),
     title: info?.title ?? testInfo.title,
     description: info?.description ?? '',
+    caseId: info?.caseId,
     startedAt: Date.now(),
     steps: [],
   }
@@ -79,6 +84,7 @@ function persist(story: Story) {
       testTitle: story.testTitle,
       title: story.title,
       description: story.description,
+      caseId: story.caseId,
       startedAt: story.startedAt,
       steps: story.steps,
     }, null, 2),

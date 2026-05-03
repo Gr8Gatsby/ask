@@ -73,6 +73,49 @@ interface Run {
   status: 'running' | 'awaiting-review' | 'reviewed'
   review: Review | null
   gitHead: string | null    // sha at run start (for staleness detection)
+  planId?: string | null    // when set, run belongs to a plan (new-style)
+  planVersion?: string | null
+}
+
+// ---------- plan model (new-style, additive) ------------------------------
+interface PlanCase {
+  id: string
+  scriptId: string
+  surface: 'web' | 'askmac'
+  title: string
+  spec?: string             // Playwright spec relative to web/e2e (web cases)
+  driver?: string           // e.g. "computer-use" (askmac cases)
+  deps: string[]
+  status: 'implemented' | 'pending' | 'skipped'
+}
+interface Plan {
+  id: string
+  title: string
+  version: string
+  description: string
+  cases: PlanCase[]
+}
+interface TestedSnapshot {
+  git: { head: string; shortHead: string; branch: string; dirty: boolean; summary: string }
+  scripts: Array<{ id: string; version: string }>
+  vault: 'dev' | 'prod' | 'unknown'
+}
+interface RunMeta {
+  planId: string
+  planVersion: string
+  scope: 'all' | { caseIds: string[] }
+  caseStoryMap: Record<string, string>   // caseId -> story slug (storyPath)
+  tested: TestedSnapshot | null
+}
+interface CaseResult {
+  caseId: string
+  title: string
+  surface: 'web' | 'askmac'
+  status: 'passed' | 'failed' | 'skipped' | 'pending' | 'running'
+  storyPath: string | null
+  stepCount: number
+  feedback: Array<{ kind: string; count: number }>
+  decision: Review['decision'] | null
 }
 
 function loadRuns(): Run[] {
@@ -171,11 +214,19 @@ function freezeScreenshots(runId: string, since: number): number {
   return n
 }
 
-function startRun(spec: string): Run | null {
+interface StartRunOpts {
+  spec: string
+  planId?: string
+  scope?: 'all' | { caseIds: string[] }
+}
+
+function startRun(opts: StartRunOpts | string): Run | null {
+  // Back-compat: accept legacy string spec arg
+  const o: StartRunOpts = typeof opts === 'string' ? { spec: opts } : opts
   if (currentRunId) return null
   const run: Run = {
     id: newRunId(),
-    spec,
+    spec: o.spec,
     startedAt: Date.now(),
     endedAt: null,
     exitCode: null,
@@ -183,15 +234,36 @@ function startRun(spec: string): Run | null {
     status: 'running',
     review: null,
     gitHead: currentGitHead(),
+    planId: o.planId ?? null,
+    planVersion: o.planId ? (getPlan(o.planId)?.version ?? null) : null,
   }
   fs.mkdirSync(path.join(RUNS_DIR, run.id), { recursive: true })
   saveRuns([run, ...loadRuns()])
+
+  // Persist run meta when this is a plan-scoped run.
+  if (o.planId) {
+    const plan = getPlan(o.planId)
+    const scope: RunMeta['scope'] = o.scope ?? 'all'
+    // Phase 1: caseStoryMap is populated by convention — story slug == caseId.
+    // The story recorder slugifies testInfo.titlePath; specs should set the
+    // test title to the case id so the produced story slug matches.
+    const caseStoryMap: Record<string, string> = {}
+    if (plan) for (const c of plan.cases) caseStoryMap[c.id] = c.id
+    saveRunMeta(run.id, {
+      planId: o.planId,
+      planVersion: plan?.version ?? '',
+      scope,
+      caseStoryMap,
+      tested: captureTestedSnapshot(),
+    })
+  }
+
   currentRunId = run.id
   currentOutput = ''
   broadcast('started', { id: run.id })
 
   const args = ['playwright', 'test']
-  if (spec) args.push(spec)
+  if (o.spec) args.push(o.spec)
   const child = spawn('npx', args, { cwd: WEB, env: { ...process.env, FORCE_COLOR: '0' } })
   const onChunk = (d: Buffer) => {
     const s = d.toString()
@@ -275,6 +347,142 @@ function loadFeedback(runId: string): Feedback[] {
 }
 function saveFeedback(runId: string, fb: Feedback[]) {
   fs.writeFileSync(path.join(RUNS_DIR, runId, 'feedback.json'), JSON.stringify(fb, null, 2))
+}
+
+// ---------- plans + tested snapshot + case results -----------------------
+// Plans are *source* artifacts, so they live under web/review-plans/ in git.
+// Runs (web/.review/runs/) are local-only and gitignored.
+const PLANS_DIR = path.join(WEB, 'review-plans')
+const SCRIPTS_DIR = path.join(REPO, 'ask', 'scripts')
+
+function loadPlans(): Plan[] {
+  if (!fs.existsSync(PLANS_DIR)) return []
+  const out: Plan[] = []
+  for (const f of fs.readdirSync(PLANS_DIR)) {
+    if (!f.endsWith('.json')) continue
+    try { out.push(JSON.parse(fs.readFileSync(path.join(PLANS_DIR, f), 'utf-8')) as Plan) }
+    catch { /* skip malformed */ }
+  }
+  return out.sort((a, b) => a.title.localeCompare(b.title))
+}
+function getPlan(id: string): Plan | undefined { return loadPlans().find(p => p.id === id) }
+
+function captureTestedSnapshot(): TestedSnapshot {
+  const head = currentGitHead() ?? ''
+  const shortHead = head ? head.slice(0, 7) : ''
+  const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'])
+  const status = git(['status', '--porcelain'])
+  const scripts: TestedSnapshot['scripts'] = []
+  if (fs.existsSync(SCRIPTS_DIR)) {
+    for (const e of fs.readdirSync(SCRIPTS_DIR, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue
+      const m = path.join(SCRIPTS_DIR, e.name, 'manifest.json')
+      if (!fs.existsSync(m)) continue
+      try {
+        const j = JSON.parse(fs.readFileSync(m, 'utf-8')) as { version?: string }
+        scripts.push({ id: e.name, version: String(j.version ?? '') })
+      } catch { /* skip */ }
+    }
+  }
+  return {
+    git: {
+      head, shortHead, branch,
+      dirty: status.length > 0,
+      summary: status ? `${status.split('\n').filter(Boolean).length} dirty file(s)` : 'clean',
+    },
+    scripts,
+    vault: 'unknown',
+  }
+}
+
+function runMetaPath(runId: string): string { return path.join(RUNS_DIR, runId, 'meta.json') }
+function loadRunMeta(runId: string): RunMeta | null {
+  const p = runMetaPath(runId)
+  if (!fs.existsSync(p)) return null
+  try { return JSON.parse(fs.readFileSync(p, 'utf-8')) as RunMeta } catch { return null }
+}
+function saveRunMeta(runId: string, meta: RunMeta) {
+  fs.mkdirSync(path.join(RUNS_DIR, runId), { recursive: true })
+  fs.writeFileSync(runMetaPath(runId), JSON.stringify(meta, null, 2))
+}
+
+function loadCaseReview(runId: string, caseId: string): Review | null {
+  const p = path.join(RUNS_DIR, runId, 'cases', caseId, 'review.json')
+  if (!fs.existsSync(p)) return null
+  try { return JSON.parse(fs.readFileSync(p, 'utf-8')) as Review } catch { return null }
+}
+function saveCaseReview(runId: string, caseId: string, review: Review | null) {
+  const dir = path.join(RUNS_DIR, runId, 'cases', caseId)
+  fs.mkdirSync(dir, { recursive: true })
+  const p = path.join(dir, 'review.json')
+  if (!review) { try { fs.unlinkSync(p) } catch { /* */ } return }
+  fs.writeFileSync(p, JSON.stringify(review, null, 2))
+}
+
+/** Resolve the storyPath (story dir name) for a case. Looks in run meta first,
+ *  then falls back to a story whose `caseId` field matches. */
+function resolveCaseStoryPath(runId: string, caseId: string): string | null {
+  const meta = loadRunMeta(runId)
+  const fromMeta = meta?.caseStoryMap?.[caseId]
+  if (fromMeta) return fromMeta
+  // Fall back: search frozen stories for an embedded caseId field
+  const root = path.join(RUNS_DIR, runId, 'story')
+  if (!fs.existsSync(root)) return null
+  for (const e of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!e.isDirectory()) continue
+    const j = path.join(root, e.name, 'story.json')
+    if (!fs.existsSync(j)) continue
+    try {
+      const data = JSON.parse(fs.readFileSync(j, 'utf-8')) as { caseId?: string }
+      if (data.caseId === caseId) return e.name
+    } catch { /* skip */ }
+  }
+  return null
+}
+
+function caseResultsForRun(run: Run): CaseResult[] {
+  const meta = loadRunMeta(run.id)
+  if (!meta) return []
+  const plan = getPlan(meta.planId)
+  if (!plan) return []
+  const inScope = (cid: string) => meta.scope === 'all' || meta.scope.caseIds.includes(cid)
+  const fb = loadFeedback(run.id)
+  return plan.cases.map(c => {
+    const storyPath = resolveCaseStoryPath(run.id, c.id)
+    let stepCount = 0
+    if (storyPath) {
+      const j = path.join(RUNS_DIR, run.id, 'story', storyPath, 'story.json')
+      try { stepCount = (JSON.parse(fs.readFileSync(j, 'utf-8')) as { steps?: unknown[] }).steps?.length ?? 0 } catch { /* */ }
+    }
+    const caseFb = storyPath ? fb.filter(f => f.storyPath === storyPath) : []
+    const counts = new Map<string, number>()
+    for (const f of caseFb) counts.set(f.kind, (counts.get(f.kind) ?? 0) + 1)
+    const review = loadCaseReview(run.id, c.id)
+    let status: CaseResult['status'] = 'pending'
+    if (c.status === 'pending') status = 'pending'
+    else if (!inScope(c.id)) status = 'skipped'
+    else if (run.status === 'running' && !storyPath) status = 'running'
+    else if (storyPath) status = run.exitCode === null ? 'running' : run.exitCode === 0 ? 'passed' : 'failed'
+    else status = 'pending'
+    return {
+      caseId: c.id,
+      title: c.title,
+      surface: c.surface,
+      status,
+      storyPath,
+      stepCount,
+      feedback: Array.from(counts.entries()).map(([kind, count]) => ({ kind, count })),
+      decision: review?.decision ?? null,
+    }
+  })
+}
+
+function runDecisionRollup(results: CaseResult[]): Review['decision'] | null {
+  const considered = results.filter(r => r.status === 'passed' || r.status === 'failed')
+  if (!considered.length) return null
+  if (considered.some(r => r.decision === 'rejected')) return 'rejected'
+  if (considered.every(r => r.decision === 'approved')) return 'approved'
+  return 'changes-requested'
 }
 
 // ---------- HTML page (SPA with hash routing) -----------------------------
@@ -741,9 +949,18 @@ async function renderList() {
 }
 
 // ---------- detail view ---------------------------------------------------
-async function renderDetail(id) {
+// scope: { caseId, planId } when entered via #/plan/:id/run/:runId/:caseId
+async function renderDetail(id, scope) {
   const r = await fetch('/api/runs/' + id).then(r => r.json());
   if (r.error) { view.innerHTML = '<div class="empty">Run not found.</div>'; return; }
+  // If scoped to a case, filter stories to that one case's storyPath.
+  if (scope && scope.caseId) {
+    const cr = (r.caseResults || []).find(c => c.caseId === scope.caseId);
+    const storyPath = cr?.storyPath;
+    if (storyPath) r.stories = (r.stories || []).filter(s => s.path === storyPath);
+    else r.stories = [];
+    r.__scope = scope;
+  }
   const fb = r.feedback || [];
   const passedBadge = r.exitCode === null
     ? '<span class="badge running">running</span>'
@@ -894,9 +1111,21 @@ async function renderDetail(id) {
       '<div class="muted" style="font-size:11px">' + escape(window.__askRunInfo.spec) + ' · ' + r.id + ' · started ' + ago(r.startedAt) + '</div>';
   }
 
+  // Breadcrumb depends on whether we're scoped to a plan + case
+  const sc = r.__scope;
+  const breadcrumb = sc
+    ? '<a href="#/" class="muted" style="font-size:12px">plans</a>' +
+      ' <span class="muted">›</span> ' +
+      '<a href="#/plan/' + escape(sc.planId) + '" class="muted" style="font-size:12px">' + escape(sc.planId) + '</a>' +
+      ' <span class="muted">›</span> ' +
+      '<a href="#/plan/' + escape(sc.planId) + '/run/' + escape(r.id) + '" class="muted" style="font-size:12px">run</a>' +
+      ' <span class="muted">›</span> ' +
+      '<span class="muted" style="font-size:12px">' + escape(sc.caseId) + '</span>'
+    : '<a href="#/" class="muted" style="font-size:12px">← all runs</a>';
+
   view.innerHTML =
     '<div class="run-hero">' +
-      '<a href="#/" class="muted" style="font-size:12px">← all runs</a>' +
+      breadcrumb +
       '<h1>' + escape(heroTitle) + '</h1>' +
       passedBadge + staleBadge +
       '<button class="info-btn" id="hero-info" title="Show full description">about</button>' +
@@ -1227,10 +1456,202 @@ function setupSlideInteractions(runId, current, fb, refresh) {
   }
 }
 
+// =============================================================================
+// Plan-first views: plans index, plan detail, run rollup. The case slideshow
+// reuses renderDetail() with a caseId scope (filters stories to that one).
+// =============================================================================
+async function renderPlansList() {
+  const [plans, runs] = await Promise.all([
+    fetch('/api/plans').then(r => r.json()),
+    fetch('/api/runs').then(r => r.json()),
+  ]);
+  // Last run per plan (newest first because /api/runs is sorted that way)
+  const lastByPlan = new Map();
+  for (const r of runs) { if (r.planId && !lastByPlan.has(r.planId)) lastByPlan.set(r.planId, r); }
+  if (!plans.length) {
+    view.innerHTML =
+      '<div class="empty">No plans yet. Drop a JSON plan into <code>web/.review/plans/</code> and reload.<br><br>' +
+      '<a href="#/all-runs" class="muted">→ legacy: all runs</a></div>';
+    return;
+  }
+  const rows = plans.map(p => {
+    const last = lastByPlan.get(p.id);
+    const implemented = p.cases.filter(c => c.status === 'implemented').length;
+    const pending = p.cases.filter(c => c.status === 'pending').length;
+    const lastStr = last ? ago(last.startedAt) + ' · ' + (last.gitHead ? last.gitHead.slice(0,7) : '—') : 'never';
+    const lastBadge = !last ? '<span class="muted">—</span>'
+      : last.exitCode === null ? '<span class="badge running">running</span>'
+      : last.exitCode === 0    ? '<span class="badge passed">passed</span>'
+                               : '<span class="badge failed">failed</span>';
+    return '<tr class="clickable" data-id="' + p.id + '">' +
+      '<td><strong>' + escape(p.title) + '</strong> <span class="muted">v' + escape(p.version) + '</span><br>' +
+        '<span class="muted" style="font-size:11px">' + escape(p.id) + '</span></td>' +
+      '<td>' + implemented + ' / ' + p.cases.length + ' implemented' +
+        (pending ? ' <span class="muted">(' + pending + ' pending)</span>' : '') + '</td>' +
+      '<td>' + lastStr + '</td>' +
+      '<td>' + lastBadge + '</td>' +
+    '</tr>';
+  }).join('');
+  view.innerHTML =
+    '<h1 style="margin:8px 0 12px;font-size:20px">Test plans</h1>' +
+    '<table><thead><tr><th>Plan</th><th>Coverage</th><th>Last run</th><th>Result</th></tr></thead>' +
+    '<tbody>' + rows + '</tbody></table>' +
+    '<div style="margin-top:14px"><a href="#/all-runs" class="muted">→ legacy: all runs</a></div>';
+  view.querySelectorAll('tr.clickable').forEach(tr => {
+    tr.addEventListener('click', () => location.hash = '#/plan/' + tr.dataset.id);
+  });
+}
+
+async function renderPlanDetail(planId) {
+  const [plan, runs] = await Promise.all([
+    fetch('/api/plans/' + planId).then(r => r.json()),
+    fetch('/api/plans/' + planId + '/runs').then(r => r.json()),
+  ]);
+  if (plan.error) { view.innerHTML = '<div class="empty">Plan not found.</div>'; return; }
+  const lastRun = runs[0];
+
+  // Per-case last result lookup (Phase 1: cheap, fetches the latest run only)
+  let lastCaseResults = [];
+  if (lastRun) {
+    const r = await fetch('/api/runs/' + lastRun.id).then(r => r.json());
+    lastCaseResults = r.caseResults || [];
+  }
+  const lastByCase = new Map(lastCaseResults.map(c => [c.caseId, c]));
+
+  const caseRows = plan.cases.map(c => {
+    const last = lastByCase.get(c.id);
+    const statusBadge = c.status === 'pending' ? '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">pending</span>'
+      : c.status === 'skipped' ? '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">skipped</span>'
+      : !last ? '<span class="muted">—</span>'
+      : last.status === 'passed' ? '<span class="badge passed">passed</span>'
+      : last.status === 'failed' ? '<span class="badge failed">failed</span>'
+      : last.status === 'running' ? '<span class="badge running">running</span>'
+      : '<span class="muted">—</span>';
+    const fbStr = last && last.feedback.length
+      ? last.feedback.map(f => f.count + ' ' + f.kind).join(' · ')
+      : '<span class="muted">—</span>';
+    const decision = last && last.decision
+      ? '<span class="decision-' + last.decision + '">' + last.decision + '</span>'
+      : '<span class="muted">—</span>';
+    const surfaceTag = '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">' + c.surface + '</span>';
+    return '<tr><td><strong>' + escape(c.title) + '</strong> ' + surfaceTag + '<br><span class="muted" style="font-size:11px">' + escape(c.id) + (c.deps.length ? ' · deps: ' + c.deps.map(escape).join(', ') : '') + '</span></td>' +
+      '<td>' + statusBadge + '</td>' +
+      '<td>' + (last && last.stepCount ? last.stepCount + ' steps' : '<span class="muted">—</span>') + '</td>' +
+      '<td>' + fbStr + '</td>' +
+      '<td>' + decision + '</td>' +
+    '</tr>';
+  }).join('');
+
+  const runRows = runs.length ? runs.map(r => {
+    const exitBadge = r.exitCode === null ? '<span class="badge running">running</span>'
+      : r.exitCode === 0 ? '<span class="badge passed">passed</span>' : '<span class="badge failed">failed</span>';
+    const sha = r.gitHead ? r.gitHead.slice(0,7) : '—';
+    return '<tr class="clickable" data-id="' + r.id + '">' +
+      '<td>' + ago(r.startedAt) + '<br><span class="muted">' + r.id + '</span></td>' +
+      '<td>' + sha + '</td>' +
+      '<td>' + exitBadge + '</td>' +
+      '<td>' + (r.review ? '<span class="decision-' + r.review.decision + '">' + r.review.decision + '</span>' : '<span class="muted">—</span>') + '</td>' +
+    '</tr>';
+  }).join('') : '<tr><td colspan="4" class="muted" style="padding:18px;text-align:center">No runs yet — click "New run" to start.</td></tr>';
+
+  view.innerHTML =
+    '<div class="run-hero"><a href="#/" class="muted" style="font-size:12px">← all plans</a>' +
+      '<h1>' + escape(plan.title) + '</h1>' +
+      '<span class="muted">v' + escape(plan.version) + '</span></div>' +
+    (plan.description ? '<p class="muted" style="margin:0 0 12px;line-height:1.55">' + escape(plan.description) + '</p>' : '') +
+    '<div class="panel"><div class="row" style="justify-content:space-between"><h3 style="margin:0">Cases</h3>' +
+      '<button class="primary" id="new-plan-run">New run · all implemented</button></div>' +
+    '<table style="margin-top:10px"><thead><tr><th>Case</th><th>Last status</th><th>Steps</th><th>Pins (last run)</th><th>Decision</th></tr></thead>' +
+    '<tbody>' + caseRows + '</tbody></table></div>' +
+    '<div class="panel"><h3 style="margin:0 0 8px">Run history</h3>' +
+    '<table><thead><tr><th>When</th><th>Git</th><th>Result</th><th>Decision</th></tr></thead><tbody>' + runRows + '</tbody></table></div>';
+
+  document.getElementById('new-plan-run').addEventListener('click', async () => {
+    const r = await fetch('/api/plans/' + planId + '/runs', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: 'all' }),
+    }).then(r => r.json());
+    if (r.id) location.hash = '#/plan/' + planId + '/run/' + r.id;
+  });
+  view.querySelectorAll('tr.clickable').forEach(tr => {
+    tr.addEventListener('click', () => location.hash = '#/plan/' + planId + '/run/' + tr.dataset.id);
+  });
+}
+
+async function renderRunRollup(planId, runId) {
+  const [plan, run] = await Promise.all([
+    fetch('/api/plans/' + planId).then(r => r.json()),
+    fetch('/api/runs/' + runId).then(r => r.json()),
+  ]);
+  if (run.error || plan.error) { view.innerHTML = '<div class="empty">Run not found.</div>'; return; }
+  const tested = run.meta?.tested;
+  const t = tested?.git;
+  const headerBits = [];
+  if (t) headerBits.push('<span class="muted">git</span> <code>' + escape(t.shortHead) + '</code> <span class="muted">on</span> <code>' + escape(t.branch) + '</code>' + (t.dirty ? ' <span class="badge stale">dirty</span>' : ''));
+  headerBits.push('<span class="muted">started</span> ' + ago(run.startedAt));
+  if (run.endedAt) headerBits.push('<span class="muted">ended</span> ' + ago(run.endedAt));
+
+  const exitBadge = run.exitCode === null ? '<span class="badge running">running</span>'
+    : run.exitCode === 0 ? '<span class="badge passed">passed</span>' : '<span class="badge failed">failed</span>';
+  const decisionBadge = run.decisionRollup
+    ? ' · <span class="decision-' + run.decisionRollup + '">rollup: ' + run.decisionRollup + '</span>' : '';
+
+  const caseRows = (run.caseResults || []).map(c => {
+    const status = c.status === 'pending' ? '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">pending</span>'
+      : c.status === 'skipped' ? '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">skipped</span>'
+      : c.status === 'passed' ? '<span class="badge passed">passed</span>'
+      : c.status === 'failed' ? '<span class="badge failed">failed</span>'
+      : '<span class="badge running">running</span>';
+    const surfaceTag = '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">' + c.surface + '</span>';
+    const fbStr = c.feedback.length ? c.feedback.map(f => f.count + ' ' + f.kind).join(' · ') : '<span class="muted">—</span>';
+    const drillIn = c.storyPath
+      ? '<a href="#/plan/' + escape(planId) + '/run/' + escape(runId) + '/' + escape(c.caseId) + '">open →</a>'
+      : '<span class="muted">no run</span>';
+    return '<tr><td><strong>' + escape(c.title) + '</strong> ' + surfaceTag + '<br><span class="muted" style="font-size:11px">' + escape(c.caseId) + '</span></td>' +
+      '<td>' + status + '</td>' +
+      '<td>' + (c.stepCount || '<span class="muted">—</span>') + '</td>' +
+      '<td>' + fbStr + '</td>' +
+      '<td>' + (c.decision ? '<span class="decision-' + c.decision + '">' + c.decision + '</span>' : '<span class="muted">—</span>') + '</td>' +
+      '<td>' + drillIn + '</td>' +
+    '</tr>';
+  }).join('');
+
+  const scriptsLine = tested?.scripts?.length
+    ? '<p class="muted" style="margin:0 0 12px;font-size:12px">Scripts at run start: ' +
+      tested.scripts.slice(0, 8).map(s => escape(s.id) + '@' + escape(s.version)).join(', ') +
+      (tested.scripts.length > 8 ? ' …' : '') + '</p>'
+    : '';
+
+  view.innerHTML =
+    '<div class="run-hero"><a href="#/plan/' + escape(planId) + '" class="muted" style="font-size:12px">← ' + escape(plan.title) + '</a>' +
+      '<h1>Run ' + escape(run.id) + '</h1>' + exitBadge + '<span>' + decisionBadge + '</span></div>' +
+    '<p class="muted" style="margin:0 0 6px;font-size:12px">' + headerBits.join(' · ') + '</p>' +
+    scriptsLine +
+    '<div class="panel"><h3 style="margin:0 0 8px">Cases in this run</h3>' +
+    '<table><thead><tr><th>Case</th><th>Status</th><th>Steps</th><th>Pins</th><th>Decision</th><th></th></tr></thead>' +
+    '<tbody>' + caseRows + '</tbody></table></div>' +
+    '<details' + (run.exitCode === 0 ? '' : ' open') + ' style="margin-top:16px"><summary style="cursor:pointer" class="muted">Output</summary>' +
+    '<pre class="output" id="run-output">' + escape(run.output ?? '') + '</pre></details>';
+}
+
 // ---------- routing -------------------------------------------------------
 function route() {
-  const m = location.hash.match(/^#\\/run\\/(.+)$/);
-  if (m) renderDetail(m[1]); else renderList();
+  const h = location.hash;
+  // #/plan/:id/run/:runId/:caseId
+  let m = h.match(/^#\\/plan\\/([^/]+)\\/run\\/([^/]+)\\/([^/]+)$/);
+  if (m) { renderDetail(m[2], { caseId: m[3], planId: m[1] }); return; }
+  // #/plan/:id/run/:runId
+  m = h.match(/^#\\/plan\\/([^/]+)\\/run\\/([^/]+)$/);
+  if (m) { renderRunRollup(m[1], m[2]); return; }
+  // #/plan/:id
+  m = h.match(/^#\\/plan\\/([^/]+)$/);
+  if (m) { renderPlanDetail(m[1]); return; }
+  // #/run/:id (legacy)
+  m = h.match(/^#\\/run\\/(.+)$/);
+  if (m) { renderDetail(m[1]); return; }
+  // #/all-runs (legacy table)
+  if (h === '#/all-runs') { renderList(); return; }
+  renderPlansList();
 }
 window.addEventListener('hashchange', route);
 
@@ -1307,6 +1728,8 @@ const server = http.createServer(async (req, res) => {
     const output = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, 'utf-8')
                   : (currentRunId === r.id ? currentOutput : '')
     res.writeHead(200, { 'Content-Type': 'application/json' })
+    const meta = loadRunMeta(r.id)
+    const caseResults = r.planId ? caseResultsForRun(r) : []
     res.end(JSON.stringify({
       ...r,
       output,
@@ -1314,6 +1737,9 @@ const server = http.createServer(async (req, res) => {
       stories: listFrozenStories(r.id),
       feedback: loadFeedback(r.id),
       stale: isPotentiallyStale(r),
+      meta,
+      caseResults,
+      decisionRollup: r.planId ? runDecisionRollup(caseResults) : null,
     })); return
   }
 
@@ -1413,6 +1839,82 @@ const server = http.createServer(async (req, res) => {
       const i = sseClients.indexOf(res); if (i >= 0) sseClients.splice(i, 1)
     })
     return
+  }
+
+  // ---------- plan + case API (additive) ----------
+  if (p === '/api/plans' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(loadPlans())); return
+  }
+  const planDetail = p.match(/^\/api\/plans\/([^/]+)$/)
+  if (planDetail && req.method === 'GET') {
+    const plan = getPlan(planDetail[1])
+    if (!plan) { res.writeHead(404); res.end(JSON.stringify({ error: 'not found' })); return }
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(plan)); return
+  }
+  const planRuns = p.match(/^\/api\/plans\/([^/]+)\/runs$/)
+  if (planRuns && req.method === 'GET') {
+    const all = loadRuns().filter(r => r.planId === planRuns[1])
+      .map(r => ({ ...r, stale: isPotentiallyStale(r) }))
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(all)); return
+  }
+  if (planRuns && req.method === 'POST') {
+    let body = ''
+    req.on('data', d => body += d)
+    req.on('end', () => {
+      const plan = getPlan(planRuns[1])
+      if (!plan) { res.writeHead(404); res.end(JSON.stringify({ error: 'plan not found' })); return }
+      let scope: RunMeta['scope'] = 'all'
+      try { const parsed = JSON.parse(body || '{}'); if (parsed.scope) scope = parsed.scope } catch { /* */ }
+      // Resolve which spec(s) to run for the chosen cases.
+      const wantedIds = scope === 'all' ? null : new Set(scope.caseIds)
+      const specs = plan.cases
+        .filter(c => c.status === 'implemented' && c.spec)
+        .filter(c => !wantedIds || wantedIds.has(c.id))
+        .map(c => `e2e/${c.spec}`)
+      if (!specs.length) { res.writeHead(400); res.end(JSON.stringify({ error: 'no implemented cases match the scope' })); return }
+      // Phase 1: if multiple specs, Playwright runs them all in one invocation
+      // when we omit the spec arg and let it match by directory. For now we
+      // accept the case where a single case is selected; multi-spec runs use
+      // an empty spec arg so Playwright runs the project default.
+      const spec = specs.length === 1 ? specs[0] : ''
+      const run = startRun({ spec, planId: plan.id, scope })
+      if (!run) { res.writeHead(409); res.end(JSON.stringify({ error: 'a run is already in progress' })); return }
+      res.writeHead(202, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ id: run.id }))
+    })
+    return
+  }
+  const caseDetail = p.match(/^\/api\/runs\/([^/]+)\/cases\/([^/]+)$/)
+  if (caseDetail && req.method === 'GET') {
+    const r = getRun(caseDetail[1])
+    if (!r) { res.writeHead(404); res.end(JSON.stringify({ error: 'run not found' })); return }
+    const storyPath = resolveCaseStoryPath(r.id, caseDetail[2])
+    const stories = listFrozenStories(r.id)
+    const story = storyPath ? stories.find(s => s.path === storyPath) ?? null : null
+    const fb = loadFeedback(r.id).filter(f => storyPath ? f.storyPath === storyPath : false)
+    const review = loadCaseReview(r.id, caseDetail[2])
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ caseId: caseDetail[2], story, feedback: fb, review })); return
+  }
+  const caseReview = p.match(/^\/api\/runs\/([^/]+)\/cases\/([^/]+)\/review$/)
+  if (caseReview && req.method === 'POST') {
+    let body = ''
+    req.on('data', d => body += d)
+    req.on('end', () => {
+      try {
+        const { summary, decision } = JSON.parse(body) as { summary: string; decision: Review['decision'] }
+        saveCaseReview(caseReview[1], caseReview[2], { summary: summary || '', decision, reviewedAt: Date.now() })
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true }))
+      } catch (e) { res.writeHead(400); res.end(JSON.stringify({ error: String(e) })) }
+    })
+    return
+  }
+  if (caseReview && req.method === 'DELETE') {
+    saveCaseReview(caseReview[1], caseReview[2], null)
+    res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true })); return
   }
 
   // Frozen ad-hoc screenshot
