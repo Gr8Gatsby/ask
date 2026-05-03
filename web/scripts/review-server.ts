@@ -229,6 +229,9 @@ interface StartRunOpts {
   specs?: string[]          // many specs (plan-aware multi-case runs)
   planId?: string
   scope?: 'all' | { caseIds: string[] }
+  manual?: boolean          // true → don't spawn Playwright; leave run open
+                            // for screenshot ingest. Used for computer-use
+                            // (AskMac) walkthroughs driven by Claude.
 }
 
 function startRun(opts: StartRunOpts | string): Run | null {
@@ -273,6 +276,13 @@ function startRun(opts: StartRunOpts | string): Run | null {
   currentRunId = run.id
   currentOutput = ''
   broadcast('started', { id: run.id })
+
+  // Manual runs (computer-use / hand-driven) leave the run open. Steps
+  // are POSTed to /api/runs/:id/cases/:caseId/step and the run is closed
+  // via /api/runs/:id/finish.
+  if (o.manual) {
+    return run
+  }
 
   const args = ['playwright', 'test', ...allSpecs]
   const child = spawn('npx', args, { cwd: WEB, env: { ...process.env, FORCE_COLOR: '0' } })
@@ -1629,7 +1639,10 @@ async function renderPlanDetail(planId) {
     const actions = c.status === 'implemented'
       ? '<button class="primary" data-act="run" data-caseid="' + escape(c.id) + '">Run only this case</button>' +
         '<button data-act="open" data-caseid="' + escape(c.id) + '">Open case</button>'
-      : '<button data-act="open" data-caseid="' + escape(c.id) + '">Open case</button>';
+      : c.driver === 'computer-use'
+        ? '<button class="primary" data-act="run-manual" data-caseid="' + escape(c.id) + '">Start AskMac walkthrough</button>' +
+          '<button data-act="open" data-caseid="' + escape(c.id) + '">Open case</button>'
+        : '<button data-act="open" data-caseid="' + escape(c.id) + '">Open case</button>';
 
     return '<div class="card" data-caseid="' + escape(c.id) + '" data-runid="' + escape(lastRun?.id || '') + '" data-storypath="' + escape(story?.path || '') + '">' +
       '<div class="head"><h2>' + escape(c.title) + '</h2>' + surfaceTag + statusBadge + '</div>' +
@@ -1709,13 +1722,21 @@ async function renderPlanDetail(planId) {
         location.hash = '#/plan/' + planId + '/case/' + cid;
         return;
       }
-      if (b.dataset.act === 'run') {
+      if (b.dataset.act === 'run' || b.dataset.act === 'run-manual') {
         const r = await fetch('/api/plans/' + planId + '/runs', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ scope: { caseIds: [cid] } }),
         }).then(r => r.json());
         if (r.error) { alert(r.error); return; }
-        if (r.id) location.hash = '#/plan/' + planId + '/run/' + r.id;
+        if (r.id) {
+          if (r.manual) {
+            const tip = 'Manual run created — id: ' + r.id + '\\n\\n' +
+              'In chat, tell Claude:\\n  Drive the AskMac walkthrough for run ' + r.id + ' (case ' + cid + ').\\n\\n' +
+              'Claude will capture each step via computer-use and post it to /api/runs/' + r.id + '/cases/' + cid + '/step.';
+            alert(tip);
+          }
+          location.hash = '#/plan/' + planId + '/run/' + r.id;
+        }
       }
     });
   });
@@ -1900,9 +1921,13 @@ async function renderCaseDetail(planId, caseId) {
     : '<tr><td colspan="6" class="muted" style="padding:18px;text-align:center">No runs of this case yet.</td></tr>';
 
   const isPending = c.status === 'pending';
+  const isComputerUse = c.driver === 'computer-use';
   const runScopedBtn = !isPending
     ? '<button class="primary" id="run-this-case">Run only this case</button>'
-    : '<span class="muted" style="font-size:12px">This case is pending — driver is <code>' + escape(c.driver || 'not set') + '</code> (Phase 3).</span>';
+    : isComputerUse
+      ? '<button class="primary" id="run-this-case">Start AskMac walkthrough</button>' +
+        ' <span class="muted" style="font-size:12px;margin-left:8px">Creates a manual run; ask Claude in chat to capture steps via computer-use.</span>'
+      : '<span class="muted" style="font-size:12px">This case is pending — no driver configured.</span>';
 
   view.innerHTML =
     '<div class="run-hero">' +
@@ -1928,8 +1953,13 @@ async function renderCaseDetail(planId, caseId) {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scope: { caseIds: [c.id] } }),
       }).then(r => r.json());
-      if (r.id) location.hash = '#/plan/' + planId + '/run/' + r.id;
-      else if (r.error) alert(r.error);
+      if (r.error) { alert(r.error); return; }
+      if (r.id) {
+        if (r.manual) {
+          alert('Manual run created — id: ' + r.id + '\\n\\nIn chat, tell Claude:\\n  Drive the AskMac walkthrough for run ' + r.id + ' (case ' + c.id + ').\\n\\nClaude will capture each step via computer-use and post it to /api/runs/' + r.id + '/cases/' + c.id + '/step.');
+        }
+        location.hash = '#/plan/' + planId + '/run/' + r.id;
+      }
     });
   }
   view.querySelectorAll('tr.clickable').forEach(tr => {
@@ -2215,15 +2245,27 @@ const server = http.createServer(async (req, res) => {
       try { const parsed = JSON.parse(body || '{}'); if (parsed.scope) scope = parsed.scope } catch { /* */ }
       // Resolve which spec(s) to run for the chosen cases.
       const wantedIds = scope === 'all' ? null : new Set(scope.caseIds)
-      const specs = plan.cases
-        .filter(c => c.status === 'implemented' && c.spec)
-        .filter(c => !wantedIds || wantedIds.has(c.id))
-        .map(c => `e2e/${c.spec}`)
-      if (!specs.length) { res.writeHead(400); res.end(JSON.stringify({ error: 'no implemented cases match the scope' })); return }
-      const run = startRun({ specs, planId: plan.id, scope })
+      // Resolve selected cases — could be Playwright (web) or computer-use
+      // (AskMac/manual). For mixed scopes, we currently require single-driver.
+      const selected = plan.cases.filter(c => !wantedIds || wantedIds.has(c.id))
+      const playwrightCases = selected.filter(c => c.spec && c.status === 'implemented')
+      const manualCases = selected.filter(c => c.driver === 'computer-use' && !c.spec)
+      if (!playwrightCases.length && !manualCases.length) {
+        res.writeHead(400); res.end(JSON.stringify({ error: 'no runnable cases match the scope' })); return
+      }
+      if (playwrightCases.length && manualCases.length) {
+        res.writeHead(400); res.end(JSON.stringify({ error: 'mixed-driver scopes not yet supported — pick web or AskMac cases, not both' })); return
+      }
+      let run
+      if (playwrightCases.length) {
+        const specs = playwrightCases.map(c => `e2e/${c.spec}`)
+        run = startRun({ specs, planId: plan.id, scope })
+      } else {
+        run = startRun({ planId: plan.id, scope, manual: true })
+      }
       if (!run) { res.writeHead(409); res.end(JSON.stringify({ error: 'a run is already in progress' })); return }
       res.writeHead(202, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ id: run.id }))
+      res.end(JSON.stringify({ id: run.id, manual: !playwrightCases.length }))
     })
     return
   }
@@ -2252,6 +2294,78 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({ plan: { id: plan.id, title: plan.title, version: plan.version }, case: c, history }))
     return
   }
+  // Manual-run step ingest: append a captured step to a manual (driver=
+  // computer-use) run. Body: { idx, title, description, image_b64 }.
+  // Writes a PNG into runs/<id>/story/<caseId>/NN-<slug>.png and updates
+  // story.json so the dashboard renders it like any other captured step.
+  const caseStepIngest = p.match(/^\/api\/runs\/([^/]+)\/cases\/([^/]+)\/step$/)
+  if (caseStepIngest && req.method === 'POST') {
+    let body = ''
+    req.on('data', d => body += d)
+    req.on('end', () => {
+      try {
+        const { idx, title, description, image_b64 } = JSON.parse(body) as {
+          idx: number; title: string; description?: string; image_b64: string
+        }
+        const runId = caseStepIngest[1]
+        const caseId = caseStepIngest[2]
+        const r = getRun(runId)
+        if (!r) { res.writeHead(404); res.end(JSON.stringify({ error: 'run not found' })); return }
+        const storyDir = path.join(RUNS_DIR, runId, 'story', caseId)
+        fs.mkdirSync(storyDir, { recursive: true })
+        const slug = (title || `step-${idx}`).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60)
+        const file = `${String(idx).padStart(2, '0')}-${slug}.png`
+        const buf = Buffer.from(image_b64, 'base64')
+        fs.writeFileSync(path.join(storyDir, file), buf)
+        // Maintain story.json
+        const storyJsonPath = path.join(storyDir, 'story.json')
+        let story: Record<string, unknown> = {}
+        try { story = JSON.parse(fs.readFileSync(storyJsonPath, 'utf-8')) as Record<string, unknown> } catch { /* */ }
+        const meta = loadRunMeta(runId)
+        const planCase = meta ? getPlan(meta.planId)?.cases.find(c => c.id === caseId) : undefined
+        if (!story.title) story.title = planCase?.title ?? caseId
+        if (!story.description) story.description = planCase?.description ?? ''
+        if (!story.testTitle) story.testTitle = caseId
+        if (!story.caseId) story.caseId = caseId
+        if (!story.startedAt) story.startedAt = r.startedAt
+        const steps = (Array.isArray(story.steps) ? story.steps : []) as Array<Record<string, unknown>>
+        // Replace any existing step with the same idx, else append.
+        const existing = steps.findIndex(s => s.idx === idx)
+        const stepRecord = { idx, title, description: description ?? '', file, at: Date.now(), durationMs: 0 }
+        if (existing >= 0) steps[existing] = stepRecord
+        else steps.push(stepRecord)
+        steps.sort((a, b) => (a.idx as number) - (b.idx as number))
+        story.steps = steps
+        fs.writeFileSync(storyJsonPath, JSON.stringify(story, null, 2))
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: true, file, total: steps.length }))
+      } catch (e) { res.writeHead(400); res.end(JSON.stringify({ error: String(e) })) }
+    })
+    return
+  }
+  // Close a manual run: sets exitCode + endedAt + status, broadcasts done.
+  const finishRun = p.match(/^\/api\/runs\/([^/]+)\/finish$/)
+  if (finishRun && req.method === 'POST') {
+    let body = ''
+    req.on('data', d => body += d)
+    req.on('end', () => {
+      let exitCode = 0
+      try { const j = JSON.parse(body || '{}'); if (typeof j.exitCode === 'number') exitCode = j.exitCode } catch { /* */ }
+      const runId = finishRun[1]
+      const updated = updateRun(runId, {
+        endedAt: Date.now(),
+        exitCode,
+        status: 'awaiting-review',
+      })
+      if (!updated) { res.writeHead(404); res.end(JSON.stringify({ error: 'run not found' })); return }
+      if (currentRunId === runId) currentRunId = null
+      broadcast('done', { id: runId, exitCode, screenshotCount: 0 })
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(updated))
+    })
+    return
+  }
+
   const caseDetail = p.match(/^\/api\/runs\/([^/]+)\/cases\/([^/]+)$/)
   if (caseDetail && req.method === 'GET') {
     const r = getRun(caseDetail[1])
