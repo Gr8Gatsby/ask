@@ -784,6 +784,15 @@ const HTML = `<!doctype html>
   .thumb .cap { padding: 6px 7px; font-size: 11px; color: var(--text); line-height: 1.25; max-height: 30px; overflow: hidden; text-overflow: ellipsis; }
   .surface-pill { font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--pill-bg); color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
   .deps-line code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; font-size: 11px; margin-right: 4px; }
+  /* manual-run capture targets — placeholder thumbs become drop/paste targets */
+  .thumb.placeholder.capture-target { border-style: dashed; border-color: var(--primary); }
+  .thumb.placeholder.capture-target .img { background: linear-gradient(135deg, rgba(0,102,204,0.06), rgba(0,102,204,0.12)); }
+  .thumb.placeholder.capture-target .img::after { content: 'drop / paste'; font-size: 9px; color: var(--primary); margin-top: 4px; }
+  .thumb.placeholder.dragover { background: var(--primary); }
+  .thumb.placeholder.dragover .img { background: rgba(0,102,204,0.25); }
+  .thumb.uploading .img::after { content: 'uploading…'; }
+  .capture-banner { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin: 0 0 12px; font-size: 13px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .capture-banner kbd { background: var(--panel); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 3px; padding: 1px 5px; font-family: ui-monospace, monospace; font-size: 11px; }
 </style>
 </head>
 <body data-theme="light">
@@ -1868,6 +1877,105 @@ async function renderRunRollup(planId, runId) {
       location.hash = '#/plan/' + planId + '/run/' + runId + '/' + cid;
     });
   });
+
+  // ===== Manual-capture wiring =====
+  // For runs that haven't finished and were created from cases with a
+  // computer-use driver, turn each placeholder thumb into a drop/paste
+  // target. Captured images are POSTed to the step ingest endpoint.
+  const isOpenManual = run.exitCode === null && run.status === 'running';
+  const manualCases = (run.caseResults || []).filter(c => {
+    const pc = planCases.get(c.caseId);
+    return pc && pc.driver === 'computer-use';
+  });
+  if (isOpenManual && manualCases.length) {
+    // Banner above the gallery
+    const banner = document.createElement('div');
+    banner.className = 'capture-banner';
+    banner.innerHTML =
+      '<strong>Manual capture:</strong> capture a screenshot with ' +
+      '<kbd>⌘⇧4</kbd> (selection → file) or <kbd>⌘⇧⌃4</kbd> (selection → clipboard), ' +
+      'then drop the file or paste with <kbd>⌘V</kbd> on the matching step. ' +
+      '<button id="finish-run" class="primary" style="margin-left:auto;font-size:12px">Finish run</button>';
+    view.querySelector('.gallery').before(banner);
+
+    view.querySelectorAll('.gallery .card').forEach(card => {
+      const caseId = card.dataset.caseid;
+      const planCase = manualCases.find(c => c.caseId === caseId);
+      if (!planCase) return;
+      const declared = planCases.get(caseId)?.steps || [];
+      card.querySelectorAll('.thumb.placeholder').forEach(thumb => {
+        thumb.classList.add('capture-target');
+        const stepIdx = parseInt(thumb.dataset.step, 10);
+        const stepDecl = declared[stepIdx];
+
+        const upload = async (file) => {
+          if (!file || !file.type.startsWith('image/')) return;
+          thumb.classList.add('uploading');
+          const reader = new FileReader();
+          reader.onload = async () => {
+            const dataUrl = reader.result;
+            const b64 = dataUrl.split(',')[1];
+            await fetch('/api/runs/' + runId + '/cases/' + caseId + '/step', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                idx: stepIdx,
+                title: stepDecl?.title ?? ('Step ' + (stepIdx + 1)),
+                description: stepDecl?.description ?? '',
+                image_b64: b64,
+              }),
+            });
+            // Reload the run rollup so the captured thumb swaps in
+            renderRunRollup(planId, runId);
+          };
+          reader.readAsDataURL(file);
+        };
+
+        // Drag and drop
+        thumb.addEventListener('dragover', (ev) => {
+          ev.preventDefault();
+          thumb.classList.add('dragover');
+        });
+        thumb.addEventListener('dragleave', () => thumb.classList.remove('dragover'));
+        thumb.addEventListener('drop', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          thumb.classList.remove('dragover');
+          const file = ev.dataTransfer.files?.[0];
+          if (file) upload(file);
+        });
+
+        // Click to focus, then paste with Cmd+V
+        thumb.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          thumb.tabIndex = 0;
+          thumb.focus();
+          thumb.style.outline = '2px solid var(--primary)';
+        });
+        thumb.addEventListener('blur', () => { thumb.style.outline = ''; });
+        thumb.addEventListener('paste', (ev) => {
+          const items = ev.clipboardData?.items || [];
+          for (const it of items) {
+            if (it.kind === 'file' && it.type.startsWith('image/')) {
+              ev.preventDefault();
+              const file = it.getAsFile();
+              if (file) upload(file);
+              return;
+            }
+          }
+        });
+      });
+    });
+
+    document.getElementById('finish-run').addEventListener('click', async () => {
+      await fetch('/api/runs/' + runId + '/finish', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ exitCode: 0 }),
+      });
+      // SSE 'done' will fire and route() — this view stays meaningful since
+      // the slideshow now has captured images.
+      renderRunRollup(planId, runId);
+    });
+  }
 }
 
 async function renderCaseDetail(planId, caseId) {
