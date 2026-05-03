@@ -29,7 +29,7 @@
       "title": "Homebrew · Web",
       "spec": "specs/scripts/brew-monitor.web.spec.ts",
       "deps": [],
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "brew-monitor-mac",
@@ -47,7 +47,7 @@
       "title": "Git Repos · Web",
       "spec": "specs/scripts/github.web.spec.ts",
       "deps": [],
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "github-mac",
@@ -65,7 +65,7 @@
       "title": "Ollama · Web",
       "spec": "specs/scripts/ollama.web.spec.ts",
       "deps": [],
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "ollama-mac",
@@ -83,7 +83,7 @@
       "title": "Google Docs History · Web",
       "spec": "specs/scripts/gdocs-history.web.spec.ts",
       "deps": [],
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "gdocs-history-mac",
@@ -101,7 +101,7 @@
       "title": "Web Traffic · Web",
       "spec": "specs/scripts/web-traffic.web.spec.ts",
       "deps": [],
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "web-traffic-mac",
@@ -119,7 +119,7 @@
       "title": "Task Demo · Web",
       "spec": "specs/scripts/task-demo.web.spec.ts",
       "deps": [],
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "task-demo-mac",
@@ -139,7 +139,7 @@
       "deps": [
         "terminal-manager"
       ],
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "terminal-snapshot-mac",
@@ -161,7 +161,7 @@
       "deps": [
         "terminal-manager"
       ],
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "claude-3-mac",
@@ -183,7 +183,7 @@
       "deps": [
         "terminal-manager"
       ],
-      "status": "pending"
+      "status": "implemented"
     },
     {
       "id": "codex-3-mac",

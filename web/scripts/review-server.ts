@@ -215,7 +215,8 @@ function freezeScreenshots(runId: string, since: number): number {
 }
 
 interface StartRunOpts {
-  spec: string
+  spec?: string             // single spec (legacy)
+  specs?: string[]          // many specs (plan-aware multi-case runs)
   planId?: string
   scope?: 'all' | { caseIds: string[] }
 }
@@ -224,9 +225,10 @@ function startRun(opts: StartRunOpts | string): Run | null {
   // Back-compat: accept legacy string spec arg
   const o: StartRunOpts = typeof opts === 'string' ? { spec: opts } : opts
   if (currentRunId) return null
+  const allSpecs = o.specs && o.specs.length ? o.specs : (o.spec ? [o.spec] : [])
   const run: Run = {
     id: newRunId(),
-    spec: o.spec,
+    spec: allSpecs.length === 1 ? allSpecs[0] : allSpecs.join(' '),
     startedAt: Date.now(),
     endedAt: null,
     exitCode: null,
@@ -262,8 +264,7 @@ function startRun(opts: StartRunOpts | string): Run | null {
   currentOutput = ''
   broadcast('started', { id: run.id })
 
-  const args = ['playwright', 'test']
-  if (o.spec) args.push(o.spec)
+  const args = ['playwright', 'test', ...allSpecs]
   const child = spawn('npx', args, { cwd: WEB, env: { ...process.env, FORCE_COLOR: '0' } })
   const onChunk = (d: Buffer) => {
     const s = d.toString()
@@ -1886,12 +1887,7 @@ const server = http.createServer(async (req, res) => {
         .filter(c => !wantedIds || wantedIds.has(c.id))
         .map(c => `e2e/${c.spec}`)
       if (!specs.length) { res.writeHead(400); res.end(JSON.stringify({ error: 'no implemented cases match the scope' })); return }
-      // Phase 1: if multiple specs, Playwright runs them all in one invocation
-      // when we omit the spec arg and let it match by directory. For now we
-      // accept the case where a single case is selected; multi-spec runs use
-      // an empty spec arg so Playwright runs the project default.
-      const spec = specs.length === 1 ? specs[0] : ''
-      const run = startRun({ spec, planId: plan.id, scope })
+      const run = startRun({ specs, planId: plan.id, scope })
       if (!run) { res.writeHead(409); res.end(JSON.stringify({ error: 'a run is already in progress' })); return }
       res.writeHead(202, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ id: run.id }))
