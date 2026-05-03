@@ -747,6 +747,33 @@ const HTML = `<!doctype html>
   figure { margin: 0; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; box-shadow: var(--shadow); }
   figure img { display: block; width: 100%; cursor: zoom-in; background: var(--code-bg); }
   figcaption { padding: 7px 10px; font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; border-top: 1px solid var(--border); }
+  /* ----- Cards (plan + case galleries) ----- */
+  .gallery { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; box-shadow: var(--shadow); cursor: pointer; transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
+  .card:hover { border-color: var(--primary); transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,0.06); }
+  [data-theme="dark"] .card:hover { box-shadow: 0 4px 14px rgba(0,0,0,0.5); }
+  .card .head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+  .card .head h2 { margin: 0; font-size: 17px; font-weight: 600; }
+  .card .head .ver { color: var(--muted); font-size: 12px; }
+  .card .desc { color: var(--text); font-size: 13px; line-height: 1.55; margin: 4px 0 10px; }
+  .card .meta { color: var(--muted); font-size: 12px; display: flex; flex-wrap: wrap; gap: 14px; }
+  .card .meta code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; font-size: 11px; }
+  .card .actions { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .card .actions button { font-size: 12px; padding: 5px 12px; }
+  /* Step thumbnail strip */
+  .strip { display: flex; gap: 8px; margin-top: 12px; overflow-x: auto; padding-bottom: 4px; }
+  .thumb { flex: 0 0 130px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; cursor: pointer; background: var(--panel); transition: border-color .12s ease, transform .12s ease; }
+  .thumb:hover { border-color: var(--primary); transform: translateY(-1px); }
+  .thumb .img { aspect-ratio: 16/10; background: var(--code-bg); position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .thumb .img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* placeholder slate for unreached / pending steps */
+  .thumb.placeholder .img { background: linear-gradient(135deg, var(--code-bg), var(--row-hover)); padding: 8px; flex-direction: column; gap: 4px; text-align: center; }
+  .thumb.placeholder .img .ph-num { font-size: 22px; font-weight: 700; color: var(--muted); line-height: 1; }
+  .thumb.placeholder .img .ph-dir { font-size: 10px; color: var(--muted); font-family: ui-monospace, monospace; }
+  .thumb .num { position: absolute; top: 4px; left: 4px; background: rgba(0,0,0,.55); color: #fff; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 8px; z-index: 1; }
+  .thumb .cap { padding: 6px 7px; font-size: 11px; color: var(--text); line-height: 1.25; max-height: 30px; overflow: hidden; text-overflow: ellipsis; }
+  .surface-pill { font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--pill-bg); color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .deps-line code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; font-size: 11px; margin-right: 4px; }
 </style>
 </head>
 <body data-theme="light">
@@ -1477,40 +1504,61 @@ async function renderPlansList() {
     fetch('/api/plans').then(r => r.json()),
     fetch('/api/runs').then(r => r.json()),
   ]);
-  // Last run per plan (newest first because /api/runs is sorted that way)
   const lastByPlan = new Map();
   for (const r of runs) { if (r.planId && !lastByPlan.has(r.planId)) lastByPlan.set(r.planId, r); }
   if (!plans.length) {
     view.innerHTML =
-      '<div class="empty">No plans yet. Drop a JSON plan into <code>web/.review/plans/</code> and reload.<br><br>' +
+      '<div class="empty">No plans yet. Drop a JSON plan into <code>web/review-plans/</code> and reload.<br><br>' +
       '<a href="#/all-runs" class="muted">→ legacy: all runs</a></div>';
     return;
   }
-  const rows = plans.map(p => {
+  // For each plan, fetch the latest run's stories so we can show 4 case-cover thumbnails.
+  const planCovers = await Promise.all(plans.map(async p => {
+    const last = lastByPlan.get(p.id);
+    if (!last) return { id: p.id, thumbs: [] };
+    try {
+      const detail = await fetch('/api/runs/' + last.id).then(r => r.json());
+      const thumbs = (detail.stories || []).slice(0, 4).map(s => {
+        const first = s.steps?.[0];
+        return first?.file ? '/runs/' + last.id + '/story/' + encodeURI(s.path) + '/' + encodeURI(first.file) : null;
+      }).filter(Boolean);
+      return { id: p.id, thumbs };
+    } catch { return { id: p.id, thumbs: [] }; }
+  }));
+  const coverFor = (pid) => (planCovers.find(c => c.id === pid)?.thumbs) || [];
+
+  const cards = plans.map(p => {
     const last = lastByPlan.get(p.id);
     const implemented = p.cases.filter(c => c.status === 'implemented').length;
     const pending = p.cases.filter(c => c.status === 'pending').length;
-    const lastStr = last ? ago(last.startedAt) + ' · ' + (last.gitHead ? last.gitHead.slice(0,7) : '—') : 'never';
-    const lastBadge = !last ? '<span class="muted">—</span>'
+    const lastBadge = !last ? '<span class="muted">never run</span>'
       : last.exitCode === null ? '<span class="badge running">running</span>'
       : last.exitCode === 0    ? '<span class="badge passed">passed</span>'
                                : '<span class="badge failed">failed</span>';
-    return '<tr class="clickable" data-id="' + p.id + '">' +
-      '<td><strong>' + escape(p.title) + '</strong> <span class="muted">v' + escape(p.version) + '</span><br>' +
-        '<span class="muted" style="font-size:11px">' + escape(p.id) + '</span></td>' +
-      '<td>' + implemented + ' / ' + p.cases.length + ' implemented' +
-        (pending ? ' <span class="muted">(' + pending + ' pending)</span>' : '') + '</td>' +
-      '<td>' + lastStr + '</td>' +
-      '<td>' + lastBadge + '</td>' +
-    '</tr>';
+    const lastStr = last
+      ? ago(last.startedAt) + (last.gitHead ? ' · <code>' + escape(last.gitHead.slice(0,7)) + '</code>' : '')
+      : '';
+    const thumbs = coverFor(p.id);
+    const stripHtml = thumbs.length
+      ? '<div class="strip">' + thumbs.map((t, i) => '<div class="thumb"><div class="img"><span class="num">' + (i+1) + '</span><img loading="lazy" src="' + t + '"></div></div>').join('') + '</div>'
+      : '';
+    return '<div class="card" data-id="' + escape(p.id) + '">' +
+      '<div class="head"><h2>' + escape(p.title) + '</h2><span class="ver">v' + escape(p.version) + '</span>' + lastBadge + '</div>' +
+      (p.description ? '<p class="desc">' + escape(p.description) + '</p>' : '') +
+      '<div class="meta">' +
+        '<span><strong>' + p.cases.length + '</strong> cases · ' + implemented + ' implemented' + (pending ? ' · ' + pending + ' pending' : '') + '</span>' +
+        (last ? '<span>last run ' + lastStr + '</span>' : '') +
+      '</div>' +
+      stripHtml +
+    '</div>';
   }).join('');
+
   view.innerHTML =
-    '<h1 style="margin:8px 0 12px;font-size:20px">Test plans</h1>' +
-    '<table><thead><tr><th>Plan</th><th>Coverage</th><th>Last run</th><th>Result</th></tr></thead>' +
-    '<tbody>' + rows + '</tbody></table>' +
-    '<div style="margin-top:14px"><a href="#/all-runs" class="muted">→ legacy: all runs</a></div>';
-  view.querySelectorAll('tr.clickable').forEach(tr => {
-    tr.addEventListener('click', () => location.hash = '#/plan/' + tr.dataset.id);
+    '<h1 style="margin:8px 0 14px;font-size:20px">Test plans</h1>' +
+    '<div class="gallery">' + cards + '</div>' +
+    '<div style="margin-top:18px"><a href="#/all-runs" class="muted" style="font-size:12px">→ legacy: all runs</a></div>';
+  view.querySelectorAll('.card').forEach(card => {
+    card.addEventListener('click', () => location.hash = '#/plan/' + card.dataset.id);
   });
 }
 
@@ -1522,39 +1570,79 @@ async function renderPlanDetail(planId) {
   if (plan.error) { view.innerHTML = '<div class="empty">Plan not found.</div>'; return; }
   const lastRun = runs[0];
 
-  // Per-case last result lookup (Phase 1: cheap, fetches the latest run only)
+  // Last-run case data (steps + files for thumbnails) when available.
+  let lastDetail = null;
   let lastCaseResults = [];
   if (lastRun) {
-    const r = await fetch('/api/runs/' + lastRun.id).then(r => r.json());
-    lastCaseResults = r.caseResults || [];
+    lastDetail = await fetch('/api/runs/' + lastRun.id).then(r => r.json());
+    lastCaseResults = lastDetail.caseResults || [];
   }
   const lastByCase = new Map(lastCaseResults.map(c => [c.caseId, c]));
+  const storyByCase = new Map();
+  for (const s of (lastDetail?.stories || [])) storyByCase.set(s.path, s);
 
-  const caseRows = plan.cases.map(c => {
+  // Build a case card. Pre-run cases show placeholder slates with the
+  // declared step titles + directives so the story is browsable before
+  // any run exists. Post-run cases swap in real screenshots.
+  const cardFor = (c) => {
     const last = lastByCase.get(c.id);
-    const statusBadge = c.status === 'pending' ? '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">pending</span>'
-      : c.status === 'skipped' ? '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">skipped</span>'
-      : !last ? '<span class="muted">—</span>'
-      : last.status === 'passed' ? '<span class="badge passed">passed</span>'
-      : last.status === 'failed' ? '<span class="badge failed">failed</span>'
+    const story = (last?.storyPath && storyByCase.get(last.storyPath)) || null;
+    const statusBadge = c.status === 'pending'
+      ? '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">pending · phase 3</span>'
+      : c.status === 'skipped'
+      ? '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">skipped</span>'
+      : !last
+      ? '<span class="muted" style="font-size:12px">never run</span>'
+      : last.status === 'passed'  ? '<span class="badge passed">passed</span>'
+      : last.status === 'failed'  ? '<span class="badge failed">failed</span>'
       : last.status === 'running' ? '<span class="badge running">running</span>'
       : '<span class="muted">—</span>';
-    const fbStr = last && last.feedback.length
+    const surfaceTag = '<span class="surface-pill">' + escape(c.surface) + '</span>';
+    const depsLine = c.deps.length
+      ? '<span class="deps-line"><span class="muted">deps:</span> ' + c.deps.map(d => '<code>' + escape(d) + '</code>').join('') + '</span>'
+      : '';
+    const fbLine = last?.feedback?.length
       ? last.feedback.map(f => f.count + ' ' + f.kind).join(' · ')
-      : '<span class="muted">—</span>';
-    const decision = last && last.decision
-      ? '<span class="decision-' + last.decision + '">' + last.decision + '</span>'
-      : '<span class="muted">—</span>';
-    const surfaceTag = '<span class="badge" style="background:var(--pill-bg);color:var(--muted)">' + c.surface + '</span>';
-    const declaredSteps = c.steps && c.steps.length ? c.steps.length + ' planned' : '—';
-    return '<tr class="clickable case-row" data-caseid="' + escape(c.id) + '"><td><strong>' + escape(c.title) + '</strong> ' + surfaceTag + '<br><span class="muted" style="font-size:11px">' + escape(c.id) + (c.deps.length ? ' · deps: ' + c.deps.map(escape).join(', ') : '') + '</span></td>' +
-      '<td>' + statusBadge + '</td>' +
-      '<td>' + (last && last.stepCount ? last.stepCount + ' steps' : '<span class="muted">' + declaredSteps + '</span>') + '</td>' +
-      '<td>' + fbStr + '</td>' +
-      '<td>' + decision + '</td>' +
-    '</tr>';
-  }).join('');
+      : '';
 
+    // Build the strip: real captured images for a finished run, otherwise
+    // placeholder slates with step number + directive label.
+    const declared = c.steps || [];
+    const stripCells = declared.map((s, i) => {
+      const captured = story?.steps?.[i];
+      if (captured?.file) {
+        const url = '/runs/' + lastRun.id + '/story/' + encodeURI(story.path) + '/' + encodeURI(captured.file);
+        return '<div class="thumb" data-step="' + i + '">' +
+          '<div class="img"><span class="num">' + (i+1) + '</span><img loading="lazy" src="' + url + '"></div>' +
+          '<div class="cap">' + escape(s.title) + '</div>' +
+        '</div>';
+      }
+      const dir = s.nav ? 'nav → ' + s.nav : (typeof s.waitMs === 'number' ? 'wait ' + s.waitMs + 'ms' : '');
+      return '<div class="thumb placeholder" data-step="' + i + '">' +
+        '<div class="img"><div class="ph-num">' + (i+1) + '</div>' +
+          (dir ? '<div class="ph-dir">' + escape(dir) + '</div>' : '') + '</div>' +
+        '<div class="cap">' + escape(s.title) + '</div>' +
+      '</div>';
+    }).join('');
+    const stripHtml = declared.length ? '<div class="strip">' + stripCells + '</div>' : '';
+
+    const actions = c.status === 'implemented'
+      ? '<button class="primary" data-act="run" data-caseid="' + escape(c.id) + '">Run only this case</button>' +
+        '<button data-act="open" data-caseid="' + escape(c.id) + '">Open case</button>'
+      : '<button data-act="open" data-caseid="' + escape(c.id) + '">Open case</button>';
+
+    return '<div class="card" data-caseid="' + escape(c.id) + '" data-runid="' + escape(lastRun?.id || '') + '" data-storypath="' + escape(story?.path || '') + '">' +
+      '<div class="head"><h2>' + escape(c.title) + '</h2>' + surfaceTag + statusBadge + '</div>' +
+      (c.description ? '<p class="desc">' + escape(c.description) + '</p>' : '') +
+      '<div class="meta">' + depsLine +
+        (last ? '<span>' + last.stepCount + ' steps · ' + (fbLine ? '<strong>' + fbLine + '</strong>' : 'no pins') + '</span>' : '') +
+      '</div>' +
+      stripHtml +
+      '<div class="actions">' + actions + '</div>' +
+    '</div>';
+  };
+
+  // Run history kept compact in a collapsed details panel.
   const runRows = runs.length ? runs.map(r => {
     const exitBadge = r.exitCode === null ? '<span class="badge running">running</span>'
       : r.exitCode === 0 ? '<span class="badge passed">passed</span>' : '<span class="badge failed">failed</span>';
@@ -1565,32 +1653,75 @@ async function renderPlanDetail(planId) {
       '<td>' + exitBadge + '</td>' +
       '<td>' + (r.review ? '<span class="decision-' + r.review.decision + '">' + r.review.decision + '</span>' : '<span class="muted">—</span>') + '</td>' +
     '</tr>';
-  }).join('') : '<tr><td colspan="4" class="muted" style="padding:18px;text-align:center">No runs yet — click "New run" to start.</td></tr>';
+  }).join('') : '<tr><td colspan="4" class="muted" style="padding:18px;text-align:center">No runs yet — click "New run" above.</td></tr>';
 
   view.innerHTML =
     '<div class="run-hero"><a href="#/" class="muted" style="font-size:12px">← all plans</a>' +
       '<h1>' + escape(plan.title) + '</h1>' +
       '<span class="muted">v' + escape(plan.version) + '</span></div>' +
     (plan.description ? '<p class="muted" style="margin:0 0 12px;line-height:1.55">' + escape(plan.description) + '</p>' : '') +
-    '<div class="panel"><div class="row" style="justify-content:space-between"><h3 style="margin:0">Cases</h3>' +
-      '<button class="primary" id="new-plan-run">New run · all implemented</button></div>' +
-    '<table style="margin-top:10px"><thead><tr><th>Case</th><th>Last status</th><th>Steps</th><th>Pins (last run)</th><th>Decision</th></tr></thead>' +
-    '<tbody>' + caseRows + '</tbody></table></div>' +
-    '<div class="panel"><h3 style="margin:0 0 8px">Run history</h3>' +
-    '<table><thead><tr><th>When</th><th>Git</th><th>Result</th><th>Decision</th></tr></thead><tbody>' + runRows + '</tbody></table></div>';
+    '<div style="display:flex;justify-content:flex-end;margin:0 0 12px"><button class="primary" id="new-plan-run">New run · all implemented</button></div>' +
+    '<div class="gallery">' + plan.cases.map(cardFor).join('') + '</div>' +
+    '<details class="panel" style="margin-top:18px"><summary class="muted" style="cursor:pointer">Run history (' + runs.length + ')</summary>' +
+    '<table style="margin-top:10px"><thead><tr><th>When</th><th>Git</th><th>Result</th><th>Decision</th></tr></thead><tbody>' + runRows + '</tbody></table></details>';
 
   document.getElementById('new-plan-run').addEventListener('click', async () => {
     const r = await fetch('/api/plans/' + planId + '/runs', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ scope: 'all' }),
     }).then(r => r.json());
+    if (r.error) { alert(r.error); return; }
     if (r.id) location.hash = '#/plan/' + planId + '/run/' + r.id;
   });
-  view.querySelectorAll('tr.clickable').forEach(tr => {
-    tr.addEventListener('click', () => {
-      if (tr.dataset.caseid) location.hash = '#/plan/' + planId + '/case/' + tr.dataset.caseid;
-      else if (tr.dataset.id) location.hash = '#/plan/' + planId + '/run/' + tr.dataset.id;
+  // Card-level click → open case detail
+  view.querySelectorAll('.gallery .card').forEach(card => {
+    card.addEventListener('click', (ev) => {
+      // Let nested buttons handle their own clicks
+      if (ev.target.closest('button')) return;
+      if (ev.target.closest('.thumb')) return;
+      location.hash = '#/plan/' + planId + '/case/' + card.dataset.caseid;
     });
+  });
+  // Thumb click → if there's a captured story, open the slideshow at that step
+  view.querySelectorAll('.gallery .thumb').forEach(thumb => {
+    thumb.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const card = thumb.closest('.card');
+      const cid = card?.dataset.caseid;
+      const rid = card?.dataset.runid;
+      const stepIdx = parseInt(thumb.dataset.step, 10);
+      if (rid && cid && !thumb.classList.contains('placeholder')) {
+        // Set sessionStorage so the slideshow opens on the chosen step
+        try { sessionStorage.setItem('slide:' + rid, String(stepIdx)); } catch { /* */ }
+        location.hash = '#/plan/' + planId + '/run/' + rid + '/' + cid;
+      } else {
+        // Placeholder thumb → just open case detail
+        if (cid) location.hash = '#/plan/' + planId + '/case/' + cid;
+      }
+    });
+  });
+  // Action buttons
+  view.querySelectorAll('button[data-act]').forEach(b => {
+    b.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const cid = b.dataset.caseid;
+      if (b.dataset.act === 'open') {
+        location.hash = '#/plan/' + planId + '/case/' + cid;
+        return;
+      }
+      if (b.dataset.act === 'run') {
+        const r = await fetch('/api/plans/' + planId + '/runs', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scope: { caseIds: [cid] } }),
+        }).then(r => r.json());
+        if (r.error) { alert(r.error); return; }
+        if (r.id) location.hash = '#/plan/' + planId + '/run/' + r.id;
+      }
+    });
+  });
+  // Run history rows (inside the collapsed details panel)
+  view.querySelectorAll('details tr.clickable').forEach(tr => {
+    tr.addEventListener('click', () => location.hash = '#/plan/' + planId + '/run/' + tr.dataset.id);
   });
 }
 
@@ -1780,9 +1911,30 @@ es.addEventListener('line', (e) => {
   const out = document.getElementById('run-output');
   if (out) { out.textContent += JSON.parse(e.data).line; out.scrollTop = out.scrollHeight; }
 });
-es.addEventListener('done', () => {
+es.addEventListener('done', async (e) => {
   statusEl.textContent = 'idle'; statusEl.className = 'badge';
   runEl.disabled = false;
+  // Auto-jump into the slideshow for the first finished case so the human
+  // sees the captured story without an extra click. Only if (a) the run had
+  // a plan and (b) the user hasn't navigated away during the run.
+  let payload = {};
+  try { payload = JSON.parse(e.data || '{}'); } catch { /* */ }
+  const finishedId = payload.id;
+  if (finishedId) {
+    try {
+      const r = await fetch('/api/runs/' + finishedId).then(r => r.json());
+      if (r && r.planId && Array.isArray(r.caseResults)) {
+        const firstCase = r.caseResults.find(c => c.storyPath && (c.status === 'passed' || c.status === 'failed'));
+        if (firstCase) {
+          // If the user is on a slideshow already, don't yank them.
+          if (!location.hash.match(/^#\\/plan\\/[^/]+\\/run\\/[^/]+\\/[^/]+$/)) {
+            location.hash = '#/plan/' + r.planId + '/run/' + finishedId + '/' + firstCase.caseId;
+            return;
+          }
+        }
+      }
+    } catch { /* fall through to route() */ }
+  }
   route();
 });
 
