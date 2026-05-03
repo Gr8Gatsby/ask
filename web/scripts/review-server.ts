@@ -1695,7 +1695,17 @@ themeBtn.addEventListener('click', () => {
 
 loadSpecs();
 route();
-setInterval(() => { if (!location.hash.startsWith('#/run/')) renderList(); }, 5000);
+// Refresh the current view periodically so a running test updates the
+// status. Use route() so plan-aware paths render the right view (the prior
+// version called renderList() unconditionally, which clobbered any plan
+// or plan-run page back to the legacy runs table).
+setInterval(() => {
+  const h = location.hash;
+  // Don't disrupt the slideshow — pin/popover state is local to the DOM.
+  if (h.startsWith('#/run/')) return;
+  if (h.match(/^#\\/plan\\/[^/]+\\/run\\/[^/]+\\/[^/]+$/)) return;
+  route();
+}, 5000);
 </script>
 </body></html>`
 
