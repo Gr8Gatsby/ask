@@ -95,15 +95,29 @@ targets:
       - target: AskMac
         embed: false
 
+  AskMacUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: Tests/AskMacUITests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: AskMac
+    dependencies:
+      - target: AskMac
+
 schemes:
   AskMac:
     build:
       targets:
         AskMac: all
         AskMacTests: [test]
+        AskMacUITests: [test]
     test:
       targets:
         - AskMacTests
+        - AskMacUITests
     archive:
       config: Release
 

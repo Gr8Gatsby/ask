@@ -1,0 +1,1052 @@
+{
+  "id": "manual-script-sweep",
+  "title": "Manual script sweep",
+  "version": "1.1.0",
+  "description": "Per-script regression: walk every Ask script through its golden path and edge cases on the iPhone webview, then on the AskMac native app. Each case isolates one script (disables others, enables only declared deps). Issues are pinned with kind + (x, y) location and the captured HTML for hand-off to a coding agent.",
+  "cases": [
+    {
+      "id": "hello-world-web",
+      "scriptId": "hello-world",
+      "surface": "web",
+      "title": "Hello World · Web",
+      "description": "Walk every primary surface for Hello World on the iPhone webview. A simple Hello World demo script — exercises the bare minimum of the script chrome. Surfaces visited: home feed, script detail, tasks, settings.",
+      "spec": "specs/scripts/hello-world.web.spec.ts",
+      "deps": [],
+      "status": "implemented",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open the home feed at /home with no other interaction; expect the script list to render.",
+          "nav": "/home"
+        },
+        {
+          "id": "tile-entry",
+          "title": "Tile / feed entry",
+          "description": "The hello-world tile or feed entry renders with its icon and name in the home feed.",
+          "waitMs": 300
+        },
+        {
+          "id": "tap-detail",
+          "title": "Tap into detail",
+          "description": "Navigate to /script/hello-world — the script's primary surface.",
+          "nav": "/script/hello-world"
+        },
+        {
+          "id": "empty-state",
+          "title": "Empty state",
+          "description": "Detail screen on first paint — what the user sees before data arrives.",
+          "waitMs": 300
+        },
+        {
+          "id": "populated-state",
+          "title": "Populated state",
+          "description": "Same screen after a brief settle — captures whatever blocks the script publishes.",
+          "waitMs": 900
+        },
+        {
+          "id": "primary-action",
+          "title": "Primary action",
+          "description": "Visit /tasks to confirm any tasks emitted by hello-world are in the feed.",
+          "nav": "/tasks"
+        },
+        {
+          "id": "error-refused",
+          "title": "Error / refused state",
+          "description": "Visit /settings to confirm hello-world permissions and toggles render correctly.",
+          "nav": "/settings"
+        },
+        {
+          "id": "back-out",
+          "title": "Back-out",
+          "description": "Return to the home feed; verify the tile state survives navigation.",
+          "nav": "/home"
+        }
+      ]
+    },
+    {
+      "id": "hello-world-mac",
+      "scriptId": "hello-world",
+      "surface": "askmac",
+      "title": "Hello World · AskMac",
+      "description": "Walk Settings ▸ Scripts ▸ Hello World on the AskMac native app. A simple Hello World demo script — exercises the bare minimum of the script chrome. Surfaces visited: scripts list, script row, permissions, blocks, logs.",
+      "driver": "computer-use",
+      "deps": [],
+      "status": "pending",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open AskMac and confirm Settings ▸ Scripts shows hello-world as enabled."
+        },
+        {
+          "id": "script-row",
+          "title": "Script row",
+          "description": "The hello-world row shows the manifest version, summary, and an enable/disable toggle."
+        },
+        {
+          "id": "permissions-sheet",
+          "title": "Permissions sheet",
+          "description": "The script's declared permissions are listed correctly for hello-world."
+        },
+        {
+          "id": "block-view",
+          "title": "Block view",
+          "description": "If hello-world publishes blocks, they render in the AskMac viewer with no errors."
+        },
+        {
+          "id": "logs-pane",
+          "title": "Logs / errors pane",
+          "description": "Recent log lines for hello-world appear; no red error rows."
+        },
+        {
+          "id": "disable-reenable",
+          "title": "Disable / re-enable",
+          "description": "Toggle hello-world off then on; verify clean teardown and re-installation."
+        }
+      ]
+    },
+    {
+      "id": "brew-monitor-web",
+      "scriptId": "brew-monitor",
+      "surface": "web",
+      "title": "Homebrew · Web",
+      "description": "Walk every primary surface for Homebrew on the iPhone webview. Checks for outdated Homebrew packages and lets you upgrade from iPhone. Surfaces visited: home feed, script detail, tasks, settings.",
+      "spec": "specs/scripts/brew-monitor.web.spec.ts",
+      "deps": [],
+      "status": "implemented",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open the home feed at /home with no other interaction; expect the script list to render.",
+          "nav": "/home"
+        },
+        {
+          "id": "tile-entry",
+          "title": "Tile / feed entry",
+          "description": "The brew-monitor tile or feed entry renders with its icon and name in the home feed.",
+          "waitMs": 300
+        },
+        {
+          "id": "tap-detail",
+          "title": "Tap into detail",
+          "description": "Navigate to /script/brew-monitor — the script's primary surface.",
+          "nav": "/script/brew-monitor"
+        },
+        {
+          "id": "empty-state",
+          "title": "Empty state",
+          "description": "Detail screen on first paint — what the user sees before data arrives.",
+          "waitMs": 300
+        },
+        {
+          "id": "populated-state",
+          "title": "Populated state",
+          "description": "Same screen after a brief settle — captures whatever blocks the script publishes.",
+          "waitMs": 900
+        },
+        {
+          "id": "primary-action",
+          "title": "Primary action",
+          "description": "Visit /tasks to confirm any tasks emitted by brew-monitor are in the feed.",
+          "nav": "/tasks"
+        },
+        {
+          "id": "error-refused",
+          "title": "Error / refused state",
+          "description": "Visit /settings to confirm brew-monitor permissions and toggles render correctly.",
+          "nav": "/settings"
+        },
+        {
+          "id": "back-out",
+          "title": "Back-out",
+          "description": "Return to the home feed; verify the tile state survives navigation.",
+          "nav": "/home"
+        }
+      ]
+    },
+    {
+      "id": "brew-monitor-mac",
+      "scriptId": "brew-monitor",
+      "surface": "askmac",
+      "title": "Homebrew · AskMac",
+      "description": "Walk Settings ▸ Scripts ▸ Homebrew on the AskMac native app. Checks for outdated Homebrew packages and lets you upgrade from iPhone. Surfaces visited: scripts list, script row, permissions, blocks, logs.",
+      "driver": "computer-use",
+      "deps": [],
+      "status": "pending",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open AskMac and confirm Settings ▸ Scripts shows brew-monitor as enabled."
+        },
+        {
+          "id": "script-row",
+          "title": "Script row",
+          "description": "The brew-monitor row shows the manifest version, summary, and an enable/disable toggle."
+        },
+        {
+          "id": "permissions-sheet",
+          "title": "Permissions sheet",
+          "description": "The script's declared permissions are listed correctly for brew-monitor."
+        },
+        {
+          "id": "block-view",
+          "title": "Block view",
+          "description": "If brew-monitor publishes blocks, they render in the AskMac viewer with no errors."
+        },
+        {
+          "id": "logs-pane",
+          "title": "Logs / errors pane",
+          "description": "Recent log lines for brew-monitor appear; no red error rows."
+        },
+        {
+          "id": "disable-reenable",
+          "title": "Disable / re-enable",
+          "description": "Toggle brew-monitor off then on; verify clean teardown and re-installation."
+        }
+      ]
+    },
+    {
+      "id": "github-web",
+      "scriptId": "github",
+      "surface": "web",
+      "title": "Git Repos · Web",
+      "description": "Walk every primary surface for Git Repos on the iPhone webview. Monitor local git repos and push/pull changes from iPhone. Surfaces visited: home feed, script detail, tasks, settings.",
+      "spec": "specs/scripts/github.web.spec.ts",
+      "deps": [],
+      "status": "implemented",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open the home feed at /home with no other interaction; expect the script list to render.",
+          "nav": "/home"
+        },
+        {
+          "id": "tile-entry",
+          "title": "Tile / feed entry",
+          "description": "The github tile or feed entry renders with its icon and name in the home feed.",
+          "waitMs": 300
+        },
+        {
+          "id": "tap-detail",
+          "title": "Tap into detail",
+          "description": "Navigate to /script/github — the script's primary surface.",
+          "nav": "/script/github"
+        },
+        {
+          "id": "empty-state",
+          "title": "Empty state",
+          "description": "Detail screen on first paint — what the user sees before data arrives.",
+          "waitMs": 300
+        },
+        {
+          "id": "populated-state",
+          "title": "Populated state",
+          "description": "Same screen after a brief settle — captures whatever blocks the script publishes.",
+          "waitMs": 900
+        },
+        {
+          "id": "primary-action",
+          "title": "Primary action",
+          "description": "Visit /tasks to confirm any tasks emitted by github are in the feed.",
+          "nav": "/tasks"
+        },
+        {
+          "id": "error-refused",
+          "title": "Error / refused state",
+          "description": "Visit /settings to confirm github permissions and toggles render correctly.",
+          "nav": "/settings"
+        },
+        {
+          "id": "back-out",
+          "title": "Back-out",
+          "description": "Return to the home feed; verify the tile state survives navigation.",
+          "nav": "/home"
+        }
+      ]
+    },
+    {
+      "id": "github-mac",
+      "scriptId": "github",
+      "surface": "askmac",
+      "title": "Git Repos · AskMac",
+      "description": "Walk Settings ▸ Scripts ▸ Git Repos on the AskMac native app. Monitor local git repos and push/pull changes from iPhone. Surfaces visited: scripts list, script row, permissions, blocks, logs.",
+      "driver": "computer-use",
+      "deps": [],
+      "status": "pending",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open AskMac and confirm Settings ▸ Scripts shows github as enabled."
+        },
+        {
+          "id": "script-row",
+          "title": "Script row",
+          "description": "The github row shows the manifest version, summary, and an enable/disable toggle."
+        },
+        {
+          "id": "permissions-sheet",
+          "title": "Permissions sheet",
+          "description": "The script's declared permissions are listed correctly for github."
+        },
+        {
+          "id": "block-view",
+          "title": "Block view",
+          "description": "If github publishes blocks, they render in the AskMac viewer with no errors."
+        },
+        {
+          "id": "logs-pane",
+          "title": "Logs / errors pane",
+          "description": "Recent log lines for github appear; no red error rows."
+        },
+        {
+          "id": "disable-reenable",
+          "title": "Disable / re-enable",
+          "description": "Toggle github off then on; verify clean teardown and re-installation."
+        }
+      ]
+    },
+    {
+      "id": "ollama-web",
+      "scriptId": "ollama",
+      "surface": "web",
+      "title": "Ollama · Web",
+      "description": "Walk every primary surface for Ollama on the iPhone webview. Monitors Ollama status and surfaces available updates. Surfaces visited: home feed, script detail, tasks, settings.",
+      "spec": "specs/scripts/ollama.web.spec.ts",
+      "deps": [],
+      "status": "implemented",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open the home feed at /home with no other interaction; expect the script list to render.",
+          "nav": "/home"
+        },
+        {
+          "id": "tile-entry",
+          "title": "Tile / feed entry",
+          "description": "The ollama tile or feed entry renders with its icon and name in the home feed.",
+          "waitMs": 300
+        },
+        {
+          "id": "tap-detail",
+          "title": "Tap into detail",
+          "description": "Navigate to /script/ollama — the script's primary surface.",
+          "nav": "/script/ollama"
+        },
+        {
+          "id": "empty-state",
+          "title": "Empty state",
+          "description": "Detail screen on first paint — what the user sees before data arrives.",
+          "waitMs": 300
+        },
+        {
+          "id": "populated-state",
+          "title": "Populated state",
+          "description": "Same screen after a brief settle — captures whatever blocks the script publishes.",
+          "waitMs": 900
+        },
+        {
+          "id": "primary-action",
+          "title": "Primary action",
+          "description": "Visit /tasks to confirm any tasks emitted by ollama are in the feed.",
+          "nav": "/tasks"
+        },
+        {
+          "id": "error-refused",
+          "title": "Error / refused state",
+          "description": "Visit /settings to confirm ollama permissions and toggles render correctly.",
+          "nav": "/settings"
+        },
+        {
+          "id": "back-out",
+          "title": "Back-out",
+          "description": "Return to the home feed; verify the tile state survives navigation.",
+          "nav": "/home"
+        }
+      ]
+    },
+    {
+      "id": "ollama-mac",
+      "scriptId": "ollama",
+      "surface": "askmac",
+      "title": "Ollama · AskMac",
+      "description": "Walk Settings ▸ Scripts ▸ Ollama on the AskMac native app. Monitors Ollama status and surfaces available updates. Surfaces visited: scripts list, script row, permissions, blocks, logs.",
+      "driver": "computer-use",
+      "deps": [],
+      "status": "pending",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open AskMac and confirm Settings ▸ Scripts shows ollama as enabled."
+        },
+        {
+          "id": "script-row",
+          "title": "Script row",
+          "description": "The ollama row shows the manifest version, summary, and an enable/disable toggle."
+        },
+        {
+          "id": "permissions-sheet",
+          "title": "Permissions sheet",
+          "description": "The script's declared permissions are listed correctly for ollama."
+        },
+        {
+          "id": "block-view",
+          "title": "Block view",
+          "description": "If ollama publishes blocks, they render in the AskMac viewer with no errors."
+        },
+        {
+          "id": "logs-pane",
+          "title": "Logs / errors pane",
+          "description": "Recent log lines for ollama appear; no red error rows."
+        },
+        {
+          "id": "disable-reenable",
+          "title": "Disable / re-enable",
+          "description": "Toggle ollama off then on; verify clean teardown and re-installation."
+        }
+      ]
+    },
+    {
+      "id": "gdocs-history-web",
+      "scriptId": "gdocs-history",
+      "surface": "web",
+      "title": "Google Docs History · Web",
+      "description": "Walk every primary surface for Google Docs History on the iPhone webview. Shows Google Docs viewed in the last 30 days from Safari and Chrome. Surfaces visited: home feed, script detail, tasks, settings.",
+      "spec": "specs/scripts/gdocs-history.web.spec.ts",
+      "deps": [],
+      "status": "implemented",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open the home feed at /home with no other interaction; expect the script list to render.",
+          "nav": "/home"
+        },
+        {
+          "id": "tile-entry",
+          "title": "Tile / feed entry",
+          "description": "The gdocs-history tile or feed entry renders with its icon and name in the home feed.",
+          "waitMs": 300
+        },
+        {
+          "id": "tap-detail",
+          "title": "Tap into detail",
+          "description": "Navigate to /script/gdocs-history — the script's primary surface.",
+          "nav": "/script/gdocs-history"
+        },
+        {
+          "id": "empty-state",
+          "title": "Empty state",
+          "description": "Detail screen on first paint — what the user sees before data arrives.",
+          "waitMs": 300
+        },
+        {
+          "id": "populated-state",
+          "title": "Populated state",
+          "description": "Same screen after a brief settle — captures whatever blocks the script publishes.",
+          "waitMs": 900
+        },
+        {
+          "id": "primary-action",
+          "title": "Primary action",
+          "description": "Visit /tasks to confirm any tasks emitted by gdocs-history are in the feed.",
+          "nav": "/tasks"
+        },
+        {
+          "id": "error-refused",
+          "title": "Error / refused state",
+          "description": "Visit /settings to confirm gdocs-history permissions and toggles render correctly.",
+          "nav": "/settings"
+        },
+        {
+          "id": "back-out",
+          "title": "Back-out",
+          "description": "Return to the home feed; verify the tile state survives navigation.",
+          "nav": "/home"
+        }
+      ]
+    },
+    {
+      "id": "gdocs-history-mac",
+      "scriptId": "gdocs-history",
+      "surface": "askmac",
+      "title": "Google Docs History · AskMac",
+      "description": "Walk Settings ▸ Scripts ▸ Google Docs History on the AskMac native app. Shows Google Docs viewed in the last 30 days from Safari and Chrome. Surfaces visited: scripts list, script row, permissions, blocks, logs.",
+      "driver": "computer-use",
+      "deps": [],
+      "status": "pending",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open AskMac and confirm Settings ▸ Scripts shows gdocs-history as enabled."
+        },
+        {
+          "id": "script-row",
+          "title": "Script row",
+          "description": "The gdocs-history row shows the manifest version, summary, and an enable/disable toggle."
+        },
+        {
+          "id": "permissions-sheet",
+          "title": "Permissions sheet",
+          "description": "The script's declared permissions are listed correctly for gdocs-history."
+        },
+        {
+          "id": "block-view",
+          "title": "Block view",
+          "description": "If gdocs-history publishes blocks, they render in the AskMac viewer with no errors."
+        },
+        {
+          "id": "logs-pane",
+          "title": "Logs / errors pane",
+          "description": "Recent log lines for gdocs-history appear; no red error rows."
+        },
+        {
+          "id": "disable-reenable",
+          "title": "Disable / re-enable",
+          "description": "Toggle gdocs-history off then on; verify clean teardown and re-installation."
+        }
+      ]
+    },
+    {
+      "id": "web-traffic-web",
+      "scriptId": "web-traffic",
+      "surface": "web",
+      "title": "Web Traffic · Web",
+      "description": "Walk every primary surface for Web Traffic on the iPhone webview. Parses browser history to show websites visited daily — Safari, Chrome, Brave, Firefox, Arc. Surfaces visited: home feed, script detail, tasks, settings.",
+      "spec": "specs/scripts/web-traffic.web.spec.ts",
+      "deps": [],
+      "status": "implemented",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open the home feed at /home with no other interaction; expect the script list to render.",
+          "nav": "/home"
+        },
+        {
+          "id": "tile-entry",
+          "title": "Tile / feed entry",
+          "description": "The web-traffic tile or feed entry renders with its icon and name in the home feed.",
+          "waitMs": 300
+        },
+        {
+          "id": "tap-detail",
+          "title": "Tap into detail",
+          "description": "Navigate to /script/web-traffic — the script's primary surface.",
+          "nav": "/script/web-traffic"
+        },
+        {
+          "id": "empty-state",
+          "title": "Empty state",
+          "description": "Detail screen on first paint — what the user sees before data arrives.",
+          "waitMs": 300
+        },
+        {
+          "id": "populated-state",
+          "title": "Populated state",
+          "description": "Same screen after a brief settle — captures whatever blocks the script publishes.",
+          "waitMs": 900
+        },
+        {
+          "id": "primary-action",
+          "title": "Primary action",
+          "description": "Visit /tasks to confirm any tasks emitted by web-traffic are in the feed.",
+          "nav": "/tasks"
+        },
+        {
+          "id": "error-refused",
+          "title": "Error / refused state",
+          "description": "Visit /settings to confirm web-traffic permissions and toggles render correctly.",
+          "nav": "/settings"
+        },
+        {
+          "id": "back-out",
+          "title": "Back-out",
+          "description": "Return to the home feed; verify the tile state survives navigation.",
+          "nav": "/home"
+        }
+      ]
+    },
+    {
+      "id": "web-traffic-mac",
+      "scriptId": "web-traffic",
+      "surface": "askmac",
+      "title": "Web Traffic · AskMac",
+      "description": "Walk Settings ▸ Scripts ▸ Web Traffic on the AskMac native app. Parses browser history to show websites visited daily — Safari, Chrome, Brave, Firefox, Arc. Surfaces visited: scripts list, script row, permissions, blocks, logs.",
+      "driver": "computer-use",
+      "deps": [],
+      "status": "pending",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open AskMac and confirm Settings ▸ Scripts shows web-traffic as enabled."
+        },
+        {
+          "id": "script-row",
+          "title": "Script row",
+          "description": "The web-traffic row shows the manifest version, summary, and an enable/disable toggle."
+        },
+        {
+          "id": "permissions-sheet",
+          "title": "Permissions sheet",
+          "description": "The script's declared permissions are listed correctly for web-traffic."
+        },
+        {
+          "id": "block-view",
+          "title": "Block view",
+          "description": "If web-traffic publishes blocks, they render in the AskMac viewer with no errors."
+        },
+        {
+          "id": "logs-pane",
+          "title": "Logs / errors pane",
+          "description": "Recent log lines for web-traffic appear; no red error rows."
+        },
+        {
+          "id": "disable-reenable",
+          "title": "Disable / re-enable",
+          "description": "Toggle web-traffic off then on; verify clean teardown and re-installation."
+        }
+      ]
+    },
+    {
+      "id": "task-demo-web",
+      "scriptId": "task-demo",
+      "surface": "web",
+      "title": "Task Demo · Web",
+      "description": "Walk every primary surface for Task Demo on the iPhone webview. End-to-end demo of the A2A task protocol: open_task, append_message, put_artifact. Surfaces visited: home feed, script detail, tasks, settings.",
+      "spec": "specs/scripts/task-demo.web.spec.ts",
+      "deps": [],
+      "status": "implemented",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open the home feed at /home with no other interaction; expect the script list to render.",
+          "nav": "/home"
+        },
+        {
+          "id": "tile-entry",
+          "title": "Tile / feed entry",
+          "description": "The task-demo tile or feed entry renders with its icon and name in the home feed.",
+          "waitMs": 300
+        },
+        {
+          "id": "tap-detail",
+          "title": "Tap into detail",
+          "description": "Navigate to /script/task-demo — the script's primary surface.",
+          "nav": "/script/task-demo"
+        },
+        {
+          "id": "empty-state",
+          "title": "Empty state",
+          "description": "Detail screen on first paint — what the user sees before data arrives.",
+          "waitMs": 300
+        },
+        {
+          "id": "populated-state",
+          "title": "Populated state",
+          "description": "Same screen after a brief settle — captures whatever blocks the script publishes.",
+          "waitMs": 900
+        },
+        {
+          "id": "primary-action",
+          "title": "Primary action",
+          "description": "Visit /tasks to confirm any tasks emitted by task-demo are in the feed.",
+          "nav": "/tasks"
+        },
+        {
+          "id": "error-refused",
+          "title": "Error / refused state",
+          "description": "Visit /settings to confirm task-demo permissions and toggles render correctly.",
+          "nav": "/settings"
+        },
+        {
+          "id": "back-out",
+          "title": "Back-out",
+          "description": "Return to the home feed; verify the tile state survives navigation.",
+          "nav": "/home"
+        }
+      ]
+    },
+    {
+      "id": "task-demo-mac",
+      "scriptId": "task-demo",
+      "surface": "askmac",
+      "title": "Task Demo · AskMac",
+      "description": "Walk Settings ▸ Scripts ▸ Task Demo on the AskMac native app. End-to-end demo of the A2A task protocol: open_task, append_message, put_artifact. Surfaces visited: scripts list, script row, permissions, blocks, logs.",
+      "driver": "computer-use",
+      "deps": [],
+      "status": "pending",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open AskMac and confirm Settings ▸ Scripts shows task-demo as enabled."
+        },
+        {
+          "id": "script-row",
+          "title": "Script row",
+          "description": "The task-demo row shows the manifest version, summary, and an enable/disable toggle."
+        },
+        {
+          "id": "permissions-sheet",
+          "title": "Permissions sheet",
+          "description": "The script's declared permissions are listed correctly for task-demo."
+        },
+        {
+          "id": "block-view",
+          "title": "Block view",
+          "description": "If task-demo publishes blocks, they render in the AskMac viewer with no errors."
+        },
+        {
+          "id": "logs-pane",
+          "title": "Logs / errors pane",
+          "description": "Recent log lines for task-demo appear; no red error rows."
+        },
+        {
+          "id": "disable-reenable",
+          "title": "Disable / re-enable",
+          "description": "Toggle task-demo off then on; verify clean teardown and re-installation."
+        }
+      ]
+    },
+    {
+      "id": "terminal-snapshot-web",
+      "scriptId": "terminal-snapshot",
+      "surface": "web",
+      "title": "Terminal Snapshot · Web",
+      "description": "Walk every primary surface for Terminal Snapshot on the iPhone webview. Capture the current state of any tmux terminal pane — text and image. Surfaces visited: home feed, script detail, tasks, settings.",
+      "spec": "specs/scripts/terminal-snapshot.web.spec.ts",
+      "deps": [
+        "terminal-manager"
+      ],
+      "status": "implemented",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open the home feed at /home with no other interaction; expect the script list to render.",
+          "nav": "/home"
+        },
+        {
+          "id": "tile-entry",
+          "title": "Tile / feed entry",
+          "description": "The terminal-snapshot tile or feed entry renders with its icon and name in the home feed.",
+          "waitMs": 300
+        },
+        {
+          "id": "tap-detail",
+          "title": "Tap into detail",
+          "description": "Navigate to /script/terminal-snapshot — the script's primary surface.",
+          "nav": "/script/terminal-snapshot"
+        },
+        {
+          "id": "empty-state",
+          "title": "Empty state",
+          "description": "Detail screen on first paint — what the user sees before data arrives.",
+          "waitMs": 300
+        },
+        {
+          "id": "populated-state",
+          "title": "Populated state",
+          "description": "Same screen after a brief settle — captures whatever blocks the script publishes.",
+          "waitMs": 900
+        },
+        {
+          "id": "primary-action",
+          "title": "Primary action",
+          "description": "Visit /tasks to confirm any tasks emitted by terminal-snapshot are in the feed.",
+          "nav": "/tasks"
+        },
+        {
+          "id": "error-refused",
+          "title": "Error / refused state",
+          "description": "Visit /settings to confirm terminal-snapshot permissions and toggles render correctly.",
+          "nav": "/settings"
+        },
+        {
+          "id": "back-out",
+          "title": "Back-out",
+          "description": "Return to the home feed; verify the tile state survives navigation.",
+          "nav": "/home"
+        }
+      ]
+    },
+    {
+      "id": "terminal-snapshot-mac",
+      "scriptId": "terminal-snapshot",
+      "surface": "askmac",
+      "title": "Terminal Snapshot · AskMac",
+      "description": "Walk Settings ▸ Scripts ▸ Terminal Snapshot on the AskMac native app. Capture the current state of any tmux terminal pane — text and image. Surfaces visited: scripts list, script row, permissions, blocks, logs.",
+      "driver": "computer-use",
+      "deps": [
+        "terminal-manager"
+      ],
+      "status": "pending",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open AskMac and confirm Settings ▸ Scripts shows terminal-snapshot as enabled."
+        },
+        {
+          "id": "script-row",
+          "title": "Script row",
+          "description": "The terminal-snapshot row shows the manifest version, summary, and an enable/disable toggle."
+        },
+        {
+          "id": "permissions-sheet",
+          "title": "Permissions sheet",
+          "description": "The script's declared permissions are listed correctly for terminal-snapshot."
+        },
+        {
+          "id": "block-view",
+          "title": "Block view",
+          "description": "If terminal-snapshot publishes blocks, they render in the AskMac viewer with no errors."
+        },
+        {
+          "id": "logs-pane",
+          "title": "Logs / errors pane",
+          "description": "Recent log lines for terminal-snapshot appear; no red error rows."
+        },
+        {
+          "id": "disable-reenable",
+          "title": "Disable / re-enable",
+          "description": "Toggle terminal-snapshot off then on; verify clean teardown and re-installation."
+        }
+      ]
+    },
+    {
+      "id": "claude-3-web",
+      "scriptId": "claude-3",
+      "surface": "web",
+      "title": "Claude 3 · Web",
+      "description": "Walk every primary surface for Claude 3 on the iPhone webview. Feed-first Claude Code session supervisor — routes permissions and session history to iPhone. Surfaces visited: home feed, script detail, tasks, settings.",
+      "spec": "specs/scripts/claude-3.web.spec.ts",
+      "deps": [
+        "terminal-manager"
+      ],
+      "status": "implemented",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open the home feed at /home with no other interaction; expect the script list to render.",
+          "nav": "/home"
+        },
+        {
+          "id": "tile-entry",
+          "title": "Tile / feed entry",
+          "description": "The claude-3 tile or feed entry renders with its icon and name in the home feed.",
+          "waitMs": 300
+        },
+        {
+          "id": "tap-detail",
+          "title": "Tap into detail",
+          "description": "Navigate to /script/claude-3 — the script's primary surface.",
+          "nav": "/script/claude-3"
+        },
+        {
+          "id": "empty-state",
+          "title": "Empty state",
+          "description": "Detail screen on first paint — what the user sees before data arrives.",
+          "waitMs": 300
+        },
+        {
+          "id": "populated-state",
+          "title": "Populated state",
+          "description": "Same screen after a brief settle — captures whatever blocks the script publishes.",
+          "waitMs": 900
+        },
+        {
+          "id": "session-list",
+          "title": "Session list",
+          "description": "The detail screen lists active and recent Claude Code sessions; verify the badges (tmux/in-process/headless) render correctly.",
+          "waitMs": 500
+        },
+        {
+          "id": "primary-action",
+          "title": "Primary action",
+          "description": "Visit /tasks to confirm any tasks emitted by claude-3 are in the feed.",
+          "nav": "/tasks"
+        },
+        {
+          "id": "error-refused",
+          "title": "Error / refused state",
+          "description": "Visit /settings to confirm claude-3 permissions and toggles render correctly.",
+          "nav": "/settings"
+        },
+        {
+          "id": "back-out",
+          "title": "Back-out",
+          "description": "Return to the home feed; verify the tile state survives navigation.",
+          "nav": "/home"
+        }
+      ]
+    },
+    {
+      "id": "claude-3-mac",
+      "scriptId": "claude-3",
+      "surface": "askmac",
+      "title": "Claude 3 · AskMac",
+      "description": "Walk Settings ▸ Scripts ▸ Claude 3 on the AskMac native app. Feed-first Claude Code session supervisor — routes permissions and session history to iPhone. Surfaces visited: scripts list, script row, permissions, blocks, logs.",
+      "driver": "computer-use",
+      "deps": [
+        "terminal-manager"
+      ],
+      "status": "pending",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open AskMac and confirm Settings ▸ Scripts shows claude-3 as enabled."
+        },
+        {
+          "id": "script-row",
+          "title": "Script row",
+          "description": "The claude-3 row shows the manifest version, summary, and an enable/disable toggle."
+        },
+        {
+          "id": "permissions-sheet",
+          "title": "Permissions sheet",
+          "description": "The script's declared permissions are listed correctly for claude-3."
+        },
+        {
+          "id": "block-view",
+          "title": "Block view",
+          "description": "If claude-3 publishes blocks, they render in the AskMac viewer with no errors."
+        },
+        {
+          "id": "logs-pane",
+          "title": "Logs / errors pane",
+          "description": "Recent log lines for claude-3 appear; no red error rows."
+        },
+        {
+          "id": "disable-reenable",
+          "title": "Disable / re-enable",
+          "description": "Toggle claude-3 off then on; verify clean teardown and re-installation."
+        }
+      ]
+    },
+    {
+      "id": "codex-3-web",
+      "scriptId": "codex-3",
+      "surface": "web",
+      "title": "Codex 3 · Web",
+      "description": "Walk every primary surface for Codex 3 on the iPhone webview. Feed-first Codex session supervisor with tmux transport and task-backed history. Surfaces visited: home feed, script detail, tasks, settings.",
+      "spec": "specs/scripts/codex-3.web.spec.ts",
+      "deps": [
+        "terminal-manager"
+      ],
+      "status": "implemented",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open the home feed at /home with no other interaction; expect the script list to render.",
+          "nav": "/home"
+        },
+        {
+          "id": "tile-entry",
+          "title": "Tile / feed entry",
+          "description": "The codex-3 tile or feed entry renders with its icon and name in the home feed.",
+          "waitMs": 300
+        },
+        {
+          "id": "tap-detail",
+          "title": "Tap into detail",
+          "description": "Navigate to /script/codex-3 — the script's primary surface.",
+          "nav": "/script/codex-3"
+        },
+        {
+          "id": "empty-state",
+          "title": "Empty state",
+          "description": "Detail screen on first paint — what the user sees before data arrives.",
+          "waitMs": 300
+        },
+        {
+          "id": "populated-state",
+          "title": "Populated state",
+          "description": "Same screen after a brief settle — captures whatever blocks the script publishes.",
+          "waitMs": 900
+        },
+        {
+          "id": "session-list",
+          "title": "Session list",
+          "description": "The detail screen lists active and recent Codex sessions with tmux targets; verify the session pill renders.",
+          "waitMs": 500
+        },
+        {
+          "id": "primary-action",
+          "title": "Primary action",
+          "description": "Visit /tasks to confirm any tasks emitted by codex-3 are in the feed.",
+          "nav": "/tasks"
+        },
+        {
+          "id": "error-refused",
+          "title": "Error / refused state",
+          "description": "Visit /settings to confirm codex-3 permissions and toggles render correctly.",
+          "nav": "/settings"
+        },
+        {
+          "id": "back-out",
+          "title": "Back-out",
+          "description": "Return to the home feed; verify the tile state survives navigation.",
+          "nav": "/home"
+        }
+      ]
+    },
+    {
+      "id": "codex-3-mac",
+      "scriptId": "codex-3",
+      "surface": "askmac",
+      "title": "Codex 3 · AskMac",
+      "description": "Walk Settings ▸ Scripts ▸ Codex 3 on the AskMac native app. Feed-first Codex session supervisor with tmux transport and task-backed history. Surfaces visited: scripts list, script row, permissions, blocks, logs.",
+      "driver": "computer-use",
+      "deps": [
+        "terminal-manager"
+      ],
+      "status": "pending",
+      "steps": [
+        {
+          "id": "cold-open",
+          "title": "Cold open",
+          "description": "Open AskMac and confirm Settings ▸ Scripts shows codex-3 as enabled."
+        },
+        {
+          "id": "script-row",
+          "title": "Script row",
+          "description": "The codex-3 row shows the manifest version, summary, and an enable/disable toggle."
+        },
+        {
+          "id": "permissions-sheet",
+          "title": "Permissions sheet",
+          "description": "The script's declared permissions are listed correctly for codex-3."
+        },
+        {
+          "id": "block-view",
+          "title": "Block view",
+          "description": "If codex-3 publishes blocks, they render in the AskMac viewer with no errors."
+        },
+        {
+          "id": "logs-pane",
+          "title": "Logs / errors pane",
+          "description": "Recent log lines for codex-3 appear; no red error rows."
+        },
+        {
+          "id": "disable-reenable",
+          "title": "Disable / re-enable",
+          "description": "Toggle codex-3 off then on; verify clean teardown and re-installation."
+        }
+      ]
+    }
+  ]
+}

@@ -149,9 +149,20 @@ class SessionRegistry:
             self._index_aliases(session)
             return session
 
-        seed = raw_id or tmux_target or tty or cwd or str(time.time())
-        digest = hashlib.sha1(seed.encode()).hexdigest()[:10]
-        sid = f'codex3:{digest}'
+        # Seed priority: cwd → tmux_target → tty → raw_id → time. The same project
+        # directory produces the same digest across CLI restarts, so chat history
+        # (keyed by task_id == session_id) accumulates instead of fragmenting per
+        # `codex` invocation. If two concurrent sessions share a cwd, the first
+        # owns the cwd-derived sid and the second falls back to tmux/tty/raw_id.
+        sid = ''
+        for seed in (cwd, tmux_target, tty, raw_id, str(time.time())):
+            if not seed:
+                continue
+            digest = hashlib.sha1(seed.encode()).hexdigest()[:10]
+            candidate = f'codex3:{digest}'
+            if candidate not in self.sessions:
+                sid = candidate
+                break
         session = SessionRecord(
             session_id=sid,
             task_id=sid,

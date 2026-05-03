@@ -50,6 +50,7 @@ class SessionRecord:
     pending_permission: Optional[PendingPermission] = None
     stopped_at: float = 0.0
     last_prompt: str = ''
+    first_prompt: str = ''   # first user message — used as display title
 
     def touch(self):
         self.last_seen = time.time()
@@ -79,6 +80,7 @@ class SessionRecord:
             permission_mode=raw.get('permission_mode', 'supervised'),
             stopped_at=float(raw.get('stopped_at', 0.0)),
             last_prompt=raw.get('last_prompt', ''),
+            first_prompt=raw.get('first_prompt', ''),
         )
         record.pending_permission = PendingPermission.from_dict(raw.get('pending_permission'))
         return record
@@ -139,9 +141,20 @@ class SessionRegistry:
             self._index_aliases(s)
             return s
 
-        seed = raw_id or tty or cwd or str(time.time())
-        digest = hashlib.sha1(seed.encode()).hexdigest()[:10]
-        sid = f'claude3:{digest}'
+        # Seed priority: cwd → tty → raw_id → time. The same project directory
+        # produces the same digest across CLI restarts, so chat history (keyed by
+        # task_id == session_id) accumulates instead of fragmenting per `claude`
+        # invocation. If two concurrent sessions share a cwd, the first owns the
+        # cwd-derived sid and the second falls back to tty/raw_id.
+        sid = ''
+        for seed in (cwd, tty, raw_id, str(time.time())):
+            if not seed:
+                continue
+            digest = hashlib.sha1(seed.encode()).hexdigest()[:10]
+            candidate = f'claude3:{digest}'
+            if candidate not in self.sessions:
+                sid = candidate
+                break
         s = SessionRecord(
             session_id=sid,
             task_id=sid,

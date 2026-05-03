@@ -133,8 +133,10 @@ function PendingConfirmationBar({
 
 interface LocalMessage {
   key: string
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'approval'
   text: string
+  approvalTitle?: string
+  approvalBody?: string
 }
 
 function extractText(partsJSON: string): string {
@@ -216,6 +218,21 @@ export default function SessionChatScreen() {
     setSending(false)
   }
 
+  const handleApprove = async (value: string) => {
+    if (!sessionBlock || sending) return
+    setSending(true)
+    const pc = payload?.pending_confirmation
+    setLocalMessages(prev => [...prev, {
+      key: `approval-${Date.now()}`,
+      role: 'approval',
+      text: value,
+      approvalTitle: pc?.title,
+      approvalBody: pc?.body,
+    }])
+    await respond(sessionBlock.blockID, value)
+    setSending(false)
+  }
+
   const handleStop = async () => {
     if (!sessionBlock) return
     await respond(sessionBlock.blockID, '__close_session__')
@@ -279,10 +296,13 @@ export default function SessionChatScreen() {
         <span>Back</span>
       </button>
 
-      {/* Working indicator + title in center */}
-      <div className="flex-1 flex items-center justify-center gap-2">
+      {/* Working indicator + session name in center */}
+      <div className="flex-1 flex items-center justify-center gap-2 min-w-0 px-2">
         {payload?.is_working && (
-          <div className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: accentColor }} />
+          <div className="w-2 h-2 rounded-full animate-pulse flex-shrink-0" style={{ backgroundColor: accentColor }} />
+        )}
+        {payload?.project && (
+          <span className="text-[15px] font-semibold text-ask-text truncate">{payload.project}</span>
         )}
       </div>
 
@@ -313,6 +333,29 @@ export default function SessionChatScreen() {
                 <div key={msg.key} className="flex justify-end">
                   <div className="max-w-[80%] rounded-[20px] rounded-br-[5px] px-3.5 py-2.5 bg-ask-blue text-white text-[15px] leading-snug">
                     {msg.text}
+                  </div>
+                </div>
+              )
+            }
+            if (msg.role === 'approval') {
+              const lc = msg.text.toLowerCase()
+              const isDeny = lc === 'deny' || lc.startsWith('deny')
+              return (
+                <div key={msg.key} className="flex justify-end">
+                  <div className="max-w-[85%] rounded-2xl rounded-br-[5px] overflow-hidden border border-ask-sep/50 bg-ask-card2 text-right">
+                    {(msg.approvalTitle || msg.approvalBody) && (
+                      <div className="px-3 pt-2.5 pb-2 border-b border-ask-sep/40 text-left">
+                        {msg.approvalTitle && (
+                          <p className="text-[11px] font-semibold text-ask-secondary mb-1">{msg.approvalTitle}</p>
+                        )}
+                        {msg.approvalBody && (
+                          <p className="text-[12px] font-mono text-ask-text leading-snug break-all">{msg.approvalBody}</p>
+                        )}
+                      </div>
+                    )}
+                    <div className={`px-3 py-2 text-[13px] font-semibold ${isDeny ? 'text-ask-red' : 'text-ask-green'}`}>
+                      {msg.text}
+                    </div>
                   </div>
                 </div>
               )
@@ -374,7 +417,7 @@ export default function SessionChatScreen() {
           body={payload.pending_confirmation.body}
           options={payload.pending_confirmation.options}
           accentColor={accentColor}
-          onRespond={val => handleSend(val)}
+          onRespond={val => handleApprove(val)}
         />
       )}
       {sessionBlock && (
@@ -479,7 +522,7 @@ export default function SessionChatScreen() {
                 body={payload.pending_confirmation.body}
                 options={payload.pending_confirmation.options}
                 accentColor={accentColor}
-                onRespond={val => handleSend(val)}
+                onRespond={val => handleApprove(val)}
               />
             </div>
           )}

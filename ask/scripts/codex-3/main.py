@@ -461,11 +461,12 @@ class Codex3:
         for session in list(self._registry.sessions.values()):
             if session.state == 'stopped':
                 continue
-            alive = False
             if session.tmux_target:
                 alive = pane_exists(session.tmux_target)
             elif session.tty:
                 alive = tty_exists(session.tty)
+            else:
+                alive = True  # no routing info yet — assume alive to avoid false eviction
             if alive:
                 if session.tty:
                     asyncio.create_task(self._tm_register(session))
@@ -495,9 +496,15 @@ class Codex3:
         await self._discover_active_processes()
 
     async def _heartbeat(self):
+        cycles = 0
         while True:
             await asyncio.sleep(15)
+            cycles += 1
             try:
+                # Every 4 cycles (~1 min) drop the emit dedup cache so any
+                # block AskMac silently dropped gets re-pushed.
+                if cycles % 4 == 0:
+                    self._emitted_payloads.clear()
                 await self._refresh_sessions()
             except Exception as exc:
                 _log(f'heartbeat error: {exc}', 'WARN')
@@ -702,7 +709,8 @@ class Codex3:
         ok = await self._route_text(session, text)
         if not ok:
             return {'error': 'session is not routable'}
-        await self.append_message(session.task_id, 'user', text)
+        # Don't append the user message here — the agent's UserPromptSubmit hook
+        # fires _handle_user_prompt which is the single writer for user turns.
         session.state = 'running_tool'
         session.preview = text[:200]
         await self._set_task_status(session, 'working')
@@ -785,7 +793,8 @@ class Codex3:
             ok = await self._route_text(session, value)
             _log(f'reply session={session.session_id!r} ok={ok} text={value[:80]!r}')
             if ok:
-                self._fire_a2a(self.append_message(session.task_id, 'user', value))
+                # Don't append the user message here — _handle_user_prompt is
+                # the single writer (fires from the agent's UserPromptSubmit hook).
                 session.state = 'running_tool'
                 session.preview = value[:200]
                 self._fire_a2a(self._set_task_status(session, 'working'))
