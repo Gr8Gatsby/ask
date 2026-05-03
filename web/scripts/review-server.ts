@@ -823,6 +823,7 @@ function setPanel(open) {
 menuTrigger.addEventListener('click', () => setPanel(!sidePanel.classList.contains('open')));
 panelBackdrop.addEventListener('click', () => setPanel(false));
 closePanelBtn.innerHTML = SVG.remove;
+closePanelBtn.addEventListener('click', () => setPanel(false));
 
 // ---------- lightbox with zoom + pan ----------------------------------------
 const lightbox = document.getElementById('lightbox');
