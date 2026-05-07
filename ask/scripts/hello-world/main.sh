@@ -8,6 +8,11 @@ mkdir -p "$(dirname "$_LOCK")"
 exec 9>"$_LOCK"
 flock -n 9 || { printf '[hello-world] another instance already running, exiting\n' >&2; exit 0; }
 
+# Parent-death watchdog — exit if AskMac (parent) goes away.
+_ASK_PARENT=$PPID
+( while kill -0 "$_ASK_PARENT" 2>/dev/null; do sleep 5; done
+  pkill -P $$ 2>/dev/null; kill -TERM $$ 2>/dev/null ) &
+
 CONFIRM_ID="hello-world-confirm"
 STATUS_ID="hello-world-status"
 RESET_DELAY=30

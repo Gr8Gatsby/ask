@@ -76,6 +76,16 @@ Only one installation can proceed at a time; concurrent installs are prevented.
 - A reload triggered by the file watcher during an active install is deferred until the install completes
 - The lock is released even if the install fails or is cancelled
 
+### 9. Daemon Orphan Cleanup
+
+Script daemons (the Python and bash `main.{py,sh}` processes that AskMac spawns) must not survive past the app lifetime.
+
+- Each daemon detects when its parent (AskMac) goes away and exits on its own within ≤5 seconds, even if AskMac was force-quit, crashed, or killed without firing termination notifications
+- On every AskMac launch, any leftover daemons from prior runs that were re-parented to launchd (PPID = 1) and are still running are killed before new daemons are spawned
+- The detection is scoped to processes whose command line points at `~/.ask/scripts/` or `~/.ask/dev-vault/` and ends in `main.sh` or `main.py` — unrelated processes are never touched
+- AskMac also stops all live daemons on the standard graceful-quit path (`NSApplication.willTerminateNotification`)
+- Why this matters: orphan daemons retain AskMac's code-signing identity, so any file access they perform after AskMac quit triggers TCC prompts attributed to "AskMac" — even when AskMac itself is closed. They also hold open Unix sockets at `~/.ask/sockets/*.sock`, conflicting with fresh daemons on next launch.
+
 ---
 
 ## Changelog
@@ -84,3 +94,4 @@ Only one installation can proceed at a time; concurrent installs are prevented.
 |---|---|
 | 2026-04-07 | Initial spec |
 | 2026-04-07 | Implemented all 8 features |
+| 2026-05-07 | Add requirement #9 (daemon orphan cleanup). Implementation: per-script `_install_parent_watchdog()` (Python) / `kill -0 $PPID` watchdog (bash) polling every 5 s; `ScriptManager.reapOrphanedDaemons()` runs `ps -axo pid,ppid,command`, filters PPID==1 + path matches AskMac script vaults, kills survivors via `SIGKILL`. Verified: hard-killed AskMac → 4 daemons exited within 7 s on their own; spawned a PPID=1 fake orphan, launched AskMac, orphan was reaped within 5 s |

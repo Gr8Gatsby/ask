@@ -1,7 +1,7 @@
 {
   "id": "gdocs-history",
   "name": "Google Docs History",
-  "version": "1.0",
+  "version": "1.0.1",
   "description": "Shows Google Docs viewed in the last 30 days from Safari and Chrome",
   "entry": "main.py",
   "icon": "doc.text.magnifyingglass"
