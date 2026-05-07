@@ -1497,7 +1497,22 @@ class Claude3:
                 stdin_task.cancel()
 
 
+def _install_parent_watchdog():
+    """Exit if our parent (AskMac) goes away. Without this, a force-quit of
+    AskMac leaves the daemon reparented to launchd, retaining AskMac's TCC
+    identity and triggering ghost prompts on Documents/etc. access."""
+    import threading, time
+    def _watch():
+        while True:
+            time.sleep(5)
+            if os.getppid() == 1:
+                _log('parent (AskMac) gone — exiting', 'WARN')
+                os._exit(0)
+    threading.Thread(target=_watch, daemon=True).start()
+
+
 if __name__ == '__main__':
+    _install_parent_watchdog()
     try:
         asyncio.run(Claude3().run())
     except KeyboardInterrupt:

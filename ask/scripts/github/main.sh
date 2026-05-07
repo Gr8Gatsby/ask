@@ -12,6 +12,13 @@ mkdir -p "$(dirname "$_LOCK")"
 exec 9>"$_LOCK"
 flock -n 9 || { printf '[github] another instance already running, exiting\n' >&2; exit 0; }
 
+# Parent-death watchdog — exit if AskMac (parent) goes away. Without this, when
+# AskMac is force-quit or crashes the script gets reparented to launchd and
+# lingers forever, retaining AskMac's TCC identity (causing ghost prompts).
+_ASK_PARENT=$PPID
+( while kill -0 "$_ASK_PARENT" 2>/dev/null; do sleep 5; done
+  pkill -P $$ 2>/dev/null; kill -TERM $$ 2>/dev/null ) &
+
 REFRESH_SECS=300  # 5 minutes
 MAX_REPOS=100
 

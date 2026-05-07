@@ -383,5 +383,19 @@ async def main():
     await mcp.initialize(client_name='gdocs-history')
     await run(mcp, test_mode=test_mode)
 
+def _install_parent_watchdog():
+    """Exit if our parent (AskMac) goes away — prevents zombie scripts that
+    retain AskMac's TCC identity and trigger ghost prompts."""
+    import threading, time
+    def _watch():
+        while True:
+            time.sleep(5)
+            if os.getppid() == 1:
+                print('[gdocs-history] parent (AskMac) gone — exiting', file=sys.stderr, flush=True)
+                os._exit(0)
+    threading.Thread(target=_watch, daemon=True).start()
+
+
 if __name__ == '__main__':
+    _install_parent_watchdog()
     asyncio.run(main())

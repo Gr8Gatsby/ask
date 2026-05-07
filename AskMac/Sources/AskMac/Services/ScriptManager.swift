@@ -258,10 +258,74 @@ final class ScriptManager: @unchecked Sendable {
     }
 
     func start() {
+        reapOrphanedDaemons()
         discoverAndLaunch()
         ensureSDKInVault()
         purgeBlocksForDisabledScripts()
         startVaultWatcher()
+        observeAppTermination()
+    }
+
+    /// Kill any leftover script daemons from prior AskMac runs that didn't
+    /// shut down cleanly. They get reparented to launchd (PPID=1) and survive
+    /// AskMac quit, retaining AskMac's TCC identity — which makes macOS show
+    /// "AskMac would like to access X" prompts that are attributed to a long-
+    /// dead instance. Each script also has a parent-death watchdog as the
+    /// first line of defense; this reaper is the safety net for cases where
+    /// the watchdog hasn't ticked yet (5 s polling) or AskMac crashed mid-spawn.
+    private func reapOrphanedDaemons() {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/ps")
+        task.arguments = ["-axo", "pid,ppid,command"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        do { try task.run() } catch {
+            logger.error("orphan reaper: ps failed: \(error)")
+            return
+        }
+        // Read to EOF first — `ps` produces several KB and will block on a full
+        // pipe if we waitUntilExit before draining. Closing happens when ps exits.
+        guard let data = try? pipe.fileHandleForReading.readToEnd(),
+              let text = String(data: data, encoding: .utf8) else {
+            task.waitUntilExit()
+            return
+        }
+        task.waitUntilExit()
+        var killed: [Int32] = []
+        for line in text.split(separator: "\n") {
+            let parts = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+            guard parts.count >= 3,
+                  let pid = Int32(parts[0]),
+                  let ppid = Int32(parts[1]),
+                  ppid == 1 else { continue }
+            let cmd = String(parts[2])
+            // Match Ask script daemons in either prod or dev vault. Use a
+            // deliberately tight pattern to avoid touching unrelated processes.
+            guard cmd.contains("/.ask/scripts/") || cmd.contains("/.ask/dev-vault/") || cmd.contains("/ask/dev-vault/")
+            else { continue }
+            guard cmd.hasSuffix("main.sh") || cmd.hasSuffix("main.py")
+                  || cmd.contains("main.sh ") || cmd.contains("main.py ") else { continue }
+            kill(pid, SIGKILL)
+            killed.append(pid)
+        }
+        if !killed.isEmpty {
+            let pidList = killed.map(String.init).joined(separator: ",")
+            logger.error("Reaped \(killed.count) orphaned Ask daemons from prior runs: \(pidList)")
+        }
+    }
+
+    /// Best-effort cleanup on app quit. Crash/force-quit doesn't trigger this —
+    /// that's what the reaper + per-script watchdog cover.
+    private var terminationObserver: NSObjectProtocol?
+    private func observeAppTermination() {
+        guard terminationObserver == nil else { return }
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.stop()
+        }
     }
 
     /// Copy ask_sdk.py from the app bundle to the vault root if it isn't already there.
