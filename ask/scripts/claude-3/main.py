@@ -320,7 +320,11 @@ class Claude3:
     async def _emit_start_session_block(self):
         choices = []
         self._start_choices = {}
-        repos = find_repos()
+        try:
+            repos = await asyncio.wait_for(asyncio.to_thread(find_repos), timeout=3.0)
+        except (asyncio.TimeoutError, Exception) as exc:
+            _log(f'find_repos timed out or failed ({exc}) — emitting empty picker', 'WARN')
+            repos = []
         settings_path = os.path.expanduser('~/.ask/claude3-settings.json')
         settings = _load_json(settings_path, {'recent_repos': []})
         recent = settings.get('recent_repos', [])
@@ -423,12 +427,16 @@ class Claude3:
             return False
 
     async def _tm_send_text(self, session: SessionRecord, text: str) -> bool:
-        if not session.raw_id:
+        if session.tmux_target:
+            args = {'target': session.tmux_target, 'text': text}
+        elif session.raw_id:
+            args = {'session_id': session.raw_id, 'text': text}
+        else:
             return False
         try:
             await self._rpc('tools/call', {
                 'name': 'send_text',
-                'arguments': {'session_id': session.raw_id, 'text': text},
+                'arguments': args,
             }, timeout=20.0)
             return True
         except Exception as e:
@@ -510,10 +518,10 @@ class Claude3:
             try:
                 await self._call_tool('wait_for_pattern', {
                     'target': session.tmux_target,
-                    'pattern': r'[>?❯]\s*$',
-                    'timeout': 30.0,
+                    'pattern': r'^[>❯]',
+                    'timeout': 10.0,
                     'stable_count': 2,
-                }, timeout=35.0)
+                }, timeout=12.0)
             except Exception as e:
                 _log(f'wait_for_pattern timed out for {session.session_id}: {e}', 'WARN')
             return await self._tm_send_text(session, text)
@@ -652,14 +660,20 @@ class Claude3:
                 session.tmux_target = tmux_target
                 _log(f'backfilled tmux_target={tmux_target!r} for raw_id={raw_id[:8]}')
 
-        await self._set_task_status(session, 'working')
-        await self._append_structured_message(session, 'Session started', f'Launched in `{session.project}`.')
+        # Register with terminal-manager FIRST so messaging works even if A2A
+        # writes are slow. Without this, a flood of pending MCP calls (e.g.
+        # supervisor session firing pre_tool_use storms) can stall this handler
+        # before _tm_register runs, leaving send_text with "Unknown session".
         await self._tm_register(session)
+        _save_registry(self._registry)
+        _log(f'session_start raw_id={raw_id[:8]} tty={tty} tmux={session.tmux_target!r} project={project}')
+
+        # A2A writes to AskMac don't gate routing — fire and forget.
+        self._fire_a2a(self._set_task_status(session, 'working'))
+        self._fire_a2a(self._append_structured_message(session, 'Session started', f'Launched in `{session.project}`.'))
         await self._emit_session_block(session)
         await self._emit_tile()
         await self._emit_start_session_block()
-        _save_registry(self._registry)
-        _log(f'session_start raw_id={raw_id[:8]} tty={tty} tmux={session.tmux_target!r} project={project}')
 
         # Start TTY monitor for interactive prompt detection
         if session.session_id not in self._tty_monitors:
@@ -1471,8 +1485,12 @@ class Claude3:
             self._initialized = True
             _log('MCP initialized')
             await self._refresh_sessions()
-            await self._discover_active_processes()
-            await self._emit_start_session_block()
+            # Do not block startup on these — they each fan out to filesystem
+            # (find_repos walks Documents) or external tool calls. If anything
+            # stalls (TCC, slow disk, terminal-manager startup), the event loop
+            # gets starved and incoming socket events queue forever.
+            asyncio.create_task(self._discover_active_processes())
+            asyncio.create_task(self._emit_start_session_block())
             await stdin_task
         finally:
             if not stdin_task.done():
