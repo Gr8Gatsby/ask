@@ -42,16 +42,15 @@ SIGN_PKG="Developer ID Installer"
 staple_with_retry() {
     local file="$1"
     local backup="${file}.pre-staple-backup"
-    # Detect macOS Tahoe (26.x) — xcrun stapler has a known bug on Tahoe beta where
-    # CloudKit ticket validation fails (Error 65) even for properly notarized files.
-    # See: https://github.com/Gr8Gatsby/ask/issues/32
+    # Skip local stapling on macOS 26.x — local `xcrun stapler` has been
+    # observed to fail with Error 65 on this machine (often correlates with
+    # an oscdn.apple.com CDN SSL mismatch at the local network edge). The
+    # artifact IS notarized; the staple-release GitHub Actions workflow runs
+    # on macos-15 (Sequoia) post-publish and staples there. Tracked in #32.
     local macos_major
     macos_major=$(sw_vers -productVersion | cut -d. -f1)
     if [[ "$macos_major" -ge 26 ]]; then
-        echo "WARNING: macOS 26+ detected — xcrun stapler has a known Error 65 regression on macOS 26."
-        echo "         Skipping staple. The artifact IS notarized (Apple: Accepted)."
-        echo "         The staple-release GitHub Actions workflow will staple on macOS Sequoia post-publish."
-        echo "         See: https://github.com/Gr8Gatsby/ask/issues/32"
+        echo "==> Skipping local staple on macOS ${macos_major} (artifact notarized; CI will staple post-publish)."
         return 0
     fi
     cp "$file" "$backup"
@@ -540,5 +539,5 @@ echo "   ⏳ The staple-release CI workflow will run on macOS Sequoia and:"
 echo "      1. Staple PKG and DMG containers"
 echo "      2. Staple the .app bundle inside the zip and re-upload"
 echo "      → AskMac-${VERSION}.app.zip will contain a properly stapled .app"
-echo "        that passes Gatekeeper on macOS 26+ (drag to Applications to install)"
+echo "        (drag to Applications to install)"
 echo "      Monitor: https://github.com/Gr8Gatsby/ask/actions"
