@@ -159,23 +159,32 @@ final class AppSettings {
             self.machineName = storedName
         }
 
+        let exe = CommandLine.arguments.first ?? ""
+        let isDevBuild = exe.contains("DerivedData") || exe.contains("/.build/")
+        let prodVault = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".ask/scripts")
+        let devVault = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".ask/dev-vault")
+
+        // Self-heal: if a prod build ever sees `dev-vault` persisted in defaults
+        // (e.g. because the user previously ran a dev build that wrote it, or
+        // ran `/vault-setup dev`), the prod app would silently load from the
+        // wrong tree. Force prod back to ~/.ask/scripts on init.
+        if !isDevBuild, let stored = defaults.string(forKey: Key.vaultPath),
+           stored.contains(".ask/dev-vault") {
+            defaults.set(prodVault.path, forKey: Key.vaultPath)
+        }
+
         if let path = defaults.string(forKey: Key.vaultPath) {
             self.vaultPath = URL(fileURLWithPath: path)
         } else {
-            let fallback = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".ask/scripts")
-            self.vaultPath = fallback
-            defaults.set(fallback.path, forKey: Key.vaultPath)
+            self.vaultPath = prodVault
+            defaults.set(prodVault.path, forKey: Key.vaultPath)
         }
 
-        // In dev builds, override vault to ~/.ask/dev-vault in memory only.
-        // Using ~/.ask/ avoids TCC prompts that fire when accessing ~/Documents/.
-        // Debug and prod share the same UserDefaults domain (same bundle ID), so we
-        // must not write this override to disk.
-        let exe = CommandLine.arguments.first ?? ""
-        if exe.contains("DerivedData") || exe.contains("/.build/") {
-            let devVault = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".ask/dev-vault")
+        // Dev builds run against ~/.ask/dev-vault in memory only — never written
+        // to disk because Debug and prod share the same UserDefaults domain.
+        if isDevBuild {
             self.vaultPath = devVault
         }
 
