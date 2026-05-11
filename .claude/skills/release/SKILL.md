@@ -215,11 +215,11 @@ This takes 10–20 minutes and does the following:
 11. Commits and pushes `docs/appcast.xml` to main
 12. Creates GitHub Release with **four artifacts**: `AskMac-{version}.pkg`, `AskMac-{version}-installer.dmg`, `AskMac-{version}.dmg`, `AskMac-{version}.app.zip`
 
-**Note on stapling:** `xcrun stapler` may fail with Error 65 locally. This is NOT always a macOS version regression — it can be caused by an SSL certificate mismatch on Apple's `oscdn.apple.com` CDN at the user's network edge (Akamai routing issue). Before assuming a build problem, verify:
+**Note on stapling:** `xcrun stapler` may fail locally with Error 65. A common cause is an SSL certificate mismatch on Apple's `oscdn.apple.com` CDN at the user's network edge — diagnose with:
 ```bash
 curl -v --max-time 5 https://oscdn.apple.com/ 2>&1 | grep -E "subjectAltName|SSL|error"
 ```
-If you see "subjectAltName does not match", the CDN has an SSL issue and stapling will fail locally regardless of your build. The `staple-release` GitHub Actions workflow runs on `macos-15` (Sequoia) after publish and staples all four artifacts (PKG, installer DMG, Sparkle DMG, app zip). Monitor CI to confirm stapling succeeded.
+If you see "subjectAltName does not match", stapling will fail locally regardless of your build. Either way, the `staple-release` GitHub Actions workflow runs on `macos-15` (Sequoia) after publish and staples all four artifacts (PKG, installer DMG, Sparkle DMG, app zip) — monitor CI to confirm stapling succeeded.
 
 **Note on local Gatekeeper testing after a CDN SSL issue:** If `oscdn.apple.com` has the SSL mismatch on your machine, `spctl --assess` will always return "Unnotarized Developer ID" for freshly-downloaded files even when properly notarized and CI-stapled. This does NOT mean the app is broken for users — it means the local validation check cannot reach Apple's CDN. Users on other networks will see normal Gatekeeper approval. To test locally, bypass with right-click > Open or System Settings > Privacy & Security > Open Anyway (this caches the approval and won't recur).
 
@@ -281,16 +281,6 @@ iOS
   TestFlight upload complete — Apple processing (~10–30 min)
   Monitor: https://appstoreconnect.apple.com
     → {Distribute to internal testers (alpha) | external testers (beta) | submit for review (stable)}
-```
-
-**macOS 26 install workaround:** Due to a known Apple regression (`spctl --type install` broken for PKG installers on macOS 26, issue #32), users on macOS 26 may see "Apple could not verify..." even after CI stapling. Workaround:
-```bash
-# Option 1 — install via Terminal (bypasses Gatekeeper UI):
-sudo installer -pkg "/Volumes/Install AskMac {version}/AskMac-{version}.pkg" -target /
-
-# Option 2 — remove quarantine then open normally:
-xattr -d com.apple.quarantine ~/Downloads/AskMac-{version}.pkg
-open ~/Downloads/AskMac-{version}.pkg
 ```
 
 For `stable` releases, remind the user to:

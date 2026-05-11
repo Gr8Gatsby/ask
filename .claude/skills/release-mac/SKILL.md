@@ -90,8 +90,3 @@ Artifacts:
   AskMac-{version}.dmg            (Sparkle update DMG)
 ```
 
-**macOS 26 install workaround:** Users may see "Apple could not verify..." on macOS 26. Fix:
-```bash
-sudo installer -pkg "/Volumes/Install AskMac {version}/AskMac-{version}.pkg" -target /
-# or: xattr -d com.apple.quarantine ~/Downloads/AskMac-{version}.pkg
-```
