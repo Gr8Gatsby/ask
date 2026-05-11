@@ -1,10 +1,14 @@
 import { defineConfig, devices } from '@playwright/test'
 
-// E2E config — runs against the live AskMac on port 4242 via the vite proxy
-// at localhost:5173. The vite dev server is assumed to already be running
-// (the user's normal dev workflow). If you're running these in CI without a
-// live AskMac, point BACKEND_PORT at the mock server (see web/mock/server.ts)
-// and start vite with that env var.
+// E2E config — runs against the vite proxy at localhost:5173. The proxy
+// forwards /api to BACKEND_PORT (4242 = AskMac, 4243 = mock).
+// If vite isn't already running, `webServer` below starts it; an existing
+// vite is reused via `reuseExistingServer`. When BACKEND_PORT=4243, vite
+// is started via `npm run dev:mock` so the mock server comes up alongside it.
+
+const backendPort = process.env.BACKEND_PORT ?? '4242'
+const useMock = backendPort === '4243'
+const viteCmd = useMock ? 'npm run dev:mock' : 'npm run dev'
 
 export default defineConfig({
   testDir: './e2e',
@@ -17,6 +21,14 @@ export default defineConfig({
     trace: 'retain-on-failure',
     video: 'retain-on-failure',
     screenshot: 'only-on-failure',
+  },
+  webServer: {
+    command: viteCmd,
+    url: 'http://localhost:5173',
+    reuseExistingServer: true,
+    timeout: 60_000,
+    stdout: 'ignore',
+    stderr: 'pipe',
   },
   projects: [
     {
