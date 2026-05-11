@@ -280,3 +280,4 @@ content in scrollback is never detected.
 | 0.3 | 2026-04-04 | Reframed as system script; app scripts own iPhone UI and polling |
 | 0.4 | 2026-04-04 | System scripts contribute tools to AskMac MCP namespace; no script-to-script connections |
 | 0.5 | 2026-04-04 | Dropped lifecycle field — all scripts are services; type controls iPhone visibility only |
+| 0.6 | 2026-04-30 | Added session_alive (PID-based liveness), discover_sessions (process discovery with tmux resolution), interactive_prompt detector type; pid + registered_at fields on Session; list_sessions now includes alive status |
