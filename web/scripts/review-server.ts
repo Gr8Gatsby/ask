@@ -70,7 +70,7 @@ interface Run {
   endedAt: number | null
   exitCode: number | null
   screenshotCount: number
-  status: 'running' | 'awaiting-review' | 'reviewed'
+  status: 'running' | 'awaiting-review' | 'reviewed' | 'aborted'
   review: Review | null
   gitHead: string | null    // sha at run start (for staleness detection)
   planId?: string | null    // when set, run belongs to a plan (new-style)
@@ -2530,6 +2530,28 @@ const server = http.createServer(async (req, res) => {
 
   res.writeHead(404); res.end('not found')
 })
+
+// Sweep stale `running` runs at startup. If the previous server died or the
+// spawned Playwright child orphaned, those runs sit forever. Mark them aborted
+// so the dashboard doesn't show a phantom "still running" state.
+function sweepStaleRunsAtStartup() {
+  const runs = loadRuns()
+  let touched = 0
+  for (const r of runs) {
+    if (r.status === 'running') {
+      r.status = 'aborted'
+      r.endedAt = r.endedAt ?? Date.now()
+      r.exitCode = r.exitCode ?? -1
+      touched++
+    }
+  }
+  if (touched) {
+    saveRuns(runs)
+    console.log(`[review] swept ${touched} stale running run${touched === 1 ? '' : 's'} → aborted`)
+  }
+}
+
+sweepStaleRunsAtStartup()
 
 server.listen(PORT, () => {
   console.log(`Ask · review dashboard → http://localhost:${PORT}`)
