@@ -349,6 +349,19 @@ struct MenuBarView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
             }
+
+            HStack {
+                Button {
+                    openWindow(id: "diagnostics")
+                    dismiss()
+                } label: {
+                    Label("Diagnostics…", systemImage: "stethoscope")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                Spacer()
+            }
         }
     }
 
