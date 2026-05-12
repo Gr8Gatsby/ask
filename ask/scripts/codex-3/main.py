@@ -190,7 +190,7 @@ class Codex3:
             try:
                 await coro
             except Exception as exc:
-                _log(f'a2a write failed: {exc}', 'WARN')
+                _log(f'a2a write failed: {exc!r}', 'WARN')
         asyncio.create_task(_run())
 
     async def emit_block(self, block_id: str, block_type: str, payload: dict, ttl: int = None, inbox: bool = False):
@@ -249,7 +249,7 @@ class Codex3:
             })
             _log(f'tm_register {session.session_id[:12]} tty={session.tty!r}')
         except Exception as exc:
-            _log(f'tm_register failed: {exc}', 'WARN')
+            _log(f'tm_register failed: {exc!r}', 'WARN')
 
     async def _tm_inject_tty(self, session, text: str) -> bool:
         if not session.raw_id:
@@ -274,7 +274,7 @@ class Codex3:
             })
             return True
         except Exception as exc:
-            _log(f'tm_send_interrupt failed: {exc}', 'WARN')
+            _log(f'tm_send_interrupt failed: {exc!r}', 'WARN')
             return False
 
     async def _route_text(self, session, text: str) -> bool:
@@ -345,7 +345,7 @@ class Codex3:
                 cached = [{'name': n, 'path': p} for n, p in discovered]
                 _log(f'find_repos scan: {len(cached)} repos cached')
             except Exception as exc:
-                _log(f'find_repos scan failed ({exc})', 'WARN')
+                _log(f'find_repos scan failed ({exc!r})', 'WARN')
 
         recent = self._settings.get('recent_repos', [])
         cached.sort(key=lambda r: recent.index(r['path']) if r['path'] in recent else len(recent))
@@ -512,14 +512,14 @@ class Codex3:
                     await self._append_structured_message(session, 'Session stopped', 'The session closed.')
                     await self.clear_block(self._session_block_id(session.session_id))
                 except Exception as exc:
-                    _log(f'refresh cleanup error: {exc}', 'WARN')
+                    _log(f'refresh cleanup error: {exc!r}', 'WARN')
         self._post_restart_reset_done = True
         _save_registry(self._registry)
         await self._emit_tile()
         try:
             await self._emit_start_session_block()
         except Exception as exc:
-            _log(f'start_session emit error: {exc}', 'WARN')
+            _log(f'start_session emit error: {exc!r}', 'WARN')
         await self._discover_active_processes()
 
     async def _heartbeat(self):
@@ -534,7 +534,7 @@ class Codex3:
                     self._emitted_payloads.clear()
                 await self._refresh_sessions()
             except Exception as exc:
-                _log(f'heartbeat error: {exc}', 'WARN')
+                _log(f'heartbeat error: {exc!r}', 'WARN')
 
     async def _handle_session_active(self, msg: dict):
         cwd = msg.get('cwd', '')
@@ -862,7 +862,7 @@ class Codex3:
                 writer.write(json.dumps({'ok': True}).encode())
                 await writer.drain()
         except Exception as exc:
-            _log(f'socket error: {exc}', 'WARN')
+            _log(f'socket error: {exc!r}', 'WARN')
         finally:
             writer.close()
 
@@ -952,7 +952,7 @@ class Codex3:
         try:
             await self._handle_rpc_line(line)
         except Exception as exc:
-            _log(f'rpc handler error: {exc}', 'WARN')
+            _log(f'rpc handler error: {exc!r}', 'WARN')
 
     async def run(self):
         _log('codex-3 starting')

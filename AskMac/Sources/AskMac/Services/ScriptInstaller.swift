@@ -2,7 +2,10 @@
 import AskMacCore
 #endif
 import Foundation
+import OSLog
 import SwiftUI
+
+private let logger = Logger(subsystem: "com.kevinhill.askmac", category: "ScriptInstaller")
 
 // MARK: - ScriptInstallTarget
 
@@ -288,9 +291,15 @@ final class ScriptInstaller {
     @MainActor
     private func doInstall(to vaultURL: URL, scriptManager: any ScriptInstallTarget,
                            catalog: ScriptCatalogService? = nil) async {
+        logger.info("[doInstall] begin · pending=\(self.pending.count) vault=\(vaultURL.path, privacy: .public)")
         phase = .installing
         showSheet = false
         scriptManager.beginInstall()
+        defer {
+            // If we crash or throw between begin/end, the install lock would
+            // stay forever. Best-effort release on any exit path.
+            logger.info("[doInstall] exit · phase=\(String(describing: self.phase), privacy: .public)")
+        }
 
         // Prime the vault and copy ask_sdk.py from the app bundle before any setup.py runs.
         // Catalog zips don't include ask_sdk.py at their root, so without this, setup.py
@@ -337,6 +346,7 @@ final class ScriptInstaller {
 
         for script in pending {
             installProgressLabel = "Installing \(script.name)…"
+            logger.info("[doInstall] installing \(script.id, privacy: .public) v\(script.version, privacy: .public)")
 
             let destDir = vaultURL.appendingPathComponent(script.id)
 
@@ -345,6 +355,7 @@ final class ScriptInstaller {
                     // Stop the running script before touching its files.
                     // Without this, the process crashes when its directory is moved
                     // out from under it. reload() after endInstall() restarts it cleanly.
+                    logger.info("[doInstall] stopping running \(script.id, privacy: .public) before replace")
                     scriptManager.stopScriptForUpdate(id: script.id)
 
                     // Run the old version's setup --uninstall before replacing files.
@@ -364,7 +375,9 @@ final class ScriptInstaller {
                     try fm.moveItem(at: destDir, to: backupDir)
                 }
                 try fm.copyItem(at: script.sourceDir, to: destDir)
+                logger.info("[doInstall] copied \(script.id, privacy: .public) → \(destDir.path, privacy: .public)")
             } catch {
+                logger.error("[doInstall] file copy failed for \(script.id, privacy: .public): \(String(describing: error), privacy: .public)")
                 installationErrors.append(SkippedScript(folderName: script.name,
                                                         reason: error.localizedDescription))
                 continue
@@ -373,7 +386,9 @@ final class ScriptInstaller {
             let setupPath = destDir.appendingPathComponent("setup.py")
             if fm.fileExists(atPath: setupPath.path) {
                 installProgressLabel = "Running setup for \(script.name)…"
+                logger.info("[doInstall] running setup.py --install for \(script.id, privacy: .public)")
                 await runSetup(scriptPath: setupPath, scriptDir: destDir, argument: "--install")
+                logger.info("[doInstall] setup.py --install done for \(script.id, privacy: .public)")
             }
         }
 

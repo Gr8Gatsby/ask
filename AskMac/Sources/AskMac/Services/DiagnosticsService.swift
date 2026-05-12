@@ -60,6 +60,7 @@ final class DiagnosticsService {
     weak var scriptManager: ScriptManager?
     let settings: AppSettings
     weak var cloudKit: CloudKitService?
+    weak var appUpdater: AppUpdater?
 
     init(settings: AppSettings) {
         self.settings = settings
@@ -77,13 +78,14 @@ final class DiagnosticsService {
         var sections: [DiagnosticSection] = []
         sections.append(await Self.systemSection())
         sections.append(await Self.askMacSection(settings: settings))
+        sections.append(await Self.updaterSection(appUpdater: appUpdater))
         sections.append(await Self.cloudKitSection(cloudKit: cloudKit))
         sections.append(await Self.hooksSection())
         sections.append(await Self.daemonsSection(scriptManager: scriptManager))
         sections.append(await Self.scriptsSection(scriptManager: scriptManager, settings: settings))
         sections.append(await Self.sessionsSection())
         sections.append(await Self.toolsSection())
-        sections.append(await Self.orphansAndLocksSection())
+        sections.append(await Self.orphansAndLocksSection(scriptManager: scriptManager))
         sections.append(await Self.crashesSection())
         sections.append(await Self.probeSection(scriptManager: scriptManager))
         sections.append(await Self.recentErrorsSection())
@@ -130,6 +132,36 @@ final class DiagnosticsService {
         diags.append(Diagnostic(id: "sys.disk", label: "$HOME disk free",
                                 status: .info, detail: diskFree(), fixHint: nil))
         return DiagnosticSection(id: "system", title: "System", diagnostics: diags)
+    }
+
+    @MainActor
+    static func updaterSection(appUpdater: AppUpdater?) async -> DiagnosticSection {
+        var diags: [Diagnostic] = []
+        guard let updater = appUpdater else {
+            diags.append(Diagnostic(id: "updater.unavail", label: "Sparkle updater",
+                                    status: .info, detail: "service unavailable", fixHint: nil))
+            return DiagnosticSection(id: "updater", title: "Sparkle updater", diagnostics: diags)
+        }
+        diags.append(Diagnostic(
+            id: "updater.can_check",
+            label: "Can check for updates",
+            status: updater.canCheckForUpdates ? .ok : .info,
+            detail: updater.canCheckForUpdates ? "yes" : "no (busy or just started)",
+            fixHint: nil
+        ))
+        if let err = updater.lastUpdateError {
+            diags.append(Diagnostic(
+                id: "updater.last_error",
+                label: "Last update error",
+                status: .fail,
+                detail: err,
+                fixHint: "Install latest PKG manually: https://github.com/Gr8Gatsby/ask/releases/latest"
+            ))
+        } else {
+            diags.append(Diagnostic(id: "updater.no_error", label: "Recent errors",
+                                    status: .ok, detail: "none since launch", fixHint: nil))
+        }
+        return DiagnosticSection(id: "updater", title: "Sparkle updater", diagnostics: diags)
     }
 
     static func askMacSection(settings: AppSettings) async -> DiagnosticSection {
@@ -256,16 +288,25 @@ final class DiagnosticsService {
         let socketDir = ("~/.ask/sockets" as NSString).expandingTildeInPath
         let entries: [String] = (try? FileManager.default.contentsOfDirectory(atPath: socketDir)) ?? []
 
+        // Build set of currently-installed script IDs so we don't flag stale sockets
+        // from scripts the user has since uninstalled (e.g. claudecode-controller,
+        // codex-controller). Without this filter, every uninstalled-but-orphan-socket
+        // shows as a red ❌ that the user can't fix.
+        let installedScriptIDs: Set<String> = Set((scriptManager?.scripts ?? []).map { $0.id })
+
         for sock in entries.sorted() where sock.hasSuffix(".sock") {
             let path = "\(socketDir)/\(sock)"
             let name = (sock as NSString).deletingPathExtension
+            // Skip sockets from uninstalled scripts — they are stale files,
+            // not failures. Cleaning them up is a separate concern.
+            guard installedScriptIDs.contains(name) else { continue }
             let alive = await pingUnixSocket(path: path, timeout: 2.0)
             diags.append(Diagnostic(
                 id: "daemon.socket.\(name)",
                 label: "\(name) socket",
                 status: alive ? .ok : .fail,
                 detail: alive ? "accepts connections at \(path)" : "connection refused at \(path)",
-                fixHint: alive ? nil : "Reload script in AskMac to respawn daemon."
+                fixHint: alive ? nil : "Reload \(name) in AskMac to respawn daemon."
             ))
         }
 
@@ -402,22 +443,55 @@ final class DiagnosticsService {
         return DiagnosticSection(id: "tools", title: "Required CLIs", diagnostics: diags)
     }
 
-    static func orphansAndLocksSection() async -> DiagnosticSection {
+    static func orphansAndLocksSection(scriptManager: ScriptManager? = nil) async -> DiagnosticSection {
         var diags: [Diagnostic] = []
         let runDir = ("~/.ask/run" as NSString).expandingTildeInPath
-        if let lockFiles = try? FileManager.default.contentsOfDirectory(atPath: runDir).filter({ $0.hasSuffix(".lock") }) {
-            for lock in lockFiles {
-                let path = "\(runDir)/\(lock)"
+        let installedScriptIDs: Set<String> = Set((scriptManager?.scripts ?? []).map { $0.id })
+
+        guard let lockFiles = try? FileManager.default.contentsOfDirectory(atPath: runDir).filter({ $0.hasSuffix(".lock") }) else {
+            diags.append(Diagnostic(id: "locks.dir_missing", label: "Lock directory",
+                                    status: .ok, detail: "no ~/.ask/run dir yet", fixHint: nil))
+            return DiagnosticSection(id: "locks", title: "Locks & guards", diagnostics: diags)
+        }
+
+        var heldByLive = 0, abandoned = 0, foreign = 0
+        for lock in lockFiles {
+            let path = "\(runDir)/\(lock)"
+            let scriptID = (lock as NSString).deletingPathExtension
+            // Suppress stale locks from scripts no longer installed — they're
+            // harmless artifacts, not actionable signals.
+            guard installedScriptIDs.contains(scriptID) else { foreign += 1; continue }
+            // Check whether a live process holds the lock via `lsof`.
+            let lsof = runShell("/usr/sbin/lsof", path).trimmingCharacters(in: .whitespacesAndNewlines)
+            let isHeld = lsof.split(separator: "\n").count > 1   // header + ≥1 entry
+            if isHeld {
+                heldByLive += 1
+                diags.append(Diagnostic(id: "locks.\(lock).held", label: "\(scriptID) lock",
+                                        status: .ok, detail: "held by live daemon", fixHint: nil))
+            } else {
+                abandoned += 1
                 let attrs = (try? FileManager.default.attributesOfItem(atPath: path)) ?? [:]
                 let mtime = (attrs[.modificationDate] as? Date).map { ISO8601DateFormatter().string(from: $0) } ?? "?"
-                diags.append(Diagnostic(id: "locks.\(lock)", label: "Lock file: \(lock)",
-                                        status: .info, detail: "last touched \(mtime)", fixHint: nil))
-            }
-            if lockFiles.isEmpty {
-                diags.append(Diagnostic(id: "locks.empty", label: "Single-instance locks",
-                                        status: .ok, detail: "none held", fixHint: nil))
+                diags.append(Diagnostic(
+                    id: "locks.\(lock).stale",
+                    label: "\(scriptID) lock",
+                    status: .warning,
+                    detail: "abandoned (no live holder) — last touched \(mtime)",
+                    fixHint: "rm \(path) — script will recreate on next start"
+                ))
             }
         }
+
+        if heldByLive == 0 && abandoned == 0 && foreign == 0 {
+            diags.append(Diagnostic(id: "locks.empty", label: "Single-instance locks",
+                                    status: .ok, detail: "none present", fixHint: nil))
+        } else if foreign > 0 {
+            diags.append(Diagnostic(id: "locks.foreign", label: "Stale locks (uninstalled scripts)",
+                                    status: .info,
+                                    detail: "\(foreign) lock file\(foreign == 1 ? "" : "s") for scripts no longer installed — harmless",
+                                    fixHint: nil))
+        }
+
         return DiagnosticSection(id: "locks", title: "Locks & guards", diagnostics: diags)
     }
 
@@ -543,13 +617,41 @@ final class DiagnosticsService {
     }
 
     static func codeSignIdentity() -> String {
-        let out = runShell("/usr/bin/codesign", "-dvv", Bundle.main.bundlePath)
+        // codesign emits to stderr, not stdout. Capture both.
+        let out = runShellCombined("/usr/bin/codesign", "-dvv", Bundle.main.bundlePath)
+        // Order of probing: prefer Developer ID (release), then Apple Development (dev),
+        // then any Authority line. "ad-hoc / unsigned" only when we truly find no Authority.
         for line in out.split(separator: "\n") {
-            let s = String(line)
+            let s = String(line).trimmingCharacters(in: .whitespaces)
+            if s.hasPrefix("Authority=Developer ID Application") { return s }
+        }
+        for line in out.split(separator: "\n") {
+            let s = String(line).trimmingCharacters(in: .whitespaces)
             if s.hasPrefix("Authority=Developer ID") { return s }
             if s.hasPrefix("Authority=Apple Development") { return s }
         }
+        for line in out.split(separator: "\n") {
+            let s = String(line).trimmingCharacters(in: .whitespaces)
+            if s.hasPrefix("Authority=") { return s }
+        }
+        if out.contains("Signed Time=") || out.contains("TeamIdentifier=") {
+            return "signed (no explicit Authority found in codesign output)"
+        }
         return "ad-hoc / unsigned"
+    }
+
+    /// `runShell` only captures stdout; `codesign` writes its descriptor info to stderr.
+    static func runShellCombined(_ launchPath: String, _ args: String...) -> String {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: launchPath)
+        task.arguments = args
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = pipe
+        do { try task.run() } catch { return "" }
+        let data = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
+        task.waitUntilExit()
+        return String(data: data, encoding: .utf8) ?? ""
     }
 
     static func systemUptime() -> String {
