@@ -18,6 +18,7 @@ struct AskMacApp: App {
     @State private var responsePoller: ResponsePoller
     @State private var scriptUpdater = ScriptUpdateService()
     @State private var scriptCatalog = ScriptCatalogService()
+    @State private var diagnostics: DiagnosticsService
     #if DEBUG
     private let localHTTPServer = LocalHTTPServer(port: 4242)
     #endif
@@ -31,11 +32,16 @@ struct AskMacApp: App {
         let sm = ScriptManager(cloudKit: ck, machineID: s.machineID, settings: s, actionHistory: ah)
         let rp = ResponsePoller(cloudKit: ck, machineID: s.machineID, actionHistory: ah)
 
+        let diag = DiagnosticsService(settings: s)
+        diag.scriptManager = sm
+        diag.cloudKit = ck
+
         _heartbeat = State(initialValue: hb)
         _messageWatcher = State(initialValue: mw)
         _actionHistory = State(initialValue: ah)
         _scriptManager = State(initialValue: sm)
         _responsePoller = State(initialValue: rp)
+        _diagnostics = State(initialValue: diag)
 
         #if DEBUG
         if MacUITestingSupport.isUITesting {
@@ -152,6 +158,13 @@ struct AskMacApp: App {
                 .environment(actionHistory)
         }
         .defaultSize(width: 720, height: 520)
+        .defaultPosition(.center)
+
+        Window("Diagnostics", id: "diagnostics") {
+            DiagnosticsView()
+                .environment(diagnostics)
+        }
+        .defaultSize(width: 760, height: 560)
         .defaultPosition(.center)
         .commands {
             CommandGroup(after: .appInfo) {
