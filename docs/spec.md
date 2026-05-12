@@ -866,6 +866,7 @@ The diagnostics block is shown at the top of the iOS Log Page for that script.
 
 | Date | Change |
 |---|---|
+| 2026-05-12 | v1.3.1: fix codex-3 also walking ~/Documents/code on every block emit (was firing Documents TCC prompts repeatedly while AskMac was running) — defer find_repos to user-opt-in scan, mirroring v1.3.0/claude-3 fix |
 | 2026-05-12 | v1.3.0: built-in Diagnostics window (menu-bar → Diagnostics…) — system, AskMac state, CloudKit, hooks, daemons, scripts, sessions, required CLIs, locks, crashes, internal socket probe, recent log errors. Copy report as markdown for sharing on any remote machine. |
 | 2026-05-12 | v1.2.1: defer claude-3 find_repos (no more Documents prompts on AskMac startup), menu-bar grid for enabled scripts (was list of all 10), AskMac self-heals vaultPath when prod build inherits dev-vault, terminal-manager v2.2.1 adds session_alive + discover_sessions (closes silent-degradation gap in claude-3 heartbeat and process discovery) |
 | 2026-05-07 | v1.2.0: fix tmux Claude messaging (1s round-trip vs 30s timeout), fix orphan script daemons surviving past AskMac quit (eliminates ghost TCC prompts), session persistence across CLI restarts, agent-supervisor production-hardening, ScriptManager MainActor crash fix, iOS image-block requiresResponse fix |
