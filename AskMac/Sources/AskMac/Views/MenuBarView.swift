@@ -142,8 +142,13 @@ struct MenuBarView: View {
     private var displayedScripts: [ManagedScript] {
         let all = scriptManager.scripts.filter { !$0.isSystem }
         let pins = settings.pinnedScripts
-        if pins.isEmpty { return all }
-        return pins.compactMap { id in all.first { $0.id == id } }
+        if !pins.isEmpty {
+            return pins.compactMap { id in all.first { $0.id == id } }
+        }
+        // No explicit pins: default to enabled (non-disabled) scripts.
+        // Showing every script regardless of state floods the popover with
+        // stopped/disabled tiles the user has actively opted out of.
+        return all.filter { $0.isEnabled }
     }
 
     private var hasPins: Bool { !settings.pinnedScripts.isEmpty }
@@ -217,28 +222,15 @@ struct MenuBarView: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .padding(.vertical, 4)
-            } else if hasPins {
-                // Tile grid for pinned scripts
+            } else {
+                // Tile grid — uniform whether the user has explicit pins or
+                // we're showing the default (enabled) set. ScriptTile renders
+                // status dot + enable toggle, so the grid covers both healthy
+                // and attention-needed cases without a separate list path.
                 let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
                 LazyVGrid(columns: columns, spacing: 8) {
                     ForEach(displayedScripts) { script in
                         ScriptTile(script: script, scriptManager: scriptManager)
-                            .contextMenu { scriptContextMenu(for: script) }
-                    }
-                }
-            } else if healthState == .healthy {
-                // Compact chip list — clean, no clutter when everything is fine
-                VStack(spacing: 0) {
-                    ForEach(displayedScripts) { script in
-                        ScriptChip(script: script, scriptManager: scriptManager)
-                            .contextMenu { scriptContextMenu(for: script) }
-                    }
-                }
-            } else {
-                // Detailed list — shows status icons and toggles when attention is needed
-                VStack(spacing: 0) {
-                    ForEach(displayedScripts) { script in
-                        ScriptRow(script: script, scriptManager: scriptManager)
                             .contextMenu { scriptContextMenu(for: script) }
                     }
                 }
@@ -406,72 +398,6 @@ struct MenuBarView: View {
     }
 }
 
-// MARK: - Script chip (compact healthy-state list row)
-
-private struct ScriptChip: View {
-    let script: ManagedScript
-    let scriptManager: ScriptManager
-
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        HStack(spacing: 10) {
-            iconView
-                .frame(width: 18, height: 18)
-
-            Text(script.name)
-                .font(.subheadline)
-                .foregroundStyle(script.isEnabled ? .primary : .secondary)
-
-            Spacer()
-
-            let isActive = scriptManager.activeBlocks[script.id]?.isEmpty == false
-            Circle()
-                .fill(isActive ? Color.green : Color(.tertiaryLabelColor))
-                .frame(width: 6, height: 6)
-        }
-        .padding(.vertical, 5)
-        .contentShape(Rectangle())
-    }
-
-    @ViewBuilder
-    private var iconView: some View {
-        if let img = effectiveIcon {
-            Image(nsImage: img)
-                .resizable()
-                .scaledToFit()
-                .grayscale(script.isEnabled ? 0 : 1)
-                .opacity(script.isEnabled ? 1 : 0.5)
-        } else {
-            Image(systemName: script.icon ?? "terminal.fill")
-                .font(.callout)
-                .foregroundStyle(script.isEnabled ? .primary : .tertiary)
-        }
-    }
-
-    private var effectiveIcon: NSImage? {
-        guard colorScheme == .dark, let svg = script.svgString else { return script.iconImage }
-        return svgToWhiteMenuBar(svg) ?? script.iconImage
-    }
-
-    private func svgToWhiteMenuBar(_ svg: String) -> NSImage? {
-        var s = svg
-        s = s.replacingOccurrences(of: "currentColor", with: "white", options: .caseInsensitive)
-        let darkColors = ["#000000", "#000", "black", "#111111", "#111",
-                          "#1a1a1a", "#222222", "#222", "#333333", "#333"]
-        for color in darkColors {
-            for attr in ["fill", "stroke"] {
-                s = s.replacingOccurrences(of: "\(attr)=\"\(color)\"", with: "\(attr)=\"white\"", options: .caseInsensitive)
-                s = s.replacingOccurrences(of: "\(attr)='\(color)'",  with: "\(attr)='white'",  options: .caseInsensitive)
-                s = s.replacingOccurrences(of: "\(attr):\(color)",    with: "\(attr):white",    options: .caseInsensitive)
-                s = s.replacingOccurrences(of: "\(attr): \(color)",   with: "\(attr): white",   options: .caseInsensitive)
-            }
-        }
-        guard let data = s.data(using: .utf8) else { return nil }
-        return NSImage(data: data)
-    }
-}
-
 // MARK: - Script tile (pinned grid view)
 
 private struct ScriptTile: View {
@@ -567,101 +493,3 @@ private struct ScriptTile: View {
     }
 }
 
-// MARK: - Script row (list view)
-
-private struct ScriptRow: View {
-    let script: ManagedScript
-    let scriptManager: ScriptManager
-
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        HStack(spacing: 10) {
-            iconView
-                .frame(width: 22, height: 22)
-
-            Text(script.name)
-                .font(.subheadline)
-                .foregroundStyle(script.isEnabled ? .primary : .secondary)
-
-            Spacer()
-
-            statusIcon
-
-            Toggle("", isOn: Binding(
-                get: { script.isEnabled },
-                set: { enabled in
-                    if enabled { scriptManager.enableScript(id: script.id) }
-                    else { scriptManager.disableScript(id: script.id) }
-                }
-            ))
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-            .labelsHidden()
-        }
-        .padding(.vertical, 5)
-    }
-
-    @ViewBuilder
-    private var iconView: some View {
-        if let img = effectiveIcon {
-            Image(nsImage: img)
-                .resizable()
-                .scaledToFit()
-                .grayscale(script.isEnabled ? 0 : 1)
-                .opacity(script.isEnabled ? 1 : 0.4)
-        } else {
-            Image(systemName: script.icon ?? "terminal.fill")
-                .font(.body)
-                .foregroundStyle(script.isEnabled ? .primary : .tertiary)
-        }
-    }
-
-    @ViewBuilder
-    private var statusIcon: some View {
-        if script.status == .crashed {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.caption)
-                .foregroundStyle(.red)
-        } else if script.status == .missingDependencies {
-            Image(systemName: "wrench.and.screwdriver")
-                .font(.caption)
-                .foregroundStyle(.orange)
-        } else if script.status == .permissionDenied {
-            Image(systemName: "lock.slash")
-                .font(.caption)
-                .foregroundStyle(.orange)
-        } else if script.status == .pendingConsent {
-            Image(systemName: "lock.badge.clock")
-                .font(.caption)
-                .foregroundStyle(.orange)
-        } else if script.lastEmitTime != nil {
-            let isActive = scriptManager.activeBlocks[script.id]?.isEmpty == false
-            Image(systemName: "icloud")
-                .font(.caption)
-                .foregroundStyle(isActive ? Color.green : Color(.tertiaryLabelColor))
-        }
-    }
-
-    private var effectiveIcon: NSImage? {
-        guard colorScheme == .dark, let svg = script.svgString else { return script.iconImage }
-        return svgToWhiteMenuBar(svg) ?? script.iconImage
-    }
-
-    private func svgToWhiteMenuBar(_ svg: String) -> NSImage? {
-        var s = svg
-        s = s.replacingOccurrences(of: "currentColor", with: "white", options: .caseInsensitive)
-        let darkColors = ["#000000", "#000", "black", "#111111", "#111",
-                          "#1a1a1a", "#222222", "#222", "#333333", "#333"]
-        for color in darkColors {
-            for attr in ["fill", "stroke"] {
-                s = s.replacingOccurrences(of: "\(attr)=\"\(color)\"", with: "\(attr)=\"white\"", options: .caseInsensitive)
-                s = s.replacingOccurrences(of: "\(attr)='\(color)'",  with: "\(attr)='white'",  options: .caseInsensitive)
-                s = s.replacingOccurrences(of: "\(attr):\(color)",    with: "\(attr):white",    options: .caseInsensitive)
-                s = s.replacingOccurrences(of: "\(attr): \(color)",   with: "\(attr): white",   options: .caseInsensitive)
-            }
-        }
-        guard let data = s.data(using: .utf8) else { return nil }
-        return NSImage(data: data)
-    }
-}
