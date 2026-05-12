@@ -309,7 +309,16 @@ class Codex3:
             'action_required': label == 'Permission needed',
         }, ttl=600)
 
-    async def _emit_start_session_block(self):
+    async def _emit_start_session_block(self, scan: bool = False):
+        """Emit the start-session picker.
+
+        Mirrors claude-3 v0.4.7: does NOT walk `~/Documents/code` on startup
+        or heartbeat — that triggers a Documents TCC prompt on every emit.
+        Instead, emit with a `needs_scan` CTA; `__scan_repos__` triggers an
+        explicit user-driven scan that gets cached at ~/.ask/codex3-repos.json.
+        Adoptable tmux panes from `discover_codex_panes` are still listed
+        because that uses `ps`/`tmux`, not the filesystem.
+        """
         choices = []
         self._start_choices = {}
 
@@ -326,17 +335,35 @@ class Codex3:
                 'value': value,
             })
 
-        repos = find_repos()
-        recent = self._settings.get('recent_repos', [])
-        repos.sort(key=lambda item: recent.index(item[1]) if item[1] in recent else len(recent))
-        for name, path in repos:
-            self._start_choices[path] = {'repo_path': path}
-            choices.append({'name': name, 'path': path, 'value': path})
+        cache_path = os.path.expanduser('~/.ask/codex3-repos.json')
+        cached = _load_json(cache_path, {}).get('repos', [])
+        if scan:
+            try:
+                discovered = await asyncio.wait_for(asyncio.to_thread(find_repos), timeout=3.0)
+                _save_json(cache_path, {'repos': [{'name': n, 'path': p} for n, p in discovered],
+                                        'scanned_at': datetime.datetime.now().timestamp()})
+                cached = [{'name': n, 'path': p} for n, p in discovered]
+                _log(f'find_repos scan: {len(cached)} repos cached')
+            except Exception as exc:
+                _log(f'find_repos scan failed ({exc})', 'WARN')
 
-        payload = {'repos': choices or [{'name': '(no repos found)', 'path': '', 'value': ''}]}
+        recent = self._settings.get('recent_repos', [])
+        cached.sort(key=lambda r: recent.index(r['path']) if r['path'] in recent else len(recent))
+        for r in cached:
+            self._start_choices[r['path']] = {'repo_path': r['path']}
+            choices.append({'name': r['name'], 'path': r['path'], 'value': r['path']})
+
+        payload: dict = {'repos': choices}
+        if not cached:
+            payload['needs_scan'] = True
+            payload['scan_action'] = {'id': '__scan_repos__', 'label': 'Scan ~/Documents/code for repos'}
+        else:
+            payload['rescan_action'] = {'id': '__scan_repos__', 'label': 'Rescan for new repos'}
+        if not choices:
+            payload['repos'] = [{'name': '(no repos yet — tap Scan)', 'path': '', 'value': ''}]
         self._emitted_payloads.pop(START_SESSION_BLOCK_ID, None)
         await self.emit_block(START_SESSION_BLOCK_ID, 'start_session', payload, ttl=3600)
-        _log(f'emitted start_session block with {len(choices)} repos')
+        _log(f'emitted start_session block with {len(cached)} repos (cached, scan={scan})')
 
     async def _set_task_status(self, session, status: str):
         title = f'Codex · {session.project}'
@@ -738,6 +765,11 @@ class Codex3:
     async def _handle_block_response(self, block_id: str, value: str):
         _log(f'block response block_id={block_id!r} value={value[:80]!r}')
         if block_id == START_SESSION_BLOCK_ID:
+            # Explicit user opt-in to scan ~/Documents/code etc. — see
+            # _emit_start_session_block for the deferred-scan rationale.
+            if value == '__scan_repos__':
+                asyncio.create_task(self._emit_start_session_block(scan=True))
+                return
             if value.startswith('adopt:'):
                 pane = self._start_choices.get(value, {})
                 asyncio.create_task(self._adopt_tmux_session(
