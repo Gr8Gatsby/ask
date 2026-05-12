@@ -317,26 +317,55 @@ class Claude3:
             'action_required': label == 'Permission needed',
         }, ttl=600)
 
-    async def _emit_start_session_block(self):
+    async def _emit_start_session_block(self, scan: bool = False):
+        """Emit the repo picker block.
+
+        By default, does NOT walk the filesystem to find repos — that triggers a
+        macOS Documents-folder TCC prompt on every daemon startup, which is poor
+        UX. Instead, on first launch we emit an empty picker with a "scan" CTA;
+        the user explicitly opts in to scanning by clicking it (which triggers
+        `__scan_repos__` → `_emit_start_session_block(scan=True)`).
+
+        After a successful scan, the result is cached at `~/.ask/claude3-repos.json`
+        and used directly on subsequent emits — no rescan needed unless the user
+        asks for one.
+        """
+        cache_path = os.path.expanduser('~/.ask/claude3-repos.json')
+        cached = _load_json(cache_path, {}).get('repos', [])
+        if scan:
+            try:
+                discovered = await asyncio.wait_for(asyncio.to_thread(find_repos), timeout=3.0)
+                _save_json(cache_path, {'repos': [{'name': n, 'path': p} for n, p in discovered],
+                                        'scanned_at': datetime.datetime.now().timestamp()})
+                cached = [{'name': n, 'path': p} for n, p in discovered]
+                _log(f'find_repos scan: {len(cached)} repos cached')
+            except Exception as exc:
+                _log(f'find_repos scan failed ({exc})', 'WARN')
+
         choices = []
         self._start_choices = {}
-        try:
-            repos = await asyncio.wait_for(asyncio.to_thread(find_repos), timeout=3.0)
-        except (asyncio.TimeoutError, Exception) as exc:
-            _log(f'find_repos timed out or failed ({exc}) — emitting empty picker', 'WARN')
-            repos = []
         settings_path = os.path.expanduser('~/.ask/claude3-settings.json')
         settings = _load_json(settings_path, {'recent_repos': []})
         recent = settings.get('recent_repos', [])
-        repos.sort(key=lambda item: recent.index(item[1]) if item[1] in recent else len(recent))
-        for name, path in repos:
-            self._start_choices[path] = {'repo_path': path}
-            choices.append({'name': name, 'path': path, 'value': path})
-        payload = {'repos': choices or [{'name': '(no repos found)', 'path': '', 'value': ''}]}
+        cached.sort(key=lambda r: recent.index(r['path']) if r['path'] in recent else len(recent))
+        for r in cached:
+            self._start_choices[r['path']] = {'repo_path': r['path']}
+            choices.append({'name': r['name'], 'path': r['path'], 'value': r['path']})
+
+        payload: dict = {'repos': choices}
+        if not choices:
+            # No cached repos yet — surface a scan CTA. The block UI sends
+            # `__scan_repos__` when the user clicks it.
+            payload['needs_scan'] = True
+            payload['scan_action'] = {'id': '__scan_repos__', 'label': 'Scan ~/Documents/code for repos'}
+        else:
+            # Repos cached; offer a rescan affordance for when the user has
+            # added a new repo since the last scan.
+            payload['rescan_action'] = {'id': '__scan_repos__', 'label': 'Rescan for new repos'}
         # Clear dedup cache so TTL refreshes on every emit (block expires if not refreshed)
         self._emitted_payloads.pop(START_BLOCK_ID, None)
         await self.emit_block(START_BLOCK_ID, 'start_session', payload, ttl=3600)
-        _log(f'emitted start_session block with {len(choices)} repos')
+        _log(f'emitted start_session block with {len(choices)} repos (cached, scan={scan})')
 
     async def _emit_session_block(self, session: SessionRecord):
         is_tmux = bool(session.tmux_target)
@@ -1035,6 +1064,13 @@ class Claude3:
         _log(f'block response block_id={block_id!r} value={value[:80]!r}')
 
         if block_id == START_BLOCK_ID:
+            # Explicit user opt-in to scan ~/Documents/code etc. Triggers the
+            # one and only Documents-folder TCC prompt. After this returns,
+            # _emit_start_session_block(scan=True) re-emits the block with the
+            # found repos, and the cached list is reused on subsequent launches.
+            if value == '__scan_repos__':
+                asyncio.create_task(self._emit_start_session_block(scan=True))
+                return
             choice = self._start_choices.get(value, {})
             repo_path = choice.get('repo_path', value)
             if repo_path:
