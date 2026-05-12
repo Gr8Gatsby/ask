@@ -1650,7 +1650,7 @@ struct ScriptDetailView: View {
 
     @ViewBuilder
     private func updatePopoverView(entry: CatalogEntry) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 6) {
                 Image(systemName: "arrow.down.circle.fill")
                     .foregroundStyle(Color.accentColor)
@@ -1658,16 +1658,23 @@ struct ScriptDetailView: View {
                     .font(.headline)
                     .fontWeight(.semibold)
                 Spacer()
-                Text("\(script.version ?? "?") → \(entry.version)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Text(script.version ?? "?").foregroundStyle(.secondary)
+                    Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.tertiary)
+                    Text(entry.version).foregroundStyle(.primary).fontWeight(.medium)
+                }
+                .font(.caption)
             }
 
             if let log = entry.changelog, !log.isEmpty {
+                // Body uses .primary for readable contrast on the popover background
+                // (was .secondary, which on dark popovers reads as low-contrast grey-on-grey).
                 Text(log)
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .padding(.vertical, 2)
             }
 
             if let err = updateError {
