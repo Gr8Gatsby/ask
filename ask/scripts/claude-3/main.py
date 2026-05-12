@@ -261,7 +261,7 @@ class Claude3:
             try:
                 await coro
             except Exception as exc:
-                _log(f'a2a write failed: {exc}', 'WARN')
+                _log(f'a2a write failed: {exc!r}', 'WARN')
         asyncio.create_task(_run())
 
     async def open_task(self, task_id: str, title: str, status: str):
@@ -340,7 +340,7 @@ class Claude3:
                 cached = [{'name': n, 'path': p} for n, p in discovered]
                 _log(f'find_repos scan: {len(cached)} repos cached')
             except Exception as exc:
-                _log(f'find_repos scan failed ({exc})', 'WARN')
+                _log(f'find_repos scan failed ({exc!r})', 'WARN')
 
         choices = []
         self._start_choices = {}
@@ -537,7 +537,7 @@ class Claude3:
             _log(f'tm_register {session.session_id[:12]} tty={session.tty!r} '
                  f'tmux={session.tmux_target!r} pid={session.pid}')
         except Exception as e:
-            _log(f'tm_register failed: {e}', 'WARN')
+            _log(f'tm_register failed: {e!r}', 'WARN')
 
     async def _route_text(self, session: SessionRecord, text: str) -> bool:
         """Send user text to a session. Uses tmux send-keys for managed sessions,
@@ -1116,12 +1116,12 @@ class Claude3:
                 try:
                     await self._call_tool('send_interrupt', {'target': session.tmux_target}, timeout=5.0)
                 except Exception as e:
-                    _log(f'send_interrupt for close failed: {e}', 'WARN')
+                    _log(f'send_interrupt for close failed: {e!r}', 'WARN')
                 await asyncio.sleep(0.5)
                 try:
                     await self._call_tool('send_text', {'target': session.tmux_target, 'text': '/quit'}, timeout=5.0)
                 except Exception as e:
-                    _log(f'send_text /quit for close failed: {e}', 'WARN')
+                    _log(f'send_text /quit for close failed: {e!r}', 'WARN')
             else:
                 await self._tm_inject_tty(session, '/quit\n')
             self._fire_a2a(self._append_structured_message(session, 'Stop requested', 'Sent quit to Claude Code.'))
@@ -1229,6 +1229,23 @@ class Claude3:
     # ------------------------------------------------------------------
 
     async def _refresh_sessions(self):
+        # Stale-no-routing GC: collect live `claude` process CWDs once per cycle
+        # so we can evict sessions whose underlying process is gone but never
+        # emitted a session_stop event (e.g. claude crashed, or the host app
+        # spawned a one-off claude that exited before any hook fired).
+        # Supervisor session (cwd='') is never matched here so it's preserved.
+        live_cwds: set[str] = set()
+        try:
+            discovered = await self._call_tool('discover_sessions', {'executable': 'claude'}, timeout=4.0)
+            for proc in (discovered or {}).get('sessions', []):
+                if proc.get('cwd'):
+                    live_cwds.add(proc['cwd'])
+        except Exception as exc:
+            _log(f'discover_sessions failed in refresh: {exc!r}', 'WARN')
+
+        now = datetime.datetime.now().timestamp()
+        NO_ROUTING_STALE_SECS = 600  # 10 min — give startup hooks a fair chance to register
+
         for session in list(self._registry.sessions.values()):
             if session.state == 'stopped':
                 continue
@@ -1265,6 +1282,18 @@ class Claude3:
                 tty_dead = not (alive_result or {}).get('alive', True)
             else:
                 tty_dead = False
+            # Stale no-routing GC: session has neither tty nor tmux, has a cwd
+            # (so not the supervisor), been idle a while, and no live `claude`
+            # process matches that cwd. Evict to stop the registry from growing
+            # without bound when host apps spawn-and-exit claude rapidly.
+            no_routing_stale = (
+                not session.tty
+                and not session.tmux_target
+                and session.cwd  # supervisor session has empty cwd
+                and (now - float(session.last_seen)) > NO_ROUTING_STALE_SECS
+                and session.cwd not in live_cwds
+            )
+
             if not session.tmux_target and session.tty and tty_dead:
                 _log(f'session {session.session_id} TTY gone — marking stopped')
                 session.state = 'stopped'
@@ -1276,7 +1305,17 @@ class Claude3:
                     await self._set_task_status(session, 'completed')
                     await self.clear_block(self._session_block_id(session.session_id))
                 except Exception as exc:
-                    _log(f'TTY-gone cleanup error for {session.session_id}: {exc}', 'WARN')
+                    _log(f'TTY-gone cleanup error for {session.session_id}: {exc!r}', 'WARN')
+            elif no_routing_stale:
+                idle_min = int((now - float(session.last_seen)) / 60)
+                _log(f'session {session.session_id} no-routing + no live process for {idle_min}m at {session.cwd!r} — evicting')
+                session.state = 'stopped'
+                session.stopped_at = now
+                self._registry.remove(session.session_id)
+                try:
+                    await self.clear_block(self._session_block_id(session.session_id))
+                except Exception as exc:
+                    _log(f'no-routing-stale cleanup error for {session.session_id}: {exc!r}', 'WARN')
             else:
                 # On the first refresh after a daemon restart, reset all transient
                 # working states — they can't be re-hydrated from saved state alone.
@@ -1292,7 +1331,7 @@ class Claude3:
         try:
             await self._emit_start_session_block()
         except Exception as exc:
-            _log(f'start_session emit error: {exc}', 'WARN')
+            _log(f'start_session emit error: {exc!r}', 'WARN')
 
     async def _heartbeat(self):
         cycles = 0
@@ -1308,7 +1347,7 @@ class Claude3:
                     self._emitted_payloads.clear()
                 await self._refresh_sessions()
             except Exception as exc:
-                _log(f'heartbeat error: {exc}', 'WARN')
+                _log(f'heartbeat error: {exc!r}', 'WARN')
 
     # ------------------------------------------------------------------
     # Unix socket server (receives hook events)
@@ -1354,7 +1393,7 @@ class Claude3:
                 writer.write(json.dumps({'ok': True}).encode())
                 await writer.drain()
         except Exception as exc:
-            _log(f'socket client error: {exc}', 'WARN')
+            _log(f'socket client error: {exc!r}', 'WARN')
         finally:
             writer.close()
 

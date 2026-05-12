@@ -259,11 +259,66 @@ final class ScriptManager: @unchecked Sendable {
 
     func start() {
         reapOrphanedDaemons()
+        syncBundledScriptsToVaultIfNewer()
         discoverAndLaunch()
         ensureSDKInVault()
         purgeBlocksForDisabledScripts()
         startVaultWatcher()
         observeAppTermination()
+    }
+
+    /// On every launch, compare each bundled script's manifest version against
+    /// the vault copy. If the bundled version is newer (semver), replace the
+    /// vault copy with the bundled one. This is the only way vault scripts get
+    /// updated when AskMac upgrades via Sparkle (Sparkle replaces the app but
+    /// doesn't run our PKG postinstalls), and before this fix the vault could
+    /// drift arbitrarily far behind the bundled scripts — silently.
+    ///
+    /// Stops the running daemon for each script we update so file replacement
+    /// is safe (preserves the same lifecycle ScriptInstaller uses for catalog
+    /// updates). Reload is triggered by discoverAndLaunch right after.
+    private func syncBundledScriptsToVaultIfNewer() {
+        guard let bundled = Bundle.main.resourceURL?.appendingPathComponent("Scripts"),
+              let vault = settings.vaultPath else { return }
+        let fm = FileManager.default
+        let entries: [URL] = (try? fm.contentsOfDirectory(at: bundled, includingPropertiesForKeys: nil)) ?? []
+        var updated: [String] = []
+        for entry in entries where entry.hasDirectoryPath {
+            let scriptID = entry.lastPathComponent
+            guard let bundledVersion = manifestVersion(at: entry) else { continue }
+            let vaultScript = vault.appendingPathComponent(scriptID)
+            // Skip if the vault has no copy yet — discoverAndLaunch will use the bundle directly.
+            // The user-vault deploy happens lazily through other paths.
+            guard fm.fileExists(atPath: vaultScript.path) else { continue }
+            guard let vaultVersion = manifestVersion(at: vaultScript) else { continue }
+            guard VersionComparison.compare(bundledVersion, vaultVersion) == .orderedDescending else { continue }
+            // Stop any running daemon for this script so file replacement is safe
+            // (matches the lifecycle used by ScriptInstaller.doInstall).
+            if connections[scriptID] != nil || systemConnections[scriptID] != nil {
+                stopScriptForUpdate(id: scriptID)
+            }
+            do {
+                let backup = vault.appendingPathComponent("\(scriptID).previous")
+                if fm.fileExists(atPath: backup.path) { try? fm.removeItem(at: backup) }
+                try fm.moveItem(at: vaultScript, to: backup)
+                try fm.copyItem(at: entry, to: vaultScript)
+                updated.append("\(scriptID) \(vaultVersion)→\(bundledVersion)")
+            } catch {
+                logger.error("syncBundledScriptsToVaultIfNewer: \(scriptID) failed: \(error)")
+            }
+        }
+        if !updated.isEmpty {
+            let summary = updated.joined(separator: ", ")
+            logger.error("Synced bundled→vault: \(summary)")
+        }
+    }
+
+    private func manifestVersion(at scriptDir: URL) -> String? {
+        let url = scriptDir.appendingPathComponent("manifest.json")
+        guard let data = try? Data(contentsOf: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let v = json["version"] as? String else { return nil }
+        return v
     }
 
     /// Kill any leftover script daemons from prior AskMac runs that didn't

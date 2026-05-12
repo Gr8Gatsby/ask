@@ -35,6 +35,9 @@ struct AskMacApp: App {
         let diag = DiagnosticsService(settings: s)
         diag.scriptManager = sm
         diag.cloudKit = ck
+        // updater is @State; access its wrapped value via the underscore-prefixed
+        // accessor since `self` isn't fully initialized yet.
+        diag.appUpdater = _updater.wrappedValue
 
         _heartbeat = State(initialValue: hb)
         _messageWatcher = State(initialValue: mw)
