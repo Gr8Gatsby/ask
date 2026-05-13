@@ -97,10 +97,17 @@ final class ScriptInstaller {
             let exitCode = await Task.detached(priority: .userInitiated) {
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-                proc.arguments = ["-o", zipURL.path, "-d", tmp.path]
-                proc.standardOutput = Pipe()
-                proc.standardError = Pipe()
+                proc.arguments = ["-q", "-o", zipURL.path, "-d", tmp.path]   // -q: quiet, so the pipe stays empty
+                let outPipe = Pipe(); let errPipe = Pipe()
+                proc.standardOutput = outPipe
+                proc.standardError = errPipe
                 try? proc.run()
+                // Drain BEFORE waitUntilExit. Otherwise a >64KB pipe write
+                // fills the buffer, the child blocks writing, and the parent
+                // blocks waiting for exit — classic deadlock. `-q` keeps output
+                // tiny but we drain anyway for safety.
+                _ = try? outPipe.fileHandleForReading.readToEnd()
+                _ = try? errPipe.fileHandleForReading.readToEnd()
                 proc.waitUntilExit()
                 return proc.terminationStatus
             }.value
@@ -295,9 +302,18 @@ final class ScriptInstaller {
         phase = .installing
         showSheet = false
         scriptManager.beginInstall()
+        // Guarantee the install lock + UI phase are released even if a
+        // throwing await escapes this scope. Without this, the prior code's
+        // defer was log-only — a thrown error mid-install would leave
+        // installLockCount stuck > 0 forever, blocking every future reload
+        // and making AskMac feel "frozen" to the user. The flag prevents
+        // double-release when the happy path also calls endInstall().
+        var endInstallCalled = false
         defer {
-            // If we crash or throw between begin/end, the install lock would
-            // stay forever. Best-effort release on any exit path.
+            if !endInstallCalled {
+                logger.error("[doInstall] abnormal exit — releasing install lock")
+                scriptManager.endInstall()
+            }
             logger.info("[doInstall] exit · phase=\(String(describing: self.phase), privacy: .public)")
         }
 
@@ -416,6 +432,7 @@ final class ScriptInstaller {
         // endInstall() releases the install lock and triggers a reload (including any
         // pending file-watcher reload that was deferred during the install).
         scriptManager.endInstall()
+        endInstallCalled = true
         phase = .idle
     }
 
@@ -433,9 +450,13 @@ final class ScriptInstaller {
             let exitCode = await Task.detached(priority: .userInitiated) {
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-                proc.arguments = ["-o", zipURL.path, "-d", tmp.path]
-                proc.standardOutput = Pipe(); proc.standardError = Pipe()
-                try? proc.run(); proc.waitUntilExit()
+                proc.arguments = ["-q", "-o", zipURL.path, "-d", tmp.path]
+                let outPipe = Pipe(); let errPipe = Pipe()
+                proc.standardOutput = outPipe; proc.standardError = errPipe
+                try? proc.run()
+                _ = try? outPipe.fileHandleForReading.readToEnd()
+                _ = try? errPipe.fileHandleForReading.readToEnd()
+                proc.waitUntilExit()
                 return proc.terminationStatus
             }.value
             guard exitCode == 0 else { return }
@@ -478,15 +499,31 @@ final class ScriptInstaller {
             let existing = env["PYTHONPATH"].map { ":\($0)" } ?? ""
             env["PYTHONPATH"] = "\(vaultRoot):\(scriptDir.path)\(existing)"
             proc.environment = env
-            proc.standardOutput = Pipe()
-            proc.standardError = Pipe()
+            let outPipe = Pipe()
+            let errPipe = Pipe()
+            proc.standardOutput = outPipe
+            proc.standardError = errPipe
             try? proc.run()
+
+            // Drain stdout/stderr concurrently with waitUntilExit. The previous
+            // code captured both streams via Pipe() but never read them — a
+            // setup.py that printed >64KB to stdout/stderr would fill the pipe
+            // buffer, block on its next write, and deadlock waitUntilExit
+            // forever. AskMac itself then appears hung; if macOS terminates it,
+            // it presents as a crash to the user. Reading via background tasks
+            // keeps the pipes drained without blocking the parent's wait.
+            let drainOut = Task.detached { _ = try? outPipe.fileHandleForReading.readToEnd() }
+            let drainErr = Task.detached { _ = try? errPipe.fileHandleForReading.readToEnd() }
+
             let timeoutTask = Task {
                 try? await Task.sleep(for: .seconds(300))
                 if proc.isRunning { proc.terminate() }
             }
             proc.waitUntilExit()
             timeoutTask.cancel()
+            // Drains finish naturally on pipe EOF after the child exits.
+            _ = await drainOut.value
+            _ = await drainErr.value
         }.value
     }
 
