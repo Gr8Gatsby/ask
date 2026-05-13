@@ -5,8 +5,15 @@
 # Single-instance guard — exit if another copy is already running
 _LOCK="$HOME/.ask/run/brew-monitor.lock"
 mkdir -p "$(dirname "$_LOCK")"
-exec 9>"$_LOCK"
-flock -n 9 || { printf '[brew-monitor] another instance already running, exiting\n' >&2; exit 0; }
+if [ -f "$_LOCK" ]; then
+    _holder=$(cat "$_LOCK" 2>/dev/null)
+    if [ -n "$_holder" ] && kill -0 "$_holder" 2>/dev/null; then
+        printf '[brew-monitor] another instance already running (pid=%s), exiting\n' "$_holder" >&2
+        exit 0
+    fi
+fi
+echo "$$" > "$_LOCK"
+trap 'rm -f "$_LOCK"' EXIT
 
 # Parent-death watchdog — exit if AskMac (parent) goes away. Without this, when
 # AskMac is force-quit or crashes the script gets reparented to launchd and

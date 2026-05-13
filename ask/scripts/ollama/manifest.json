@@ -1,7 +1,7 @@
 {
   "id": "ollama",
   "name": "Ollama",
-  "version": "2.3.1",
+  "version": "2.3.2",
   "description": "Monitors Ollama status and surfaces available updates",
   "entry": "main.sh",
   "icon": "cpu",
