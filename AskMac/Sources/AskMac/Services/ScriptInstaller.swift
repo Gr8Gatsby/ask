@@ -433,6 +433,11 @@ final class ScriptInstaller {
         // pending file-watcher reload that was deferred during the install).
         scriptManager.endInstall()
         endInstallCalled = true
+        // After reload, the catalog's availableUpdates dict still reflects the
+        // pre-install state — meaning the popover keeps showing "Update
+        // Available" for the version we just installed. Recompute against the
+        // now-current scripts list so the badge clears.
+        catalog?.recomputeUpdates(installedScripts: scriptManager.scripts)
         phase = .idle
     }
 
