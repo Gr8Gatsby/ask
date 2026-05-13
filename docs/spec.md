@@ -866,6 +866,7 @@ The diagnostics block is shown at the top of the iOS Log Page for that script.
 
 | Date | Change |
 |---|---|
+| 2026-05-13 | v1.3.4 (Mac-only): fix bash daemons that never actually ran on macOS — flock is Linux-only, replaced with portable PID-file lock (brew-monitor v3.2.2, hello-world v2.3.2, github v3.5.2, ollama v2.3.2). Bundled scripts auto-sync into vault on install. |
 | 2026-05-13 | v1.3.3 (Mac-only): fix script-installer crash on update (pipe-drain deadlock in load/installFromZip/runSetup); install lock now released via defer; "Update Available" badge clears for the version just installed (recompute catalog availableUpdates after install) |
 | 2026-05-12 | v1.3.2: auto-sync bundled scripts to vault on launch when bundled is newer (closes the gap where Sparkle upgrades AskMac but vault keeps stale scripts); defensive logging across install/update; Sparkle errors surface in Diagnostics; daemon log warnings include exception repr (claude-3 v0.4.8, codex-3 v0.2.14); stale no-routing claude-3 sessions GC'd after 10 min idle; Diagnostics false-positive fixes (code-sign parser, stale-socket filter, abandoned-lock filter); update popover readability |
 | 2026-05-12 | v1.3.1: fix codex-3 also walking ~/Documents/code on every block emit (was firing Documents TCC prompts repeatedly while AskMac was running) — defer find_repos to user-opt-in scan, mirroring v1.3.0/claude-3 fix |
