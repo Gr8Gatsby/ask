@@ -1966,6 +1966,33 @@ class TerminalManager:
                 return {'alive': False, 'target': target, 'reason': 'not_found'}
         return {'alive': dead != '1', 'target': target}
 
+    async def _tool_capture_pane(self, params: dict) -> dict:
+        """Capture scrollback + visible content of a tmux pane as plain text.
+
+        Used by claude-3's terminal-mirror loop to sample what's scrolling
+        through a pane every few seconds. ANSI escape sequences are stripped.
+
+        Args:
+          target: tmux pane target (e.g. 'ask:project-name' or 'session:@30').
+          lines:  how many rows of scrollback above the visible window to include
+                  (default 200). Larger values capture more activity per sample
+                  but increase payload size and tmux read cost.
+
+        Returns: {'text': str, 'target': str} on success, or
+                 {'text': '', 'target': str, 'error': 'pane_gone'|'timeout'}.
+        """
+        target = params['target']
+        lines = int(params.get('lines', 200))
+        text = await _tmux_read(target, lines)
+        if not text:
+            # _tmux_read returns '' for both empty pane and tmux error. Verify the
+            # pane exists so the caller can distinguish "nothing happening" from
+            # "pane gone".
+            alive = await self._tool_pane_alive({'target': target})
+            if not alive.get('alive', False):
+                return {'text': '', 'target': target, 'error': 'pane_gone'}
+        return {'text': text, 'target': target}
+
     async def _tool_get_pane_info(self, params: dict) -> dict:
         """Return full metadata for a tmux pane: pid, command, dimensions, tty, session, window."""
         target = params['target']

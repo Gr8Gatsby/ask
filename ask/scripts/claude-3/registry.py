@@ -51,6 +51,8 @@ class SessionRecord:
     stopped_at: float = 0.0
     last_prompt: str = ''
     first_prompt: str = ''   # first user message — used as display title
+    mirror_enabled: bool = True   # terminal mirror feed for tmux sessions
+    mirror_last_frame: str = ''   # last captured frame text (for diff'ing next sample)
 
     def touch(self):
         self.last_seen = time.time()
@@ -81,6 +83,8 @@ class SessionRecord:
             stopped_at=float(raw.get('stopped_at', 0.0)),
             last_prompt=raw.get('last_prompt', ''),
             first_prompt=raw.get('first_prompt', ''),
+            mirror_enabled=bool(raw.get('mirror_enabled', True)),
+            mirror_last_frame=raw.get('mirror_last_frame', ''),
         )
         record.pending_permission = PendingPermission.from_dict(raw.get('pending_permission'))
         return record
