@@ -1282,16 +1282,24 @@ class Claude3:
                 tty_dead = not (alive_result or {}).get('alive', True)
             else:
                 tty_dead = False
-            # Stale no-routing GC: session has neither tty nor tmux, has a cwd
-            # (so not the supervisor), been idle a while, and no live `claude`
-            # process matches that cwd. Evict to stop the registry from growing
-            # without bound when host apps spawn-and-exit claude rapidly.
+            # Stale no-routing GC: session has neither tty nor tmux and has been
+            # idle past the threshold. Evict to stop the registry from growing
+            # without bound when host apps (e.g. Agentic Engineering Manager)
+            # spawn-and-exit claude rapidly, leaving zombie session records.
+            #
+            # The supervisor session — the parent claude that spawned this
+            # daemon — also has no routing. If the user is actively using it
+            # last_seen stays fresh and it survives this check. If the user
+            # has been idle past the threshold, eviction is harmless: the next
+            # hook event will recreate the record via _registry.ensure().
+            #
+            # Sessions with an unknown cwd (host app didn't propagate it) are
+            # still eligible for GC — they're just as zombie as any other.
             no_routing_stale = (
                 not session.tty
                 and not session.tmux_target
-                and session.cwd  # supervisor session has empty cwd
                 and (now - float(session.last_seen)) > NO_ROUTING_STALE_SECS
-                and session.cwd not in live_cwds
+                and (not session.cwd or session.cwd not in live_cwds)
             )
 
             if not session.tmux_target and session.tty and tty_dead:
