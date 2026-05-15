@@ -204,7 +204,7 @@ BUNDLE_SCRIPTS="$APP_PATH/Contents/Resources/Scripts"
 mkdir -p "$BUNDLE_SCRIPTS"
 # Scripts listed here ship as installable zips rather than being bundled into the app.
 # Users install them via Settings → Install Script (.zip).
-UNBUNDLED_SCRIPTS=("brew-monitor")
+UNBUNDLED_SCRIPTS=()
 # Copy ask_sdk.py so bundled scripts can import it without a deployed vault
 [[ -f "$SCRIPTS_SRC/ask_sdk.py" ]] && cp "$SCRIPTS_SRC/ask_sdk.py" "$BUNDLE_SCRIPTS/ask_sdk.py"
 for script_dir in "$SCRIPTS_SRC"/*/; do
