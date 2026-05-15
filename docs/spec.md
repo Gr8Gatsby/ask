@@ -866,6 +866,7 @@ The diagnostics block is shown at the top of the iOS Log Page for that script.
 
 | Date | Change |
 |---|---|
+| 2026-05-14 | "Terminal Mirror" spec finalized (v0.2) + dev design drafted. Daemon polls tmux every 5s, emits new scrollback as `role=terminal` messages. Mac and iPhone render inline in same chat feed (monospace, dimmer). Short server TTL (~24h), ~1 week client cache. No secret redaction (operator owns both ends). Per-session disable toggle. See `docs/features/terminal-mirror.md` + `terminal-mirror-design.md`. |
 | 2026-05-14 | v1.3.5 (Mac-only): brew-monitor now actually bundles into the app (was wrongly listed in UNBUNDLED_SCRIPTS — legacy from when it was a Swift binary). Vault-sync overwrites old v3.2.1 on launch. claude-3 v0.4.9 GCs zombie no-routing sessions with empty cwd (e.g. from Agentic Engineering Manager). Diagnostics gains "Recent hook events" section showing per-type counts so we can verify hooks reach the daemon. |
 | 2026-05-13 | v1.3.4 (Mac-only): fix bash daemons that never actually ran on macOS — flock is Linux-only, replaced with portable PID-file lock (brew-monitor v3.2.2, hello-world v2.3.2, github v3.5.2, ollama v2.3.2). Bundled scripts auto-sync into vault on install. |
 | 2026-05-13 | v1.3.3 (Mac-only): fix script-installer crash on update (pipe-drain deadlock in load/installFromZip/runSetup); install lock now released via defer; "Update Available" badge clears for the version just installed (recompute catalog availableUpdates after install) |

@@ -41,6 +41,14 @@ SESSION_TTL = 86400   # 24 hours — disk-persisted sessions
 BLOCK_TTL = 3600      # agent_session block TTL in CloudKit
 PERMISSION_TIMEOUT = 180.0  # seconds to wait for iPhone response
 
+# Terminal-mirror feature: stream tmux pane scrollback into the chat as
+# role="terminal" messages. Off by default; opt in with ASK_MIRROR=1 until
+# clients render the new role.
+MIRROR_ENABLED_GLOBAL = os.environ.get('ASK_MIRROR') == '1'
+MIRROR_INTERVAL_SECS = 5
+MIRROR_MAX_CHUNK_BYTES = 20_000
+MIRROR_CAPTURE_LINES = 500   # rows of scrollback to capture per sample
+
 
 # ---------------------------------------------------------------------------
 # Logging / JSON helpers
@@ -195,6 +203,7 @@ class Claude3:
         self._initialized = False
         self._emitted_payloads: dict[str, str] = {}  # block_id → last serialized payload
         self._post_restart_reset_done = False  # reset transient states once after restart
+        self._mirror_tasks: dict[str, asyncio.Task] = {}  # session_id → terminal-mirror task
 
     # ------------------------------------------------------------------
     # MCP JSON-RPC primitives
@@ -437,6 +446,133 @@ class Claude3:
             title,
             path,
         )
+
+    # ------------------------------------------------------------------
+    # Terminal mirror — periodically capture tmux pane and emit as messages
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _diff_frame(old: str, new: str) -> str:
+        """Return the substring of `new` that's content NOT already in `old`.
+
+        Strategy: find the longest prefix of `new` that matches a suffix of
+        `old`; everything after that prefix is the new content. Covers two
+        common cases:
+          - Append: `new = old + appended` → emit just `appended`
+          - Scroll: `old = top + middle`, `new = middle + bottom` → emit just
+            `bottom`
+
+        Edits in the middle of the window (cursor moves up, rewrites a line)
+        produce no overlap match and fall back to emitting the whole frame.
+        """
+        if not old:
+            return new
+        if old == new:
+            return ''
+        old_lines = old.splitlines()
+        new_lines = new.splitlines()
+        max_overlap = min(len(old_lines), len(new_lines))
+        for k in range(max_overlap, 0, -1):
+            if new_lines[:k] == old_lines[-k:]:
+                tail = new_lines[k:]
+                return '\n'.join(tail)
+        return new
+
+    async def _capture_pane(self, target: str) -> tuple[str, str]:
+        """Returns (text, error) — error is '' on success, otherwise a code.
+
+        Codes: 'pane_gone', 'timeout', 'rpc_error'.
+        """
+        try:
+            result = await self._call_tool(
+                'capture_pane',
+                {'target': target, 'lines': MIRROR_CAPTURE_LINES},
+                timeout=4.0,
+            )
+        except asyncio.TimeoutError:
+            return '', 'timeout'
+        except Exception as exc:
+            _log(f'capture_pane rpc error for {target}: {exc!r}', 'WARN')
+            return '', 'rpc_error'
+        if not isinstance(result, dict):
+            return '', 'rpc_error'
+        if result.get('error') == 'pane_gone':
+            return '', 'pane_gone'
+        return result.get('text', '') or '', ''
+
+    async def _emit_terminal_chunk(self, session: SessionRecord, text: str):
+        """Append a terminal-mirror message, splitting if larger than the cap."""
+        if not text.strip():
+            return
+        if len(text.encode('utf-8')) <= MIRROR_MAX_CHUNK_BYTES:
+            await self.append_message(session.task_id, 'terminal', text)
+            return
+        # Split on line boundaries to stay under the limit
+        lines = text.splitlines()
+        buf: list[str] = []
+        buf_bytes = 0
+        for line in lines:
+            line_bytes = len(line.encode('utf-8')) + 1
+            if buf_bytes + line_bytes > MIRROR_MAX_CHUNK_BYTES and buf:
+                await self.append_message(session.task_id, 'terminal', '\n'.join(buf))
+                buf = []
+                buf_bytes = 0
+            buf.append(line)
+            buf_bytes += line_bytes
+        if buf:
+            await self.append_message(session.task_id, 'terminal', '\n'.join(buf))
+
+    async def _mirror_loop(self, session_id: str):
+        """Sample tmux pane every MIRROR_INTERVAL_SECS, emit new content.
+
+        Runs until the session is stopped, mirroring is disabled, the pane
+        reports gone, or the task is cancelled. The loop never raises out —
+        all errors are logged and the loop sleeps to the next tick.
+        """
+        _log(f'mirror_loop start session={session_id}')
+        while True:
+            await asyncio.sleep(MIRROR_INTERVAL_SECS)
+            session = self._registry.sessions.get(session_id)
+            if session is None or session.state == 'stopped':
+                _log(f'mirror_loop exit (session gone) session={session_id}')
+                return
+            if not session.tmux_target or not session.mirror_enabled:
+                _log(f'mirror_loop exit (no target / disabled) session={session_id}')
+                return
+            text, err = await self._capture_pane(session.tmux_target)
+            if err == 'pane_gone':
+                _log(f'mirror_loop exit (pane gone) session={session_id}')
+                return
+            if err:
+                # transient error — try again next tick
+                continue
+            diff = self._diff_frame(session.mirror_last_frame, text)
+            # Always advance the baseline, even on emit failure, to avoid
+            # amplification of identical chunks across ticks.
+            session.mirror_last_frame = text
+            if not diff:
+                continue
+            try:
+                await self._emit_terminal_chunk(session, diff)
+            except Exception as exc:
+                _log(f'mirror_loop emit failed for {session_id}: {exc!r}', 'WARN')
+
+    def _ensure_mirror_task(self, session: SessionRecord):
+        """Start a mirror loop for this session if eligible and not already running."""
+        if not MIRROR_ENABLED_GLOBAL:
+            return
+        if not session.tmux_target or not session.mirror_enabled:
+            return
+        existing = self._mirror_tasks.get(session.session_id)
+        if existing is not None and not existing.done():
+            return
+        task = asyncio.create_task(self._mirror_loop(session.session_id))
+        self._mirror_tasks[session.session_id] = task
+
+    def _cancel_mirror_task(self, session_id: str):
+        task = self._mirror_tasks.pop(session_id, None)
+        if task is not None and not task.done():
+            task.cancel()
 
     # ------------------------------------------------------------------
     # Terminal-manager routing
@@ -708,6 +844,9 @@ class Claude3:
         if session.session_id not in self._tty_monitors:
             self._tty_monitors.add(session.session_id)
             asyncio.create_task(self._monitor_tty_session(session.session_id))
+
+        # Start terminal-mirror loop for tmux sessions (no-op if not opted in)
+        self._ensure_mirror_task(session)
 
     async def _handle_pre_tool_use(self, msg: dict):
         raw_id = msg.get('session_id', '')
@@ -1211,6 +1350,7 @@ class Claude3:
                 await self._emit_session_block(session)
                 _save_registry(self._registry)
                 _log(f'migrated {session.session_id} to tmux: {session.tmux_target}')
+                self._ensure_mirror_task(session)
             else:
                 _log(f'migrate_to_tmux returned unexpected result: {result}', 'WARN')
         except Exception as e:
@@ -1258,6 +1398,7 @@ class Claude3:
                     result = await self._call_tool('pane_alive', {'target': session.tmux_target}, timeout=5.0)
                     if isinstance(result, dict) and not result.get('alive', True):
                         _log(f'tmux pane gone for {session.session_id} — marking stopped')
+                        self._cancel_mirror_task(session.session_id)
                         session.state = 'stopped'
                         session.stopped_at = datetime.datetime.now().timestamp()
                         self._registry.remove(session.session_id)
@@ -1304,6 +1445,7 @@ class Claude3:
 
             if not session.tmux_target and session.tty and tty_dead:
                 _log(f'session {session.session_id} TTY gone — marking stopped')
+                self._cancel_mirror_task(session.session_id)
                 session.state = 'stopped'
                 session.stopped_at = datetime.datetime.now().timestamp()
                 self._registry.remove(session.session_id)
@@ -1317,6 +1459,7 @@ class Claude3:
             elif no_routing_stale:
                 idle_min = int((now - float(session.last_seen)) / 60)
                 _log(f'session {session.session_id} no-routing + no live process for {idle_min}m at {session.cwd!r} — evicting')
+                self._cancel_mirror_task(session.session_id)
                 session.state = 'stopped'
                 session.stopped_at = now
                 self._registry.remove(session.session_id)
@@ -1568,6 +1711,13 @@ class Claude3:
             self._initialized = True
             _log('MCP initialized')
             await self._refresh_sessions()
+            # Resume terminal-mirror loops for any tmux sessions that survived
+            # the registry load. _ensure_mirror_task is a no-op when ASK_MIRROR
+            # isn't set or the session isn't tmux-routed, so this is safe to
+            # call indiscriminately.
+            for s in list(self._registry.sessions.values()):
+                if s.tmux_target and s.state != 'stopped':
+                    self._ensure_mirror_task(s)
             # Do not block startup on these — they each fan out to filesystem
             # (find_repos walks Documents) or external tool calls. If anything
             # stalls (TCC, slow disk, terminal-manager startup), the event loop

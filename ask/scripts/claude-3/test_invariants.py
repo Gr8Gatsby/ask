@@ -71,6 +71,43 @@ def test_no_routing_session_persists():
     assert r.resolve(raw_id='UUID-NO-ROUTE') == s.session_id
 
 
+# ------------------------------------------------------------------
+# Terminal-mirror diff
+# ------------------------------------------------------------------
+
+def _diff(old: str, new: str) -> str:
+    """Direct import of Claude3._diff_frame as a free function for testing."""
+    from main import Claude3
+    return Claude3._diff_frame(old, new)
+
+
+def test_mirror_diff_empty_old_emits_everything():
+    assert _diff('', 'a\nb\nc') == 'a\nb\nc'
+
+
+def test_mirror_diff_identical_emits_nothing():
+    assert _diff('a\nb\nc', 'a\nb\nc') == ''
+
+
+def test_mirror_diff_append_only_emits_appended():
+    old = 'line1\nline2'
+    new = 'line1\nline2\nline3\nline4'
+    assert _diff(old, new) == 'line3\nline4'
+
+
+def test_mirror_diff_scrolled_emits_only_new_tail():
+    """Scroll case: top of old has fallen off, bottom of new is fresh."""
+    old = '\n'.join(f'L{i}' for i in range(1, 11))     # L1..L10
+    new = '\n'.join(f'L{i}' for i in range(5, 16))     # L5..L15
+    assert _diff(old, new) == 'L11\nL12\nL13\nL14\nL15'
+
+
+def test_mirror_diff_no_overlap_emits_whole_new():
+    old = 'L1\nL2\nL3'
+    new = 'X1\nX2\nX3'
+    assert _diff(old, new) == 'X1\nX2\nX3'
+
+
 if __name__ == '__main__':
     tests = [v for k, v in globals().items() if k.startswith('test_')]
     failed = 0
