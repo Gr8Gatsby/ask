@@ -88,6 +88,7 @@ final class DiagnosticsService {
         sections.append(await Self.orphansAndLocksSection(scriptManager: scriptManager))
         sections.append(await Self.crashesSection())
         sections.append(await Self.probeSection(scriptManager: scriptManager))
+        sections.append(await Self.recentHookEventsSection())
         sections.append(await Self.recentErrorsSection())
 
         self.report = DiagnosticReport(
@@ -529,6 +530,70 @@ final class DiagnosticsService {
         ))
         _ = scriptManager
         return DiagnosticSection(id: "probe", title: "Internal probe", diagnostics: diags)
+    }
+
+    /// Parses recent `socket event type=...` lines from the claude-3/codex-3
+    /// daemon logs and reports a per-type tally + the most recent event.
+    /// Lets us see whether hooks (session_start, user_prompt, session_stop, ...)
+    /// are actually reaching the daemon, separately from whether the daemon
+    /// emits anything back. Critical when chat history isn't appearing on
+    /// iPhone but the terminal-side conversation looks fine — we need to
+    /// know whether the Stop hook is even arriving.
+    static func recentHookEventsSection() async -> DiagnosticSection {
+        var diags: [Diagnostic] = []
+        let daemons = ["claude-3", "codex-3"]
+        for name in daemons {
+            let path = ("~/.ask/logs/\(name).log" as NSString).expandingTildeInPath
+            guard FileManager.default.fileExists(atPath: path),
+                  let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
+                continue
+            }
+            let suffix = data.suffix(131_072)
+            let text = String(data: suffix, encoding: .utf8) ?? ""
+            let lines = text.split(separator: "\n")
+            let eventLines = lines.filter { $0.contains("socket event type=") }
+            if eventLines.isEmpty {
+                diags.append(Diagnostic(
+                    id: "hooks.\(name).none",
+                    label: "\(name) hook events",
+                    status: .warning,
+                    detail: "no socket events seen in last 128KB of log",
+                    fixHint: "If you've been actively using claude on this machine, hooks may not be reaching the daemon. Check ~/.claude/settings.json and the daemon socket."
+                ))
+                continue
+            }
+            var counts: [String: Int] = [:]
+            for line in eventLines {
+                if let r = line.range(of: "socket event type='") {
+                    let after = line[r.upperBound...]
+                    if let end = after.firstIndex(of: "'") {
+                        let type = String(after[..<end])
+                        counts[type, default: 0] += 1
+                    }
+                }
+            }
+            let summary = counts.sorted { $0.value > $1.value }
+                .map { "\($0.key)=\($0.value)" }
+                .joined(separator: ", ")
+            let last = eventLines.suffix(1).first.map(String.init) ?? ""
+            diags.append(Diagnostic(
+                id: "hooks.\(name).summary",
+                label: "\(name) hook events",
+                status: .ok,
+                detail: "\(summary)\nmost recent: \(last)",
+                fixHint: nil
+            ))
+        }
+        if diags.isEmpty {
+            diags.append(Diagnostic(
+                id: "hooks.none",
+                label: "Hook events",
+                status: .info,
+                detail: "no daemon logs present yet",
+                fixHint: nil
+            ))
+        }
+        return DiagnosticSection(id: "hook-events", title: "Recent hook events", diagnostics: diags)
     }
 
     static func recentErrorsSection() async -> DiagnosticSection {
