@@ -7,11 +7,11 @@ iPhone in parallel. Whichever path the user responds through first wins.
 """
 import sys
 import json
-import socket
 import os
 import subprocess
 
-SOCKET_PATH = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/sockets/claude-3.sock'))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _ipc import send_to_daemon
 
 
 def _get_tty():
@@ -80,11 +80,12 @@ else:
     options = ['Yes', 'No']
 
 
-try:
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(0.5)
-    sock.connect(SOCKET_PATH)
-    sock.sendall(json.dumps({
+# Single attempt with a short timeout — this hook is user-blocking: it
+# fires synchronously before Claude Code shows the terminal prompt, so a
+# multi-retry helper would make the prompt visibly hang under daemon load.
+# If delivery fails, the native terminal prompt still works.
+send_to_daemon(
+    {
         'type': 'permission_request',
         'tool': tool,
         'preview': preview,
@@ -92,11 +93,10 @@ try:
         'session_id': session,
         'suggestions': suggestions_map,
         'tty': _get_tty(),
-    }).encode())
-    sock.shutdown(socket.SHUT_WR)
-    sock.close()
-except Exception as e:
-    print(f'[claude-3/permission_request] daemon not running: {e}', file=sys.stderr)
+    },
+    max_attempts=1,
+    timeout=0.5,
+)
 
 # Exit with no decision output — Claude Code shows its native terminal prompt.
 # If the user responds on iPhone, the daemon injects the response via tmux.

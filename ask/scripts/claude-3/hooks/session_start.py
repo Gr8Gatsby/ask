@@ -7,11 +7,11 @@ process, not the CWD (which can be shared across sessions).
 """
 import sys
 import json
-import socket
 import os
 import subprocess
 
-SOCKET_PATH = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/sockets/claude-3.sock'))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _ipc import send_to_daemon
 
 
 def _tty_name_to_short(path: str) -> str:
@@ -88,20 +88,13 @@ if not session_id:
 tty = _get_tty()
 tmux_target = _get_tmux_target()
 
-try:
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(2)
-    sock.connect(SOCKET_PATH)
-    sock.sendall(json.dumps({
-        'type': 'session_start',
-        'session_id': session_id,
-        'cwd': cwd,
-        'project': project,
-        'tty': tty,
-        'tmux_target': tmux_target,
-    }).encode())
-    sock.close()
-except Exception:
-    pass
+send_to_daemon({
+    'type': 'session_start',
+    'session_id': session_id,
+    'cwd': cwd,
+    'project': project,
+    'tty': tty,
+    'tmux_target': tmux_target,
+})
 
 sys.exit(0)
