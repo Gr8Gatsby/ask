@@ -1,0 +1,55 @@
+name: Publish scripts catalog
+
+# Re-publishes the scripts-latest GitHub release whenever scripts on main change.
+# Without this, every script bump silently fails to reach AskMac's catalog
+# refresh — the manual step was missed for 4 releases in a row.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ask/scripts/**"
+      - "scripts/publish-scripts.sh"
+  workflow_dispatch:
+    inputs:
+      changelog:
+        description: "Catalog entry changelog string (optional)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Build changelog string
+        id: changelog
+        run: |
+          if [[ -n "${{ inputs.changelog }}" ]]; then
+            echo "blurb=${{ inputs.changelog }}" >> $GITHUB_OUTPUT
+          else
+            sha=$(git rev-parse --short HEAD)
+            subject=$(git log -1 --pretty=%s)
+            echo "blurb=Auto-published from $sha: $subject" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish scripts catalog
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/publish-scripts.sh "${{ steps.changelog.outputs.blurb }}"
