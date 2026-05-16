@@ -10,11 +10,12 @@ import UniformTypeIdentifiers
 // MARK: - Top-level tab
 
 private enum MacTab: String, CaseIterable {
-    case scripts, feed, machine
+    case scripts, sessions, feed, machine
 
     var icon: String {
         switch self {
         case .scripts:  "terminal"
+        case .sessions: "person.crop.circle.dashed"
         case .feed:     "scroll"
         case .machine:  "desktopcomputer"
         }
@@ -23,6 +24,7 @@ private enum MacTab: String, CaseIterable {
     var label: String {
         switch self {
         case .scripts:  "Scripts"
+        case .sessions: "Sessions"
         case .feed:     "Feed"
         case .machine:  "Machine"
         }
@@ -36,6 +38,7 @@ struct MacScriptsView: View {
     @Environment(ActionHistoryService.self) private var actionHistory
     @Environment(AppSettings.self) private var settings
     @Environment(CloudKitService.self) private var cloudKit
+    @Environment(SessionsService.self) private var sessions
 
     @State private var activeTab: MacTab = .scripts
 
@@ -45,6 +48,9 @@ struct MacScriptsView: View {
             case .scripts:
                 ScriptsTabView()
                     .environment(scriptManager)
+            case .sessions:
+                SessionsView()
+                    .environment(sessions)
             case .feed:
                 MacFeedView()
                     .environment(actionHistory)
@@ -52,6 +58,12 @@ struct MacScriptsView: View {
                 MachineDetailView()
                     .environment(settings)
             }
+        }
+        .onChange(of: activeTab) { _, newValue in
+            // Drive SessionsService visibility from tab switches, since
+            // `.onDisappear` doesn't fire when the inner view is swapped
+            // via Group+switch.
+            sessions.setVisible(newValue == .sessions)
         }
         .toolbar {
             ToolbarItem(placement: .principal) {
