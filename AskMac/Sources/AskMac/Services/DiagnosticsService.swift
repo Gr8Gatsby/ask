@@ -79,6 +79,7 @@ final class DiagnosticsService {
         sections.append(await Self.systemSection())
         sections.append(await Self.askMacSection(settings: settings))
         sections.append(await Self.updaterSection(appUpdater: appUpdater))
+        sections.append(await Self.updateLogsSection())
         sections.append(await Self.cloudKitSection(cloudKit: cloudKit))
         sections.append(await Self.hooksSection())
         sections.append(await Self.daemonsSection(scriptManager: scriptManager))
@@ -163,6 +164,111 @@ final class DiagnosticsService {
                                     status: .ok, detail: "none since launch", fixHint: nil))
         }
         return DiagnosticSection(id: "updater", title: "Sparkle updater", diagnostics: diags)
+    }
+
+    /// Pulls the macOS unified-log entries that touch Sparkle and AskMac's
+    /// own update flow, plus the recent /var/log/install.log tail. The whole
+    /// point is "press one button" — if the Sparkle delegate didn't catch an
+    /// error, the raw logs almost always have it, and users shouldn't need
+    /// to type `log show` commands.
+    ///
+    /// Each subprocess is bounded by a small predicate window and a tail so
+    /// we never produce more than a few KB. The shell helpers run synchronously
+    /// off the main actor via the diagnostic Task; the section as a whole is
+    /// `async` so the caller awaits.
+    static func updateLogsSection() async -> DiagnosticSection {
+        var diags: [Diagnostic] = []
+
+        // 1. macOS unified log, scoped to Sparkle subsystem. Captures most
+        //    Sparkle library errors: bad signature, download failure, helper
+        //    crash, etc.
+        let sparkleLog = runShell("/usr/bin/log", "show",
+                                  "--predicate", "subsystem CONTAINS \"Sparkle\"",
+                                  "--last", "30m",
+                                  "--info",
+                                  "--style", "compact")
+        let sparkleLines = sparkleLog
+            .split(separator: "\n")
+            .filter { !$0.hasPrefix("Timestamp") && !$0.contains("Filtering the log data") }
+            .suffix(25)
+        if sparkleLines.isEmpty {
+            diags.append(Diagnostic(
+                id: "logs.sparkle.empty",
+                label: "Sparkle subsystem log",
+                status: .info,
+                detail: "no Sparkle entries in the last 30 min",
+                fixHint: nil
+            ))
+        } else {
+            diags.append(Diagnostic(
+                id: "logs.sparkle.recent",
+                label: "Sparkle subsystem log (last \(sparkleLines.count))",
+                status: .info,
+                detail: sparkleLines.joined(separator: "\n"),
+                fixHint: nil
+            ))
+        }
+
+        // 2. AskMac's own process log, filtered for update/installer chatter.
+        //    Catches anything we logged from AppUpdater or surrounding views.
+        let askmacLog = runShell("/usr/bin/log", "show",
+                                 "--predicate", "process == \"AskMac\"",
+                                 "--last", "30m",
+                                 "--info",
+                                 "--style", "compact")
+        let askmacLines = askmacLog
+            .split(separator: "\n")
+            .filter { line in
+                let l = line.lowercased()
+                return l.contains("sparkle") || l.contains("update") || l.contains("appcast")
+                    || l.contains("signature") || l.contains("download")
+            }
+            .suffix(15)
+        if askmacLines.isEmpty {
+            diags.append(Diagnostic(
+                id: "logs.askmac.empty",
+                label: "AskMac update-related log",
+                status: .info,
+                detail: "no update chatter in the last 30 min",
+                fixHint: nil
+            ))
+        } else {
+            diags.append(Diagnostic(
+                id: "logs.askmac.recent",
+                label: "AskMac update log (last \(askmacLines.count))",
+                status: .info,
+                detail: askmacLines.joined(separator: "\n"),
+                fixHint: nil
+            ))
+        }
+
+        // 3. /var/log/install.log — the macOS Installer's own log. Surfaces
+        //    silent PKG postinstall failures (the bug pattern that bit us on
+        //    the work machine).
+        let installLog = runShell("/usr/bin/tail", "-200", "/var/log/install.log")
+        let installLines = installLog
+            .split(separator: "\n")
+            .filter { $0.lowercased().contains("askmac") }
+            .suffix(15)
+        if installLines.isEmpty {
+            diags.append(Diagnostic(
+                id: "logs.installer.empty",
+                label: "macOS Installer log (AskMac)",
+                status: .info,
+                detail: "no AskMac installer entries in the last 200 lines",
+                fixHint: nil
+            ))
+        } else {
+            diags.append(Diagnostic(
+                id: "logs.installer.recent",
+                label: "macOS Installer log (last \(installLines.count))",
+                status: .info,
+                detail: installLines.joined(separator: "\n"),
+                fixHint: nil
+            ))
+        }
+
+        return DiagnosticSection(id: "update-logs", title: "Update logs", diagnostics: diags)
     }
 
     static func askMacSection(settings: AppSettings) async -> DiagnosticSection {
@@ -462,9 +568,32 @@ final class DiagnosticsService {
             // Suppress stale locks from scripts no longer installed — they're
             // harmless artifacts, not actionable signals.
             guard installedScriptIDs.contains(scriptID) else { foreign += 1; continue }
-            // Check whether a live process holds the lock via `lsof`.
-            let lsof = runShell("/usr/sbin/lsof", path).trimmingCharacters(in: .whitespacesAndNewlines)
-            let isHeld = lsof.split(separator: "\n").count > 1   // header + ≥1 entry
+            // Two lock formats in the wild:
+            //   1. PID-file (current bash daemons): the lock file contains the
+            //      holder's PID as a single line. The writer closes the file
+            //      immediately, so lsof will not report any holder even when
+            //      the script is running fine — we must parse the PID and
+            //      check kill(0) instead.
+            //   2. flock-style (legacy): the holder keeps fd 9 open as long
+            //      as it runs, so lsof correctly reports a live holder.
+            //
+            // Try PID-file first; if the file doesn't contain a usable PID,
+            // fall back to lsof for flock-style. Without this, every bash
+            // daemon running the v1.3.4+ PID-file lock got reported as
+            // "abandoned" while it was actually running fine.
+            var isHeld = false
+            if let contents = try? String(contentsOfFile: path, encoding: .utf8) {
+                let trimmed = contents.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let pid = pid_t(trimmed), pid > 0 {
+                    // kill(pid, 0) — does NOT send a signal, returns 0 if the
+                    // process exists and we have permission to signal it.
+                    isHeld = (kill(pid, 0) == 0)
+                }
+            }
+            if !isHeld {
+                let lsof = runShell("/usr/sbin/lsof", path).trimmingCharacters(in: .whitespacesAndNewlines)
+                isHeld = lsof.split(separator: "\n").count > 1   // header + ≥1 entry
+            }
             if isHeld {
                 heldByLive += 1
                 diags.append(Diagnostic(id: "locks.\(lock).held", label: "\(scriptID) lock",
