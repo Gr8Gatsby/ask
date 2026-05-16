@@ -61,6 +61,7 @@ final class DiagnosticsService {
     let settings: AppSettings
     weak var cloudKit: CloudKitService?
     weak var appUpdater: AppUpdater?
+    weak var sessions: SessionsService?
 
     init(settings: AppSettings) {
         self.settings = settings
@@ -85,6 +86,7 @@ final class DiagnosticsService {
         sections.append(await Self.daemonsSection(scriptManager: scriptManager))
         sections.append(await Self.scriptsSection(scriptManager: scriptManager, settings: settings))
         sections.append(await Self.sessionsSection())
+        sections.append(await Self.sessionsTabReadoutSection(sessions: sessions))
         sections.append(await Self.toolsSection())
         sections.append(await Self.orphansAndLocksSection(scriptManager: scriptManager))
         sections.append(await Self.crashesSection())
@@ -325,7 +327,92 @@ final class DiagnosticsService {
         let env = envEnt.isEmpty ? "(default)" : envEnt
         diags.append(Diagnostic(id: "ck.env", label: "icloud-container-environment",
                                 status: .info, detail: env, fixHint: nil))
+
+        // Per-record-type schema-presence probe. Only runs when the
+        // account is available; otherwise the result would always be
+        // "error: not authenticated".
+        if isOK, let cloudKit = cloudKit {
+            let probes = await cloudKit.probeRecordTypes()
+            for type in CloudKitService.probedRecordTypes {
+                let result = probes[type] ?? .error(description: "no result")
+                let (status, detail, fix): (DiagnosticStatus, String, String?) = {
+                    switch result {
+                    case .present(let count, let capped):
+                        return (.ok, capped ? "present (≥\(count) records)" : "present (\(count) record\(count == 1 ? "" : "s"))", nil)
+                    case .notDeployed:
+                        return (.info,
+                                "not deployed (no records of this type in account schema yet)",
+                                nil)
+                    case .error(let desc):
+                        return (.warning, "error: \(desc)", "Check CloudKit Dashboard for container iCloud.simple.ask.")
+                    }
+                }()
+                diags.append(Diagnostic(
+                    id: "ck.type.\(type)",
+                    label: "Record type · \(type)",
+                    status: status,
+                    detail: detail,
+                    fixHint: fix
+                ))
+            }
+        }
+
         return DiagnosticSection(id: "cloudkit", title: "CloudKit", diagnostics: diags)
+    }
+
+    /// Mirrors the live Sessions tab into the report: banner state plus
+    /// row counts grouped by origin and machine. Reusing the same in-
+    /// memory state guarantees the report cannot disagree with the UI.
+    @MainActor
+    static func sessionsTabReadoutSection(sessions: SessionsService?) async -> DiagnosticSection {
+        var diags: [Diagnostic] = []
+        guard let sessions = sessions else {
+            diags.append(Diagnostic(
+                id: "sessions_tab.unavailable",
+                label: "Sessions tab",
+                status: .info,
+                detail: "service not wired into diagnostics",
+                fixHint: nil
+            ))
+            return DiagnosticSection(id: "sessions_tab", title: "Sessions tab readout", diagnostics: diags)
+        }
+
+        let rows = sessions.sessions
+        diags.append(Diagnostic(
+            id: "sessions_tab.row_count",
+            label: "Rows rendered",
+            status: .info,
+            detail: "\(rows.count) total · \(rows.filter { $0.isLocal }.count) local · \(rows.filter { !$0.isLocal }.count) remote",
+            fixHint: nil
+        ))
+
+        let groups = sessions.groupedByMachine()
+        for group in groups {
+            diags.append(Diagnostic(
+                id: "sessions_tab.group.\(group.machineID)",
+                label: group.isThisMac ? "This Mac · \(group.machineName)" : group.machineName,
+                status: .info,
+                detail: "\(group.sessions.count) row\(group.sessions.count == 1 ? "" : "s")",
+                fixHint: nil
+            ))
+        }
+
+        diags.append(Diagnostic(
+            id: "sessions_tab.banner.local",
+            label: "Local banner",
+            status: sessions.localUnavailable == nil ? .ok : .warning,
+            detail: sessions.localUnavailable ?? "(none)",
+            fixHint: nil
+        ))
+        diags.append(Diagnostic(
+            id: "sessions_tab.banner.remote",
+            label: "Remote banner",
+            status: sessions.remoteUnavailable == nil ? .ok : .warning,
+            detail: sessions.remoteUnavailable ?? "(none)",
+            fixHint: nil
+        ))
+
+        return DiagnosticSection(id: "sessions_tab", title: "Sessions tab readout", diagnostics: diags)
     }
 
     static func hooksSection() async -> DiagnosticSection {
@@ -473,58 +560,127 @@ final class DiagnosticsService {
         return DiagnosticSection(id: "scripts", title: "Scripts", diagnostics: diags)
     }
 
+    /// Expanded Session Health section. For each daemon registry it
+    /// surfaces the registry path + count, per-session detail rows,
+    /// live `ps` process count, live tmux pane count, and a delta
+    /// summary line that flips to warning when the daemon under-counts.
     static func sessionsSection() async -> DiagnosticSection {
         var diags: [Diagnostic] = []
-        let paths: [(label: String, file: String)] = [
-            ("claude-3", "~/.ask/claude3-sessions.json"),
-            ("codex-3",  "~/.ask/codex3-sessions.json"),
+        let registries: [(label: String, file: String, exec: String)] = [
+            ("claude-3", "~/.ask/claude3-sessions.json", "claude"),
+            ("codex-3",  "~/.ask/codex3-sessions.json",  "codex"),
         ]
-        // ps cache for cwd-matching live processes
-        let psPidCwd = livePIDsByCwd(executableMatches: ["claude", "codex"])
-        for (label, file) in paths {
+        let now = Date().timeIntervalSince1970
+
+        for (label, file, exec) in registries {
             let path = (file as NSString).expandingTildeInPath
-            guard FileManager.default.fileExists(atPath: path) else {
-                diags.append(Diagnostic(id: "sessions.\(label).file", label: "\(label) registry",
-                                        status: .info, detail: "no sessions yet", fixHint: nil))
-                continue
-            }
-            guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: [String: Any]] else {
-                diags.append(Diagnostic(id: "sessions.\(label).parse", label: "\(label) registry",
-                                        status: .warning, detail: "could not parse JSON",
-                                        fixHint: "Inspect \(file)"))
-                continue
-            }
-            var noRoutingCount = 0
-            for (sid, info) in json {
-                let tty = (info["tty"] as? String) ?? ""
-                let tmux = (info["tmux_target"] as? String) ?? ""
-                let state = (info["state"] as? String) ?? "?"
-                let cwd  = (info["cwd"] as? String) ?? ""
-                if tty.isEmpty && tmux.isEmpty {
-                    noRoutingCount += 1
-                    var fix: String? = nil
-                    if !cwd.isEmpty, let candidate = psPidCwd[cwd] {
-                        fix = "Live PID \(candidate.pid) at \(cwd) — terminal-manager v2.2.1+ should auto-link via discover_sessions. Reload claude-3 if it doesn't."
-                    }
+            let registered = parseSessionRegistry(at: path)
+            let liveProcesses = countLiveProcesses(executable: exec)
+            let livePanes = countTmuxPanes(currentCommand: exec)
+
+            diags.append(Diagnostic(
+                id: "sessions.\(label).registry",
+                label: "\(label) registry",
+                status: .info,
+                detail: registered == nil ? "missing or unreadable — \(file)" : "\(registered!.count) sessions · \(file)",
+                fixHint: nil
+            ))
+
+            if let sessions = registered {
+                // Per-session detail rows. Routed-or-not flag is derived
+                // from presence of `tty` or `tmux_target`.
+                let sorted = sessions.sorted { $0.key < $1.key }
+                for (sid, info) in sorted {
+                    let state = (info["state"] as? String) ?? "?"
+                    let cwd   = (info["cwd"] as? String) ?? ""
+                    let tty   = (info["tty"] as? String) ?? ""
+                    let tmux  = (info["tmux_target"] as? String) ?? ""
+                    let lastSeen = (info["last_seen"] as? Double) ?? 0
+                    let ageSec   = lastSeen > 0 ? Int(max(0, now - lastSeen)) : -1
+                    let routed   = !tty.isEmpty || !tmux.isEmpty
+                    let detail =
+                        "state=\(state) · cwd=\(cwd.isEmpty ? "—" : cwd) · tty=\(tty.isEmpty ? "—" : tty)"
+                        + " · tmux=\(tmux.isEmpty ? "—" : tmux) · age=\(ageSec < 0 ? "—" : "\(ageSec)s")"
+                        + " · routed=\(routed ? "yes" : "no")"
                     diags.append(Diagnostic(
-                        id: "sessions.no_routing.\(sid)",
+                        id: "sessions.\(label).row.\(sid)",
                         label: "\(label) · \(sid)",
-                        status: .warning,
-                        detail: "no routing (state=\(state), cwd=\(cwd.isEmpty ? "—" : cwd))",
-                        fixHint: fix
+                        status: routed ? .info : .warning,
+                        detail: detail,
+                        fixHint: routed ? nil : "Daemon has no terminal routing for this session. If a live process exists, reload \(label) to trigger discover_sessions."
                     ))
                 }
             }
+
+            // Live signal rows + delta summary.
             diags.append(Diagnostic(
-                id: "sessions.\(label).count",
-                label: "\(label) registered",
+                id: "sessions.\(label).live_processes",
+                label: "\(label) live processes",
                 status: .info,
-                detail: "\(json.count) total · \(noRoutingCount) no-routing",
+                detail: "\(liveProcesses) running (matched by executable name)",
                 fixHint: nil
             ))
+            diags.append(Diagnostic(
+                id: "sessions.\(label).tmux_panes",
+                label: "\(label) tmux panes",
+                status: .info,
+                detail: livePanes == nil ? "n/a (tmux unavailable)" : "\(livePanes!) panes running \(exec)",
+                fixHint: nil
+            ))
+
+            let registeredCount = registered?.count ?? 0
+            let referenceCount = max(liveProcesses, livePanes ?? 0)
+            let missing = max(0, referenceCount - registeredCount)
+            diags.append(Diagnostic(
+                id: "sessions.\(label).delta",
+                label: "\(label) delta",
+                status: missing > 0 ? .warning : .ok,
+                detail: "registered=\(registeredCount) · live_processes=\(liveProcesses) · tmux_panes=\(livePanes.map(String.init) ?? "n/a") · missing=\(missing)",
+                fixHint: missing > 0 ? "Daemon registry is short by \(missing). Reload \(label) so discover_sessions re-scans live processes / tmux panes." : nil
+            ))
         }
-        return DiagnosticSection(id: "sessions", title: "Sessions", diagnostics: diags)
+        return DiagnosticSection(id: "sessions", title: "Session Health", diagnostics: diags)
+    }
+
+    /// Reads and parses a daemon session-registry JSON file. Returns
+    /// `nil` if the file is missing OR cannot be parsed; an empty
+    /// dictionary means "file is present but contains zero sessions".
+    private static func parseSessionRegistry(at path: String) -> [String: [String: Any]]? {
+        guard FileManager.default.fileExists(atPath: path) else { return nil }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: [String: Any]]
+        else { return nil }
+        return json
+    }
+
+    /// Counts processes belonging to the current user whose command-line
+    /// basename matches `executable`. Equivalent to `pgrep -f` filtered
+    /// by basename, but avoids depending on pgrep behavior across macOS
+    /// versions.
+    private static func countLiveProcesses(executable: String) -> Int {
+        let ps = runShell("/bin/ps", "-axo", "command")
+        var count = 0
+        for line in ps.split(separator: "\n") {
+            let s = String(line).trimmingCharacters(in: .whitespaces)
+            // First whitespace-separated token is the command path/name.
+            let first = s.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? ""
+            let base = (first as NSString).lastPathComponent
+            if base == executable { count += 1 }
+        }
+        return count
+    }
+
+    /// Counts tmux panes whose `pane_current_command` equals `currentCommand`.
+    /// Returns `nil` when tmux is not installed or no server is running.
+    private static func countTmuxPanes(currentCommand: String) -> Int? {
+        guard let tmuxPath = which("tmux") else { return nil }
+        // -a = across all sessions. If no server is running, tmux exits
+        // non-zero with empty output; we treat that as "0 panes" but
+        // distinguish it from "tmux unavailable" by checking for tmux's
+        // presence first.
+        let out = runShell(tmuxPath, "list-panes", "-a", "-F", "#{pane_current_command}")
+        let lines = out.split(separator: "\n").map { String($0).trimmingCharacters(in: .whitespaces) }
+        return lines.filter { $0 == currentCommand }.count
     }
 
     static func toolsSection() async -> DiagnosticSection {

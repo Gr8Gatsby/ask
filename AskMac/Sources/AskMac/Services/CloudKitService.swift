@@ -251,6 +251,64 @@ final class CloudKitService {
         return scriptIDs
     }
 
+    // MARK: - Record-type probe (diagnostics)
+
+    /// All CloudKit record types AskMac queries somewhere in its code. Used
+    /// by `probeRecordTypes()` so the diagnostics output stays in sync with
+    /// what the app actually depends on — single source of truth.
+    static let probedRecordTypes: [String] = [
+        CKSchema.RecordType.machine,
+        CKSchema.RecordType.message,
+        CKSchema.RecordType.device,
+        CKSchema.RecordType.rkBlock,
+        CKSchema.RecordType.rkResponse,
+        CKSchema.RecordType.askScript,
+        CKSchema.RecordType.askInvokeRequest,
+        CKSchema.RecordType.askTask,
+        CKSchema.RecordType.askTaskMessage,
+        CKSchema.RecordType.askArtifact,
+    ]
+
+    enum RecordTypeProbeResult: Sendable {
+        case present(count: Int, capped: Bool)
+        case notDeployed
+        case error(description: String)
+    }
+
+    /// Cheap schema-presence probe. For each record type, runs a single
+    /// TRUEPREDICATE query with a small result cap and classifies the
+    /// outcome. Does not return any record data.
+    func probeRecordTypes(_ types: [String] = probedRecordTypes, limit: Int = 10) async -> [String: RecordTypeProbeResult] {
+        var out: [String: RecordTypeProbeResult] = [:]
+        for type in types {
+            do {
+                let query = CKQuery(recordType: type, predicate: NSPredicate(value: true))
+                let (results, _) = try await database.records(matching: query, resultsLimit: limit)
+                let count = results.count
+                out[type] = .present(count: count, capped: count >= limit)
+            } catch let ckError as CKError where Self.isMissingRecordType(ckError) {
+                out[type] = .notDeployed
+            } catch {
+                out[type] = .error(description: error.localizedDescription)
+            }
+        }
+        return out
+    }
+
+    /// True if the CKError indicates "record type not present in this
+    /// account's schema". CloudKit signals this as `.unknownItem` or
+    /// `.invalidArguments` depending on the path; both should be treated
+    /// as "schema doesn't know this type".
+    static func isMissingRecordType(_ error: CKError) -> Bool {
+        if error.code == .unknownItem { return true }
+        if error.code == .invalidArguments,
+           let desc = error.userInfo[NSLocalizedDescriptionKey] as? String,
+           desc.lowercased().contains("did not find record type") {
+            return true
+        }
+        return false
+    }
+
     /// Fetches all Machine records (one per machine signed in to the same iCloud account).
     func fetchAllMachines() async throws -> [MachineRecord] {
         // Predicate `TRUEPREDICATE` returns all records of the type.
