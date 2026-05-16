@@ -6,9 +6,9 @@ Sends the final assistant message to the daemon so it can close the task feed.
 import sys
 import json
 import os
-import socket
 
-SOCKET_PATH = os.environ.get('ASK_SOCKET_PATH', os.path.expanduser('~/.ask/sockets/claude-3.sock'))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _ipc import send_to_daemon
 
 
 def _transcript_path(session_id: str, cwd: str) -> str:
@@ -68,18 +68,11 @@ time.sleep(1)
 
 last_text = _read_last_assistant_message(session_id, cwd)
 
-try:
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(5)
-    sock.connect(SOCKET_PATH)
-    sock.sendall(json.dumps({
-        'type': 'session_stop',
-        'session_id': session_id,
-        'cwd': cwd,
-        'last_message': last_text,
-    }).encode())
-    sock.close()
-except Exception:
-    pass
+send_to_daemon({
+    'type': 'session_stop',
+    'session_id': session_id,
+    'cwd': cwd,
+    'last_message': last_text,
+})
 
 sys.exit(0)

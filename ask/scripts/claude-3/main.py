@@ -836,8 +836,10 @@ class Claude3:
         # A2A writes to AskMac don't gate routing — fire and forget.
         self._fire_a2a(self._set_task_status(session, 'working'))
         self._fire_a2a(self._append_structured_message(session, 'Session started', f'Launched in `{session.project}`.'))
-        await self._emit_session_block(session)
-        await self._emit_tile()
+        # Fire-and-forget the session block + tile emits; only the start_session
+        # block needs to land synchronously so the iPhone can show it.
+        self._fire_a2a(self._emit_session_block(session))
+        self._fire_a2a(self._emit_tile())
         await self._emit_start_session_block()
 
         # Start TTY monitor for interactive prompt detection
@@ -866,9 +868,14 @@ class Claude3:
             # separate row in the transcript.
             session.last_message = last_msg
 
-        await self._emit_session_block(session)
-        await self._emit_tile()
         _save_registry(self._registry)
+        # Fire-and-forget the MCP emits so the socket handler returns fast.
+        # Holding the connection open while we await two RPCs back to AskMac
+        # was filling the accept queue under load and dropping subsequent
+        # hook events (observed as ConnectionResetError in the daemon log,
+        # and missing session_stop events on iPhone).
+        self._fire_a2a(self._emit_session_block(session))
+        self._fire_a2a(self._emit_tile())
 
     async def _handle_tool_executed(self, msg: dict):
         raw_id = msg.get('session_id', '')
@@ -892,10 +899,11 @@ class Claude3:
                 fut.set_result('executed')
             session.pending_permission = None
 
-        await self._set_task_status(session, 'working')
-        await self._emit_session_block(session)
-        await self._emit_tile()
         _save_registry(self._registry)
+        # See comment in _handle_pre_tool_use — return to accept loop fast.
+        self._fire_a2a(self._set_task_status(session, 'working'))
+        self._fire_a2a(self._emit_session_block(session))
+        self._fire_a2a(self._emit_tile())
 
     async def _handle_user_prompt(self, msg: dict):
         raw_id = msg.get('session_id', '')
@@ -909,9 +917,10 @@ class Claude3:
         if prompt:
             self._fire_a2a(self.append_message(session.task_id, 'user', prompt))
         self._fire_a2a(self._set_task_status(session, 'working'))
-        await self._emit_session_block(session)
-        await self._emit_tile()
         _save_registry(self._registry)
+        # See comment in _handle_pre_tool_use — return to accept loop fast.
+        self._fire_a2a(self._emit_session_block(session))
+        self._fire_a2a(self._emit_tile())
 
     async def _handle_session_stop(self, msg: dict):
         """Called at end of each assistant turn (not process exit). Transition to idle."""
@@ -933,8 +942,10 @@ class Claude3:
         session.current_tool = ''
         session.preview = ''
         _save_registry(self._registry)
-        await self._emit_session_block(session)
-        await self._emit_tile()
+        # See comment in _handle_pre_tool_use — return to accept loop fast so
+        # the next Stop hook (and other hooks) don't time out on connect.
+        self._fire_a2a(self._emit_session_block(session))
+        self._fire_a2a(self._emit_tile())
         _log(f'session_stop (turn end, staying idle) raw_id={raw_id[:8]}')
 
     async def _handle_post_compact(self, msg: dict):
