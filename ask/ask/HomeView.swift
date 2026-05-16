@@ -1585,8 +1585,17 @@ struct ScriptDetailView: View {
     }
 
     /// agent_session blocks — each becomes a row in the session list.
+    /// Sorted by `createdAt` ascending with `sessionId` as tiebreaker so the
+    /// order is stable across block updates. Without this, the list reshuffles
+    /// whenever any session's state/last_message/heartbeat changes — visually
+    /// disruptive when supervising multiple sessions on the small phone screen.
     private var sessionBlocks: [RKBlock] {
-        group.blocks.filter { $0.blockType == .agentSession }
+        group.blocks
+            .filter { $0.blockType == .agentSession }
+            .sorted {
+                if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+                return ($0.agentSessionPayload?.sessionId ?? $0.id) < ($1.agentSessionPayload?.sessionId ?? $1.id)
+            }
     }
 
     /// Non-session, non-tile, non-feed blocks shown in the header strip above sessions.
