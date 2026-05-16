@@ -251,6 +251,18 @@ final class CloudKitService {
         return scriptIDs
     }
 
+    /// Fetches all Machine records (one per machine signed in to the same iCloud account).
+    func fetchAllMachines() async throws -> [MachineRecord] {
+        // Predicate `TRUEPREDICATE` returns all records of the type.
+        let query = CKQuery(recordType: CKSchema.RecordType.machine, predicate: NSPredicate(value: true))
+        query.sortDescriptors = [NSSortDescriptor(key: CKSchema.Machine.lastHeartbeat, ascending: false)]
+        let (results, _) = try await database.records(matching: query, resultsLimit: 50)
+        return results.compactMap { _, result in
+            guard let record = try? result.get() else { return nil }
+            return MachineRecord(record: record)
+        }
+    }
+
     // MARK: - Task history (A2A protocol)
 
     /// Fetches all AskTask records for this machine, sorted newest-first.

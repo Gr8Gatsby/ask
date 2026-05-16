@@ -19,6 +19,7 @@ struct AskMacApp: App {
     @State private var scriptUpdater = ScriptUpdateService()
     @State private var scriptCatalog = ScriptCatalogService()
     @State private var diagnostics: DiagnosticsService
+    @State private var sessions: SessionsService
     #if DEBUG
     private let localHTTPServer = LocalHTTPServer(port: 4242)
     #endif
@@ -39,12 +40,15 @@ struct AskMacApp: App {
         // accessor since `self` isn't fully initialized yet.
         diag.appUpdater = _updater.wrappedValue
 
+        let sessionsService = SessionsService(cloudKit: ck, settings: s, scriptManager: sm)
+
         _heartbeat = State(initialValue: hb)
         _messageWatcher = State(initialValue: mw)
         _actionHistory = State(initialValue: ah)
         _scriptManager = State(initialValue: sm)
         _responsePoller = State(initialValue: rp)
         _diagnostics = State(initialValue: diag)
+        _sessions = State(initialValue: sessionsService)
 
         #if DEBUG
         if MacUITestingSupport.isUITesting {
@@ -143,6 +147,7 @@ struct AskMacApp: App {
                 .environment(cloudKit)
                 .environment(updater)
                 .environment(scriptCatalog)
+                .environment(sessions)
         }
         .defaultSize(width: 720, height: 520)
         .defaultPosition(.center)
