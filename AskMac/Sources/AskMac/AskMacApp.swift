@@ -41,6 +41,7 @@ struct AskMacApp: App {
         diag.appUpdater = _updater.wrappedValue
 
         let sessionsService = SessionsService(cloudKit: ck, settings: s, scriptManager: sm)
+        diag.sessions = sessionsService
 
         _heartbeat = State(initialValue: hb)
         _messageWatcher = State(initialValue: mw)

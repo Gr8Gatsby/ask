@@ -175,6 +175,11 @@ final class SessionsService {
             do {
                 let machineTasks = try await cloudKit.fetchTasks(machineID: mid)
                 tasks.append(contentsOf: machineTasks)
+            } catch let ckError as CKError where CloudKitService.isMissingRecordType(ckError) {
+                // AskTask isn't deployed to this account's schema yet —
+                // that's the expected state for an account that has never
+                // written a task. Treat as empty, not as an error.
+                logger.debug("fetchTasks: AskTask record type not deployed for \(mid); treating as empty.")
             } catch {
                 logger.error("fetchTasks failed for \(mid): \(error)")
                 failure = "CloudKit fetch failed: \(error.localizedDescription)"
