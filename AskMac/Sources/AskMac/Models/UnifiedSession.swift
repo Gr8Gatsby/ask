@@ -199,10 +199,25 @@ extension UnifiedSession {
 
 extension UnifiedSession {
     /// True if the session should appear in the active list given the
-    /// reference time `now`. Sessions in terminal daemon states are
-    /// excluded regardless of recency.
+    /// reference time `now`.
+    ///
+    /// Trust the daemon's view: if a session is still in the registry and
+    /// not in a terminal state, treat it as active. The daemon already GCs
+    /// genuinely-dead sessions after its own idle threshold (10 min for
+    /// no-routing zombies, faster for tty/tmux liveness probes); we don't
+    /// need a separate `lastActivityAt` window here.
+    ///
+    /// The previous policy required `lastActivityAt` within 10 min, which
+    /// wrongly hid a long-running session whose last hook event predated
+    /// the window — exactly the case the user reported when a busy
+    /// `running_tool` session was shown by the local registry view but
+    /// missing from the unified view.
+    ///
+    /// `now` is kept on the signature for future policy that may bring
+    /// back a soft threshold for visual de-emphasis (vs. exclusion).
     func isActive(now: Date = Date()) -> Bool {
+        _ = now
         if let s = state, UnifiedSession.terminalStates.contains(s) { return false }
-        return now.timeIntervalSince(lastActivityAt) <= UnifiedSession.activeWindow
+        return true
     }
 }
