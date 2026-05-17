@@ -1967,7 +1967,6 @@ private enum MachineSection: String, CaseIterable, Identifiable {
     case devices     = "Devices"
     case machine     = "Machine"
     case permissions = "Permissions"
-    case sessions    = "Sessions"
     case about       = "About"
 
     var id: String { rawValue }
@@ -1978,7 +1977,6 @@ private enum MachineSection: String, CaseIterable, Identifiable {
         case .devices:     "iphone"
         case .machine:     "desktopcomputer"
         case .permissions: "lock.shield"
-        case .sessions:    "cpu"
         case .about:       "info.circle"
         }
     }
@@ -2091,8 +2089,6 @@ private struct MachineDetailView: View {
     @Environment(ScriptManager.self) private var scriptManager
     @Environment(AppUpdater.self) private var updater
     @State private var selectedSection: MachineSection? = .cloud
-    @State private var agentSessions: [AgentSession] = []
-    @State private var liveProcesses: [LiveProcess] = []
 
     var body: some View {
         NavigationSplitView {
@@ -2108,12 +2104,10 @@ private struct MachineDetailView: View {
             case .devices:     machineDevicesSection
             case .machine:     machineMachineSection
             case .permissions: SystemPermissionsView()
-            case .sessions:    machineSessionsSection
             case .about:       machineAboutSection
             }
         }
         .navigationTitle("Machine")
-        .onAppear { refreshSessions() }
     }
 
     // MARK: Section: Cloud
@@ -2368,109 +2362,6 @@ private struct MachineDetailView: View {
         .navigationTitle("Machine")
     }
 
-    // MARK: Section: Sessions
-
-    private var machineSessionsSection: some View {
-        Form {
-            Section {
-                if agentSessions.isEmpty {
-                    Text("No tracked sessions yet.")
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
-                } else {
-                    ForEach(agentSessions) { s in
-                        VStack(alignment: .leading, spacing: 3) {
-                            // Row 1: controller · title  +  type badge
-                            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                                Text(s.controller)
-                                    .font(.caption).fontWeight(.semibold)
-                                if s.title != s.project {
-                                    Text(s.title)
-                                        .font(.caption).foregroundStyle(.primary)
-                                        .lineLimit(1).truncationMode(.tail)
-                                } else {
-                                    Text(s.project)
-                                        .font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                // Terminal / tmux / no routing badge
-                                Text(s.sessionType)
-                                    .font(.caption2).fontWeight(.semibold)
-                                    .padding(.horizontal, 5).padding(.vertical, 2)
-                                    .background(s.sessionType == "tmux" ? Color.purple.opacity(0.15)
-                                                : s.sessionType == "no routing" ? Color.red.opacity(0.12)
-                                                : Color.secondary.opacity(0.12))
-                                    .foregroundStyle(s.sessionType == "tmux" ? Color.purple
-                                                     : s.sessionType == "no routing" ? Color.red
-                                                     : Color.secondary)
-                                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                            }
-                            // Row 2: cwd
-                            Text(s.cwd.isEmpty ? "—" : s.cwd)
-                                .font(.caption2).foregroundStyle(.tertiary)
-                                .lineLimit(1).truncationMode(.middle)
-                                .textSelection(.enabled)
-                            // Row 3: session ID + routing + state
-                            HStack(spacing: 8) {
-                                Text(String(s.sessionID.prefix(22)))
-                                    .font(.caption2.monospaced()).foregroundStyle(.tertiary)
-                                    .textSelection(.enabled)
-                                if !s.routing.isEmpty && s.routing != "—" {
-                                    Text("·").font(.caption2).foregroundStyle(.tertiary)
-                                    Text(s.routing)
-                                        .font(.caption2.monospaced()).foregroundStyle(.secondary)
-                                        .textSelection(.enabled)
-                                }
-                                if !s.state.isEmpty {
-                                    Text("·").font(.caption2).foregroundStyle(.tertiary)
-                                    Text(s.state.replacingOccurrences(of: "_", with: " "))
-                                        .font(.caption2).foregroundStyle(
-                                            s.state == "idle" ? .secondary
-                                            : s.state.contains("tool") ? Color.orange
-                                            : Color.blue)
-                                }
-                                if s.isTransient {
-                                    Text("transient").font(.caption2)
-                                        .foregroundStyle(.tertiary)
-                                        .italic()
-                                }
-                            }
-                        }
-                        .padding(.vertical, 2)
-                    }
-                }
-            } header: {
-                HStack {
-                    Text("Agent Sessions")
-                    Spacer()
-                    Button("Refresh") { refreshSessions() }
-                        .font(.caption)
-                }
-            }
-
-            Section("Live Processes") {
-                if liveProcesses.isEmpty {
-                    Text("No Claude or Codex processes found.")
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
-                } else {
-                    ForEach(liveProcesses) { p in
-                        HStack {
-                            Text(p.name).font(.caption).fontWeight(.medium)
-                            Spacer()
-                            Text("PID \(p.pid)   TTY \(p.tty.isEmpty ? "—" : p.tty)")
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                        }
-                    }
-                }
-            }
-        }
-        .formStyle(.grouped)
-        .navigationTitle("Sessions")
-    }
-
     // MARK: Section: About
 
     private var machineAboutSection: some View {
@@ -2498,116 +2389,10 @@ private struct MachineDetailView: View {
         .navigationTitle("About")
     }
 
-    // MARK: Data loading
-
-    private func refreshSessions() {
-        var sessions: [AgentSession] = []
-        var procs: [LiveProcess] = []
-
-        // claudecode-controller and codex-controller status files
-        let statusFiles: [(controller: String, path: String)] = [
-            ("Claude Code", NSHomeDirectory() + "/.ask/status/claudecode-controller.json"),
-            ("Codex",       NSHomeDirectory() + "/.ask/status/codex-controller.json"),
-        ]
-        for (controller, path) in statusFiles {
-            guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-            if let list = json["sessions"] as? [[String: Any]] {
-                for s in list {
-                    let project = s["project"] as? String ?? ""
-                    sessions.append(AgentSession(
-                        controller:  controller,
-                        sessionID:   s["session_id"] as? String ?? "",
-                        project:     project,
-                        title:       project,
-                        cwd:         s["cwd"]        as? String ?? "",
-                        tty:         s["tty"]        as? String ?? "",
-                        tmuxTarget:  "",
-                        state:       "",
-                        isTransient: false
-                    ))
-                }
-            }
-            if let list = json["live_processes"] as? [[String: Any]] {
-                for p in list {
-                    let comm = p["comm"] as? String ?? ""
-                    let name = p["name"] as? String ?? URL(fileURLWithPath: comm).lastPathComponent
-                    procs.append(LiveProcess(
-                        controller: controller,
-                        pid:  p["pid"]  as? String ?? "",
-                        tty:  p["tty"]  as? String ?? "",
-                        comm: comm,
-                        name: name
-                    ))
-                }
-            }
-        }
-
-        // claude-3 daemon registry
-        let claude3Path = NSHomeDirectory() + "/.ask/claude3-sessions.json"
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: claude3Path)),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            for (_, value) in json {
-                guard let s = value as? [String: Any] else { continue }
-                let state = s["state"] as? String ?? ""
-                guard state != "stopped" else { continue }
-                let project     = s["project"]      as? String ?? ""
-                let firstPrompt = s["first_prompt"]  as? String ?? ""
-                let title = firstPrompt.isEmpty ? project
-                    : "\(project): \(firstPrompt.prefix(50))"
-                sessions.append(AgentSession(
-                    controller:  "Claude 3",
-                    sessionID:   s["session_id"]  as? String ?? "",
-                    project:     project,
-                    title:       title,
-                    cwd:         s["cwd"]         as? String ?? "",
-                    tty:         s["tty"]         as? String ?? "",
-                    tmuxTarget:  s["tmux_target"] as? String ?? "",
-                    state:       state,
-                    isTransient: s["is_transient"] as? Bool ?? false
-                ))
-            }
-        }
-
-        agentSessions = sessions.sorted { $0.controller < $1.controller }
-        liveProcesses = procs
-    }
 }
 
 // MARK: - Helpers
 
-private struct AgentSession: Identifiable {
-    let id = UUID()
-    let controller: String
-    let sessionID: String
-    let project: String
-    let title: String       // first_prompt or project
-    let cwd: String
-    let tty: String
-    let tmuxTarget: String
-    let state: String
-    let isTransient: Bool
-
-    var sessionType: String {
-        if !tmuxTarget.isEmpty { return "tmux" }
-        if !tty.isEmpty { return "terminal" }
-        return "no routing"
-    }
-    var routing: String {
-        if !tmuxTarget.isEmpty { return tmuxTarget }
-        if !tty.isEmpty { return tty }
-        return "—"
-    }
-}
-
-private struct LiveProcess: Identifiable {
-    let id = UUID()
-    let controller: String
-    let pid: String
-    let tty: String
-    let comm: String
-    let name: String
-}
 
 private extension String {
     func abbreviatingWithTildeInPath() -> String {
